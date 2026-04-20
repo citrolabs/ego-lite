@@ -94,9 +94,9 @@ for proxy in "${PROXIES[@]}"; do
     region=$(echo "$proxy" | grep -oP '^\w+-\w+')
     echo "Testing from: $region"
 
-    ego-cli --session "$region" open https://example.com
-    ego-cli --session "$region" screenshot "./screenshots/$region.png"
-    ego-cli --session "$region" close
+    ego-cli open https://example.com
+    ego-cli screenshot "./screenshots/$region.png"
+    ego-cli close
 done
 ```
 

@@ -166,13 +166,40 @@ ego-cli network requests --filter api    # Filter requests
 ## Tabs and Windows
 
 ```bash
-ego-cli tab                 # List tabs
-ego-cli tab new [url]       # New tab
-ego-cli tab 2               # Switch to tab by index
-ego-cli tab close           # Close current tab
-ego-cli tab close 2         # Close tab by index
-ego-cli window new          # New window
+ego-cli tab                              # List tabs with tabId and label
+ego-cli tab new [url]                    # New tab
+ego-cli tab new --label docs [url]       # New tab with a memorable label
+ego-cli tab t2                           # Switch to tab by id
+ego-cli tab docs                         # Switch to tab by label
+ego-cli tab close                        # Close current tab
+ego-cli tab close t2                     # Close tab by id
+ego-cli tab close docs                   # Close tab by label
+ego-cli window new                       # New window
 ```
+
+Tab ids are stable strings of the form `t1`, `t2`, `t3`. They're never reused
+within a task, so the same id keeps referring to the same tab across
+commands. Positional integers are **not** accepted — `tab 2` errors with a
+teaching message; use `t2`.
+
+User-assigned labels (`docs`, `app`, `admin`) are interchangeable with ids
+everywhere a tab ref is accepted. Labels are the agent-friendly way to write
+multi-tab workflows:
+
+```bash
+ego-cli tab new --label docs https://docs.example.com
+ego-cli tab new --label app  https://app.example.com
+ego-cli tab docs                   # switch to docs
+ego-cli snapshot                   # populate refs for docs
+ego-cli click @e1                  # ref click on docs
+ego-cli tab app                    # switch to app
+ego-cli tab close docs             # close by label
+```
+
+Labels are never auto-generated, never rewritten on navigation, and must be
+unique within a task. To interact with another tab, switch to it first:
+the daemon maintains a single active tab, so refs (`@eN`) belong to the tab
+that was active when the snapshot ran.
 
 ## Frames
 
@@ -248,7 +275,8 @@ ego-cli state load auth.json    # Restore saved state
 ## Global Options
 
 ```bash
-ego-cli --session <name> ...    # Isolated browser session
+ego-cli --task-id=<task-id> ... # Route command to a specific Ego task
+ego-cli --server-name=<name> ...# Connect to a specific Ego CLI server endpoint
 ego-cli --json ...              # JSON output for parsing
 ego-cli --headed ...            # Show browser window (not headless)
 ego-cli --full ...              # Full page screenshot (-f)
@@ -276,7 +304,7 @@ ego-cli console --clear             # Clear console
 ego-cli errors                      # View page errors
 ego-cli errors --clear              # Clear errors
 ego-cli highlight @e1               # Highlight element
-ego-cli inspect                     # Open Chrome DevTools for this session
+ego-cli inspect                     # Open Chrome DevTools for this task's browser
 ego-cli trace start                 # Start recording trace
 ego-cli trace stop trace.zip        # Stop and save trace
 ego-cli profiler start              # Start Chrome DevTools profiling
@@ -286,7 +314,6 @@ ego-cli profiler stop trace.json    # Stop and save profile
 ## Environment Variables
 
 ```bash
-AGENT_BROWSER_SESSION="mysession"            # Default session name
 AGENT_BROWSER_EXECUTABLE_PATH="/path/chrome" # Custom browser path
 AGENT_BROWSER_EXTENSIONS="/ext1,/ext2"       # Comma-separated extension paths
 AGENT_BROWSER_PROVIDER="browserbase"         # Cloud browser provider

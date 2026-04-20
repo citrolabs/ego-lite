@@ -1,14 +1,14 @@
 # Authentication Patterns
 
-Login flows, session persistence, OAuth, 2FA, and authenticated browsing.
+Login flows, task-scoped state persistence, OAuth, 2FA, and authenticated browsing.
 
-**Related**: [session-management.md](session-management.md) for state persistence details, [SKILL.md](../SKILL.md) for quick start.
+**Related**: [task-management.md](task-management.md) for task routing and state persistence, [SKILL.md](../SKILL.md) for quick start.
 
 ## Contents
 
 - [Import Auth from Your Browser](#import-auth-from-your-browser)
 - [Persistent Profiles](#persistent-profiles)
-- [Session Persistence](#session-persistence)
+- [Task-Scoped State Persistence](#task-scoped-state-persistence)
 - [Basic Login Flow](#basic-login-flow)
 - [Saving Authentication State](#saving-authentication-state)
 - [Restoring Authentication](#restoring-authentication)
@@ -53,7 +53,7 @@ ego-cli --auto-connect state save ./my-auth.json
 # Load auth at launch
 ego-cli --state ./my-auth.json open https://app.example.com/dashboard
 
-# Or load into an existing session
+# Or load into the current task
 ego-cli state load ./my-auth.json
 ego-cli open https://app.example.com/dashboard
 ```
@@ -62,11 +62,12 @@ This works for any site, including those with complex OAuth flows, SSO, or 2FA -
 
 > **Security note:** State files contain session tokens in plaintext. Add them to `.gitignore`, delete when no longer needed, and set `AGENT_BROWSER_ENCRYPTION_KEY` for encryption at rest. See [Security Best Practices](#security-best-practices).
 
-**Tip:** Combine with `--session-name` so the imported auth auto-persists across restarts:
+**Tip:** If you are working in a non-default Ego task, keep passing the same
+`--task-id` so the loaded auth stays attached to that task:
 
 ```bash
-ego-cli --session-name myapp state load ./my-auth.json
-# From now on, state is auto-saved/restored for "myapp"
+ego-cli --task-id=s1 state load ./my-auth.json
+ego-cli --task-id=s1 open https://app.example.com/dashboard
 ```
 
 ## Persistent Profiles
@@ -96,25 +97,21 @@ export AGENT_BROWSER_PROFILE=~/.myapp-profile
 ego-cli open https://app.example.com/dashboard
 ```
 
-## Session Persistence
+## Task-Scoped State Persistence
 
-Use `--session-name` to auto-save and restore cookies + localStorage by name, without managing files:
+ego-cli does not require named sessions for auth reuse. The reliable pattern
+is to save state from the task you are working in, then load that state back
+into the task you want to resume:
 
 ```bash
-# Auto-saves state on close, auto-restores on next launch
-ego-cli --session-name twitter open https://twitter.com
-# ... login flow ...
-ego-cli close  # state saved to ~/.ego-cli/sessions/
-
-# Next time: state is automatically restored
-ego-cli --session-name twitter open https://twitter.com
+ego-cli --task-id=s1 state save ./auth-state.json
+ego-cli --task-id=s1 state load ./auth-state.json
 ```
 
-Encrypt state at rest:
+For long-lived local workflows, a persistent Chrome profile is often simpler:
 
 ```bash
-export AGENT_BROWSER_ENCRYPTION_KEY=$(openssl rand -hex 32)
-ego-cli --session-name secure open https://app.example.com
+ego-cli --profile ~/.myapp-profile open https://app.example.com/dashboard
 ```
 
 ## Basic Login Flow
@@ -243,7 +240,7 @@ ego-cli open https://app.example.com/dashboard
 
 ## Token Refresh Handling
 
-For sessions with expiring tokens:
+For logins with expiring tokens:
 
 ```bash
 #!/bin/bash
@@ -256,7 +253,7 @@ if [[ -f "$STATE_FILE" ]]; then
     ego-cli state load "$STATE_FILE"
     ego-cli open https://app.example.com/dashboard
 
-    # Check if session is still valid
+    # Check if auth is still valid
     URL=$(ego-cli get url)
     if [[ "$URL" == *"/login"* ]]; then
         echo "Session expired, re-authenticating..."
@@ -294,10 +291,10 @@ fi
    rm -f ./auth-state.json
    ```
 
-4. **Use short-lived sessions for CI/CD**
+4. **Use short-lived task runs for CI/CD**
    ```bash
    # Don't persist state in CI
    ego-cli open https://app.example.com/login
    # ... login and perform actions ...
-   ego-cli close  # Session ends, nothing persisted
+   ego-cli close  # Browser closes, nothing persisted unless you save state
    ```
