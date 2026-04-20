@@ -1,5 +1,5 @@
 ---
-name: core
+name: ego-cli
 description: Core ego-cli usage guide. Read this before running any ego-cli commands. Covers the snapshot-and-ref workflow, navigating pages, interacting with elements (click, fill, type, select), extracting text and data, taking screenshots, managing tabs, handling forms and auth, waiting for content, routing commands to service-managed tasks, and troubleshooting common failures. Use when the user asks to interact with a website, fill a form, click something, extract data, take a screenshot, log into a site, test a web app, or automate any browser task.
 allowed-tools: Bash(ego-cli:*), Bash(npx ego-cli:*)
 ---
