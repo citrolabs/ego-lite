@@ -11,9 +11,7 @@ Playwright or Puppeteer dependency. Accessibility-tree snapshots with compact
 `@eN` refs let agents interact with pages in ~200-400 tokens instead of
 parsing raw HTML.
 
-Most normal web tasks (navigate, read, click, fill, extract, screenshot) are
-covered here. Load a specialized skill when the task falls outside browser
-web pages — see [When to load another skill](#when-to-load-another-skill).
+Most normal web tasks (navigate, read, click, fill, extract, screenshot) are covered here.
 
 ## The core loop
 
@@ -328,19 +326,9 @@ ego-cli dialog dismiss          # cancel
 ## Diagnosing install issues
 
 If a command fails unexpectedly (`Unknown command`, `Failed to connect`,
-stale daemons, version mismatches after `upgrade`, missing Chrome, etc.)
-run `doctor` before anything else:
-
-```bash
-ego-cli doctor                     # full diagnosis (env, Chrome, daemons, config, providers, network, launch test)
-ego-cli doctor --offline --quick   # fast, local-only
-ego-cli doctor --fix               # also run destructive repairs (reinstall Chrome, purge old state, ...)
-ego-cli doctor --json              # structured output for programmatic consumption
-```
-
-`doctor` auto-cleans stale socket/pid/version sidecar files on every run.
-Destructive actions require `--fix`. Exit code is `0` if all checks pass
-(warnings OK), `1` if any fail.
+stale daemons, version mismatches after `upgrade`, missing Chrome, etc.),
+do not use `doctor`: current `ego-cli --help` does not expose a `doctor`
+command.
 
 ## Troubleshooting
 
@@ -412,24 +400,9 @@ the same `--task-id` so the restored auth stays attached to that task. See
 --state <path>          # load saved auth state from JSON
 ```
 
-## When to load another skill
-
-- **Electron desktop app** (VS Code, Slack desktop, Discord, Figma, etc.):
-  `ego-cli skills get electron`
-- **Slack workspace automation**: `ego-cli skills get slack`
-- **Exploratory testing / QA / bug hunts**: `ego-cli skills get dogfood`
-- **Vercel Sandbox microVMs**: `ego-cli skills get vercel-sandbox`
-- **AWS Bedrock AgentCore cloud browser**: `ego-cli skills get agentcore`
-
 ## Full reference
 
-Everything covered here plus the complete command/flag/env listing:
-
-```bash
-ego-cli skills get core --full
-```
-
-That pulls in:
+Use this document plus the local reference files directly:
 
 - `reference/commands.md` — every command, flag, alias
 - `reference/snapshot-refs.md` — deep dive on the snapshot + ref model
