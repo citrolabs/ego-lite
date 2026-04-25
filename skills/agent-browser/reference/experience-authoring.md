@@ -4,49 +4,48 @@ Use this guide to maintain Agent Browser site experience during a real website
 task. Runtime experience belongs in the current installed skill root, for
 example `.agents/skills/agent-browser/reference/sites/<site>/`.
 
-## What to maintain
+## Decision gates
 
-Keep a candidate list while working. Before final response, apply these gates.
-When all pass, write/update without asking; otherwise report the skip reason.
+Keep a candidate list while working. Before the final response, write or update
+site experience only when all gates pass:
 
 - Observed in the current task, not generic or assumed.
 - Site-specific and likely stable enough for reuse.
 - Prevents a mistake, captures recovery, or removes repeated browser work.
-- Recordable without private content, credentials, or one-off data.
+- Recordable as mechanics without private content, credentials, or one-off data.
 
-Strong write signals:
+Update existing artifacts first; add a new artifact only when no close home
+exists. Skip generic habits, low-confidence guesses, clean one-off successes, or
+mechanics inseparable from private data. Ask only when the artifact itself would
+contain sensitive content, credentials, destructive side effects, or an
+ambiguous tradeoff.
 
-- Stable selectors, UI labels, URL/query patterns, constraints, or side effects.
-- Pagination, scrolling, extraction, waiting, or aggregation loops.
-- A failed browser action followed by a reliable workaround.
-- A parameterized script or repeated command sequence that emits YAML.
+## Artifact choice
 
-Private or authenticated sessions are allowed. Maintain mechanics only: selectors,
-labels, URL/query shapes, pagination/extraction rules, waits, recovery paths,
-and validation strategy. Do not store accounts, credentials, tokens, message
-bodies, subjects, sender lists, result values, screenshots, or revealing query
-terms.
+Use the smallest artifact that preserves reuse:
 
-Skip generic habits, low-confidence guesses, clean one-off success, or anything
-inseparable from private data. Ask only when the artifact itself would contain
-sensitive content, credentials, destructive side effects, or an ambiguous
-tradeoff.
+- Site note: labels, URL shapes, constraints, side effects, recovery hints, or
+  easy-to-misread areas.
+- Tool: one runnable action that reduces clicking, inspection, extraction,
+  waiting, pagination, navigation, or other repeated browser work. Examples
+  include JavaScript evaluation, read-only page-context requests, CDP calls,
+  scrolling loops, deduplication, polling/wait logic, and parameterized command
+  sequences. Tools emit YAML.
+- Workflow: a multi-step sequence, validation strategy, known side effect, or
+  recovery path. Workflows compose tools and explain strategy; they do not record
+  every clean success.
 
-Use existing artifacts first. Inspect related site notes, workflows, and tools;
-update or generalize the closest fit before adding anything; add a new artifact only when the mechanic has no clear home.
-Tool and workflow budgets are limited.
+Escalate beyond a site note when reusable mechanics would otherwise be copied
+into prose as executable behavior. Site notes can summarize or point to tools
+and workflows; runnable logic belongs in tools, and ordering or validation logic
+belongs in workflows. Tool and workflow budgets are limited, so keep tools
+atomic and workflows focused.
 
-Use the smallest useful artifact:
-
-- Site note: stable site knowledge such as host aliases, interaction
-  constraints, side effects, or easy-to-misread areas.
-- Workflow: non-obvious sequence, meaningful mistake, recovery path, validation
-  strategy, or known side effect. Workflows compose tools and explain strategy;
-  they do not record every clean success.
-- Tool: reusable automation that reduces future clicking, snapshot inspection,
-  extraction, waiting, pagination, navigation, or other manual browser steps.
-  Keep tools atomic: one reusable action such as search, open a visible result,
-  read the current item, or navigate back.
+Private or authenticated sessions are allowed. Maintain mechanics only:
+data-free selectors, labels, URL/query shapes, extraction rules, waits, recovery
+paths, and validation strategy. Do not store accounts, credentials, tokens,
+message bodies or subjects, sender lists, result values, screenshots, or
+revealing query terms.
 
 ## File layout
 
@@ -83,11 +82,11 @@ Python tools use YAML comment metadata:
 ```
 
 Tool stdout must always be YAML with `status`, `message`, and optional `data`.
-Tools may call `agent-browser` commands, including JavaScript evaluation for
-read-only diagnostics, but visible user actions should stay aligned with normal
+Tools may call `agent-browser`, JavaScript evaluation, read-only page-context
+requests, or CDP when those are the stable way to perform diagnostics or
+parameterized extraction. Visible user actions should stay aligned with normal
 Agent Browser UI operations when possible. Prefer parameters over hardcoded
-queries, account names, selectors derived from private content, or current
-result values.
+queries, account names, private-derived selectors, or current result values.
 
 Workflows are Markdown files with frontmatter:
 

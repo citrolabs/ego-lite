@@ -51,6 +51,12 @@ waiting, pagination, navigation, or parameterized scripts. Before adding
 anything, first look for related existing artifacts; update or generalize the closest fit.
 Tool and workflow budgets are limited.
 
+Escalate beyond a site note when the reusable mechanic would otherwise be
+documented as executable behavior: DOM or script extraction, direct read-only
+network/API requests, CDP calls, scrolling or pagination loops, deduplication,
+polling/wait logic, or repeatable command sequences. Keep the site note concise;
+put runnable logic in a tool and multi-step strategy or validation in a workflow.
+
 Maintain mechanics, not content. Authenticated/private sessions are allowed:
 keep data-free selectors, URL/query shapes, pagination/extraction rules, waits,
 and recoveries; never store accounts, credentials, tokens, message

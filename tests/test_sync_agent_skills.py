@@ -121,6 +121,22 @@ class AgentBrowserSkillMetadataTest(unittest.TestCase):
         self.assertNotIn("--profile", opening_browsers)
         self.assertNotIn("fallback", opening_browsers.lower())
 
+    def test_experience_authoring_promotes_executable_mechanics(self):
+        skill_path = REPO_ROOT / "skills" / "agent-browser" / "SKILL.md"
+        authoring_path = REPO_ROOT / "skills" / "agent-browser" / "reference" / "experience-authoring.md"
+        skill_text = skill_path.read_text(encoding="utf-8")
+        authoring_text = authoring_path.read_text(encoding="utf-8")
+
+        self.assertIn("Escalate beyond a site note", skill_text)
+        self.assertIn("DOM or script extraction", skill_text)
+        self.assertIn("network/API requests", skill_text)
+        self.assertIn("CDP calls", skill_text)
+        self.assertIn("put runnable logic in a tool", skill_text)
+        self.assertIn("Escalate beyond a site note", authoring_text)
+        self.assertIn("read-only page-context requests", authoring_text)
+        self.assertIn("runnable logic belongs in tools", authoring_text)
+        self.assertIn("ordering or validation logic", authoring_text)
+
 
 if __name__ == "__main__":
     unittest.main()
