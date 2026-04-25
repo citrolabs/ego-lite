@@ -81,7 +81,10 @@ class SiteExperienceLookupTest(unittest.TestCase):
                 "tools/_common.py": "# shared helper should not be indexed\n",
                 "workflows/inbox/read-first-5-unread.md": (
                     "---\nname: read-first-5-unread\n"
-                    "description: Read and summarize the first five unread emails.\n---\n"
+                    "description: Read and summarize the first five unread emails.\n"
+                    "tools:\n"
+                    "  - reference/sites/gmail.com/tools/search/search-mail.py\n"
+                    "---\n"
                 ),
             },
         )
@@ -124,6 +127,65 @@ class SiteExperienceLookupTest(unittest.TestCase):
         self.assertIn("status: found", result.stdout)
         self.assertIn("name: Example", result.stdout)
 
+    def test_lookup_skips_invalid_tools_and_workflows(self):
+        self.write_site(
+            "example.com",
+            "---\nname: Example\ndescription: Example site experience.\n---\n",
+            {
+                "tools/search/valid-tool.py": (
+                    "# ---\n"
+                    "# name: valid-tool\n"
+                    "# description: Valid reusable tool.\n"
+                    "# ---\n"
+                    "\n"
+                    "def main():\n"
+                    "    return 0\n"
+                ),
+                "tools/search/missing-metadata.py": "print('bad')\n",
+                "tools/search/broken.py": (
+                    "# ---\n"
+                    "# name: broken\n"
+                    "# description: Broken tool.\n"
+                    "# ---\n"
+                    "\n"
+                    "def broken(:\n"
+                    "    pass\n"
+                ),
+                "workflows/search/valid-workflow.md": (
+                    "---\n"
+                    "name: valid-workflow\n"
+                    "description: Valid workflow.\n"
+                    "tools:\n"
+                    "  - reference/sites/example.com/tools/search/valid-tool.py\n"
+                    "---\n"
+                ),
+                "workflows/search/missing-tools.md": (
+                    "---\n"
+                    "name: missing-tools\n"
+                    "description: Missing tools metadata.\n"
+                    "---\n"
+                ),
+                "workflows/search/missing-reference.md": (
+                    "---\n"
+                    "name: missing-reference\n"
+                    "description: Missing referenced tool.\n"
+                    "tools:\n"
+                    "  - reference/sites/example.com/tools/search/not-found.py\n"
+                    "---\n"
+                ),
+            },
+        )
+
+        result = self.run_lookup("--url", "https://example.com/path", "--sites-dir", self.sites_dir)
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("name: valid-tool", result.stdout)
+        self.assertIn("name: valid-workflow", result.stdout)
+        self.assertNotIn("missing-metadata.py", result.stdout)
+        self.assertNotIn("broken.py", result.stdout)
+        self.assertNotIn("missing-tools", result.stdout)
+        self.assertNotIn("missing-reference", result.stdout)
+
 
 class SiteExperienceSkillInstructionTest(unittest.TestCase):
     def test_skill_instructs_lookup_before_site_operation(self):
@@ -137,37 +199,6 @@ class SiteExperienceSkillInstructionTest(unittest.TestCase):
         self.assertIn("Tool paths are executable Python scripts", skill_text)
         self.assertIn("Tool scripts print YAML", skill_text)
         self.assertIn("Never save `@eN` refs", skill_text)
-
-
-class GmailExperienceTest(unittest.TestCase):
-    def test_gmail_lookup_returns_site_tools_and_workflow(self):
-        result = subprocess.run(
-            [
-                "python3",
-                str(SCRIPT),
-                "--url",
-                "https://mail.google.com/mail/u/0/#inbox",
-            ],
-            cwd=REPO_ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
-
-        self.assertEqual(result.returncode, 0, msg=result.stderr)
-        self.assertIn("status: found", result.stdout)
-        self.assertIn("name: Gmail", result.stdout)
-        self.assertIn("path: reference/sites/gmail.com/site.md", result.stdout)
-        self.assertIn("path: reference/sites/gmail.com/tools/search/collect-search-results.py", result.stdout)
-        self.assertIn("path: reference/sites/gmail.com/tools/search/search-mail.py", result.stdout)
-        self.assertIn("path: reference/sites/gmail.com/tools/reading/open-search-result.py", result.stdout)
-        self.assertIn("path: reference/sites/gmail.com/tools/reading/read-current-email.py", result.stdout)
-        self.assertIn("path: reference/sites/gmail.com/tools/navigation/back-to-results.py", result.stdout)
-        self.assertIn(
-            "path: reference/sites/gmail.com/workflows/inbox/read-first-unread-emails.md",
-            result.stdout,
-        )
 
 
 if __name__ == "__main__":

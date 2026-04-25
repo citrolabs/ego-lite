@@ -6,39 +6,40 @@ example `.agents/skills/agent-browser/reference/sites/<site>/`.
 
 ## Decision gates
 
-Keep a candidate list while working. Before the final response, write or update
-site experience only when all gates pass:
+Keep a candidate list while working. Before the final response, apply these gates
+and write or update site experience only when all gates pass:
 
 - Observed in the current task, not generic or assumed.
 - Site-specific and likely stable enough for reuse.
 - Prevents a mistake, captures recovery, or removes repeated browser work.
 - Recordable as mechanics without private content, credentials, or one-off data.
 
-Update existing artifacts first; add a new artifact only when no close home
-exists. Skip generic habits, low-confidence guesses, clean one-off successes, or
-mechanics inseparable from private data. Ask only when the artifact itself would
-contain sensitive content, credentials, destructive side effects, or an
-ambiguous tradeoff.
+Use existing artifacts first: update or generalize the closest fit, and add a new artifact only when the mechanic has no clear home. When all gates pass and no
+sensitive or ambiguous tradeoff is present, write/update without asking. Skip
+generic habits, low-confidence guesses, clean one-off successes, or mechanics
+inseparable from private data, then report the skip reason. Ask only when the
+artifact itself would contain sensitive content, credentials, destructive side
+effects, or an ambiguous tradeoff.
 
 ## Artifact choice
 
 Use the smallest artifact that preserves reuse:
 
-- Site note: labels, URL shapes, constraints, side effects, recovery hints, or
-  easy-to-misread areas.
-- Tool: one runnable action that reduces clicking, inspection, extraction,
+- Site note: stable site knowledge such as labels, URL shapes, constraints,
+  side effects, recovery hints, or easy-to-misread areas.
+- Tool: reusable automation for one runnable action that reduces clicking, inspection, extraction,
   waiting, pagination, navigation, or other repeated browser work. Examples
   include JavaScript evaluation, read-only page-context requests, CDP calls,
   scrolling loops, deduplication, polling/wait logic, and parameterized command
   sequences. Tools emit YAML.
-- Workflow: a multi-step sequence, validation strategy, known side effect, or
-  recovery path. Workflows compose tools and explain strategy; they do not record
-  every clean success.
+- Workflow: non-obvious sequence, validation strategy, known side effect, or
+  recovery path. Workflows compose tools and explain strategy; they do not
+  record every clean success.
 
 Escalate beyond a site note when reusable mechanics would otherwise be copied
 into prose as executable behavior. Site notes can summarize or point to tools
 and workflows; runnable logic belongs in tools, and ordering or validation logic
-belongs in workflows. Tool and workflow budgets are limited, so keep tools
+belongs in workflows. Keep tools atomic. Tool and workflow budgets are limited, so keep tools
 atomic and workflows focused.
 
 Private or authenticated sessions are allowed. Maintain mechanics only:
@@ -114,7 +115,7 @@ The validator emits YAML only. It checks required metadata, site note length,
 workflow tool references, category file limits, Python syntax, and obvious
 dangerous command patterns. It is static and does not open browsers or websites.
 
-Development sync currently uses `rsync --delete` from `skills/agent-browser` to
-`.agents/skills/agent-browser`. That can overwrite runtime-generated
-experience if the source directory does not contain it. Treat generated runtime
-experience as separate until a deliberate promotion flow exists.
+Development sync uses `rsync --delete` from `skills/agent-browser` to
+`.agents/skills/agent-browser`, but preserves runtime-owned `reference/sites`.
+Treat generated runtime experience as separate until a deliberate promotion flow
+exists.

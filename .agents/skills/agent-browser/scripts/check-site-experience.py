@@ -14,6 +14,14 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_ROOT = SCRIPT_DIR.parent
 DEFAULT_SITES_DIR = SKILL_ROOT / "reference" / "sites"
 
+DANGEROUS_PATTERNS = [
+    "rm -rf",
+    "git reset --hard",
+    "os.remove",
+    "shutil.rmtree",
+    ".unlink(",
+]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -198,12 +206,65 @@ def display_path(path: Path, base: Path) -> str:
         return path.resolve().as_posix()
 
 
+def is_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
 def site_hosts(site_dir: Path, site_meta: dict[str, object]) -> set[str]:
     hosts = {site_dir.name.lower()}
     frontmatter_hosts = site_meta.get("hosts", [])
     if isinstance(frontmatter_hosts, list):
         hosts.update(str(host).lower() for host in frontmatter_hosts)
     return hosts
+
+
+def has_required_text(meta: dict[str, object], *keys: str) -> bool:
+    for key in keys:
+        value = meta.get(key)
+        if not isinstance(value, str) or not value.strip():
+            return False
+    return True
+
+
+def python_tool_is_indexable(path: Path) -> bool:
+    meta = read_python_comment_metadata(path)
+    if not has_required_text(meta, "name", "description"):
+        return False
+    inputs = meta.get("inputs")
+    if inputs is not None and not isinstance(inputs, list):
+        return False
+
+    try:
+        source = path.read_text(encoding="utf-8")
+        compile(source, str(path), "exec")
+    except (OSError, SyntaxError, UnicodeDecodeError):
+        return False
+
+    return not any(pattern in source for pattern in DANGEROUS_PATTERNS)
+
+
+def workflow_tool_references_are_indexable(meta: dict[str, object], base: Path) -> bool:
+    tool_refs = meta.get("tools")
+    if not isinstance(tool_refs, list) or not tool_refs:
+        return False
+
+    for tool_ref in tool_refs:
+        if not isinstance(tool_ref, str) or not tool_ref.strip():
+            return False
+        if tool_ref.startswith("/") or ".." in Path(tool_ref).parts:
+            return False
+        target = (base / tool_ref).resolve()
+        if not is_under(target, base):
+            return False
+        if target.suffix != ".py" or "/tools/" not in target.as_posix():
+            return False
+        if not target.exists() or not python_tool_is_indexable(target):
+            return False
+    return True
 
 
 def markdown_index_entries(root: Path, base: Path) -> list[dict[str, str]]:
@@ -213,6 +274,10 @@ def markdown_index_entries(root: Path, base: Path) -> list[dict[str, str]]:
     entries: list[dict[str, str]] = []
     for path in sorted(root.rglob("*.md")):
         meta = read_frontmatter(path)
+        if not has_required_text(meta, "name", "description"):
+            continue
+        if not workflow_tool_references_are_indexable(meta, base):
+            continue
         entries.append(
             {
                 "name": str(meta.get("name") or path.stem),
@@ -232,6 +297,8 @@ def python_tool_index_entries(root: Path, base: Path) -> list[dict[str, object]]
         if path.name.startswith("_"):
             continue
         meta = read_python_comment_metadata(path)
+        if not python_tool_is_indexable(path):
+            continue
         entry: dict[str, object] = {
             "name": str(meta.get("name") or path.stem),
             "path": display_path(path, base),

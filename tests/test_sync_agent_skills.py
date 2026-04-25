@@ -63,6 +63,23 @@ class SyncAgentSkillsTest(unittest.TestCase):
         )
         self.assertFalse(stale_file.exists())
 
+    def test_sync_preserves_runtime_site_experience(self):
+        self.write_skill("agent-browser", {"reference/experience-authoring.md": "fresh"})
+        runtime_site = self.target / "agent-browser" / "reference" / "sites" / "example.com" / "site.md"
+        runtime_site.parent.mkdir(parents=True)
+        runtime_site.write_text("runtime experience", encoding="utf-8")
+
+        result = self.run_script("--source", self.source, "--target", self.target, "agent-browser")
+
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertEqual(runtime_site.read_text(encoding="utf-8"), "runtime experience")
+        self.assertEqual(
+            (self.target / "agent-browser" / "reference" / "experience-authoring.md").read_text(
+                encoding="utf-8"
+            ),
+            "fresh",
+        )
+
     def test_syncs_only_named_skills(self):
         self.write_skill("agent-browser", {"reference/core.md": "fresh"})
         self.write_skill("ego-cli", {"reference/core.md": "other"})

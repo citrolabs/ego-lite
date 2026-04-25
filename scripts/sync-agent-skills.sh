@@ -21,6 +21,8 @@ Options:
   --dry-run      Print planned sync operations without writing files
   -h, --help     Show this help
 
+For agent-browser, runtime site experience under reference/sites is preserved.
+
 Examples:
   scripts/sync-agent-skills.sh
   scripts/sync-agent-skills.sh agent-browser
@@ -124,7 +126,14 @@ for skill in "${SKILLS[@]}"; do
 
   mkdir -p "$TARGET_SKILL_DIR"
 
-  # Mirror the reviewed source exactly, while leaving local macOS metadata behind.
-  rsync -a --delete --exclude='.DS_Store' "$SOURCE_SKILL_DIR/" "$TARGET_SKILL_DIR/"
+  RSYNC_ARGS=(-a --delete --exclude='.DS_Store')
+  if [[ "$skill" == "agent-browser" ]]; then
+    # Site experience is maintained at runtime in the installed skill root.
+    # Preserve it when syncing reviewed source code and documentation.
+    RSYNC_ARGS+=(--exclude='reference/sites/***')
+  fi
+
+  # Mirror reviewed source while preserving runtime-owned data where applicable.
+  rsync "${RSYNC_ARGS[@]}" "$SOURCE_SKILL_DIR/" "$TARGET_SKILL_DIR/"
   printf 'Synced %s: %s -> %s\n' "$skill" "$SOURCE_SKILL_DIR" "$TARGET_SKILL_DIR"
 done

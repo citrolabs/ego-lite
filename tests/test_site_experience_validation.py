@@ -229,27 +229,37 @@ class SiteExperienceMaintenanceDocumentationTest(unittest.TestCase):
         )
 
 
-class GmailValidationTest(unittest.TestCase):
-    def test_gmail_site_experience_validates(self):
-        result = subprocess.run(
-            [
-                "python3",
-                str(SCRIPT),
-                "--site",
-                "gmail.com",
-                "--skill-root",
-                str(SKILL_ROOT),
-            ],
-            cwd=REPO_ROOT,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            check=False,
-        )
+class InstalledRuntimeExperienceValidationTest(unittest.TestCase):
+    def test_installed_runtime_site_experience_validates(self):
+        sites_dir = INSTALLED_SKILL_ROOT / "reference" / "sites"
+        if not sites_dir.exists():
+            self.skipTest("No installed runtime site experience is present.")
 
-        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
-        self.assertIn("status: ok", result.stdout)
-        self.assertIn("site: gmail.com", result.stdout)
+        site_names = sorted(path.name for path in sites_dir.iterdir() if path.is_dir())
+        if not site_names:
+            self.skipTest("No installed runtime site experience is present.")
+
+        for site_name in site_names:
+            with self.subTest(site=site_name):
+                result = subprocess.run(
+                    [
+                        "python3",
+                        str(SCRIPT),
+                        "--site",
+                        site_name,
+                        "--skill-root",
+                        str(INSTALLED_SKILL_ROOT),
+                    ],
+                    cwd=REPO_ROOT,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    check=False,
+                )
+
+                self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+                self.assertIn("status: ok", result.stdout)
+                self.assertIn(f"site: {site_name}", result.stdout)
 
 
 if __name__ == "__main__":
