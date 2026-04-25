@@ -109,6 +109,17 @@ class AgentBrowserSkillMetadataTest(unittest.TestCase):
         self.assertIn("allowed-tools:", frontmatter)
         self.assertIn("Read", frontmatter)
         self.assertIn("Write", frontmatter)
+        self.assertIn("Bash(python3:*)", frontmatter)
+
+    def test_agent_browser_uses_auto_connect_by_default(self):
+        skill_path = REPO_ROOT / "skills" / "agent-browser" / "SKILL.md"
+        skill_text = skill_path.read_text(encoding="utf-8")
+        opening_browsers = skill_text.split("## Opening browsers", 1)[1].split("## Start here", 1)[0]
+
+        self.assertIn("By default, open pages with `--auto-connect`", opening_browsers)
+        self.assertIn("agent-browser --auto-connect open", opening_browsers)
+        self.assertNotIn("--profile", opening_browsers)
+        self.assertNotIn("fallback", opening_browsers.lower())
 
 
 if __name__ == "__main__":
