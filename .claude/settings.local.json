@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(agent-browser close *)",
+      "Bash(npm uninstall *)"
     ]
   }
 }
