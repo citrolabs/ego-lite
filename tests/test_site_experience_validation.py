@@ -126,14 +126,14 @@ class SiteExperienceValidationTest(unittest.TestCase):
         self.assertIn("missing.py", result.stdout)
 
     def test_category_limit_returns_error_yaml(self):
-        for index in range(31):
+        for index in range(21):
             self.write_valid_tool(f"tools/search/tool-{index}.py")
 
         result = self.run_validator("--site", "example.com")
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("status: error", result.stdout)
-        self.assertIn("exceeds 30 files", result.stdout)
+        self.assertIn("exceeds 20 files", result.stdout)
         self.assertIn("tools/search", result.stdout)
 
     def test_python_compile_error_returns_error_yaml(self):
@@ -185,11 +185,13 @@ class SiteExperienceMaintenanceDocumentationTest(unittest.TestCase):
         self.assertIn("reference/experience-authoring.md", skill_text)
         self.assertIn("current installed skill root", skill_text)
         self.assertIn("Before the final response", skill_text)
-        self.assertIn("make a checkpoint", skill_text)
+        self.assertIn("maintenance check", skill_text)
         self.assertIn("before deciding", skill_text)
+        self.assertIn("maintaining site experience", skill_text)
+        self.assertIn("update or generalize the closest fit", skill_text)
+        self.assertIn("Tool and workflow budgets are limited", skill_text)
         self.assertIn("Final answer: list maintained paths or the skip reason", skill_text)
-        self.assertIn("Default to maintaining", skill_text)
-        self.assertIn("Persist mechanics, not content", skill_text)
+        self.assertIn("Maintain mechanics, not content", skill_text)
         self.assertLessEqual(len(skill_text.splitlines()), 110)
         self.assertIn("reusable", skill_text)
         self.assertIn("workflow", skill_text)
@@ -199,17 +201,20 @@ class SiteExperienceMaintenanceDocumentationTest(unittest.TestCase):
     def test_authoring_guide_records_maintenance_constraints(self):
         guide_text = AUTHORING_GUIDE.read_text(encoding="utf-8")
 
-        self.assertIn("decide with this", guide_text)
-        self.assertIn("guide: when all evidence gates pass", guide_text)
-        self.assertIn("skip reason in the final answer", guide_text)
+        self.assertIn("apply these gates", guide_text)
+        self.assertIn("write/update without asking", guide_text)
+        self.assertIn("report the skip reason", guide_text)
         self.assertIn("Keep tools atomic", guide_text)
-        self.assertIn("default action is to write", guide_text)
         self.assertIn("Private or authenticated sessions are allowed", guide_text)
-        self.assertIn("Create or update a tool when", guide_text)
-        self.assertIn("Create or update a workflow only when", guide_text)
-        self.assertIn("site notes", guide_text)
+        self.assertIn("Use existing artifacts first", guide_text)
+        self.assertIn("update or generalize the closest fit", guide_text)
+        self.assertIn("add a new artifact only when the mechanic has no clear home", guide_text)
+        self.assertIn("Tool and workflow budgets are limited", guide_text)
+        self.assertIn("Tool: reusable automation", guide_text)
+        self.assertIn("Workflow: non-obvious sequence", guide_text)
+        self.assertIn("Site note: stable site knowledge", guide_text)
         self.assertIn("2000 characters", guide_text)
-        self.assertIn("30 files", guide_text)
+        self.assertIn("20 files", guide_text)
         self.assertIn("Do not save `@eN` refs", guide_text)
         self.assertIn("rsync --delete", guide_text)
 

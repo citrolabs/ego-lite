@@ -14,7 +14,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 SCRIPT_SKILL_ROOT = SCRIPT_DIR.parent
-MAX_CATEGORY_FILES = 30
+MAX_CATEGORY_FILES = 20
 MAX_SITE_BODY_CHARS = 2000
 
 DANGEROUS_PATTERNS = [

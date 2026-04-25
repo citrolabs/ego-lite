@@ -38,18 +38,20 @@ Never save `@eN` refs; they are snapshot-local.
 
 ## Runtime experience maintenance
 
-During website work, keep a maintenance triage. Before the final response,
-make a checkpoint; if any observed site-specific mechanic may be reusable, read
-`reference/experience-authoring.md` before deciding. Default to maintaining
-experience: write when mechanics are stable, site-specific, and reusable; skip
-only when generic, low-confidence, one-off, or inseparable from private data.
+During website work, keep a maintenance check. Before the final response, if
+any observed site mechanic may be reusable, read
+`reference/experience-authoring.md` before deciding. Default to maintaining site experience:
+update when mechanics are stable, site-specific, and reusable; skip only when
+generic, low-confidence, one-off, or inseparable from private data.
 
-Persist the smallest useful artifact: site note for selectors, labels, URL
+Use the smallest useful artifact: site note for selectors, labels, URL
 patterns, constraints, or recovery hints; workflow for non-obvious sequences,
 validation, side effects, or recovery; tool for reusable clicking, extraction,
-waiting, pagination, navigation, or parameterized scripts.
+waiting, pagination, navigation, or parameterized scripts. Before adding
+anything, first look for related existing artifacts; update or generalize the closest fit.
+Tool and workflow budgets are limited.
 
-Persist mechanics, not content. Authenticated/private sessions are allowed:
+Maintain mechanics, not content. Authenticated/private sessions are allowed:
 keep data-free selectors, URL/query shapes, pagination/extraction rules, waits,
 and recoveries; never store accounts, credentials, tokens, message
 bodies/subjects, sender lists, result values, screenshots, or private query
