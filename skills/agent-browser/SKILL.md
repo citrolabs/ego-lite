@@ -46,6 +46,31 @@ are Markdown experience files that explain how to compose tools.
 Never save `@eN` refs as reusable experience. Refs are only valid for the
 current snapshot.
 
+## Runtime experience maintenance
+
+After completing a website task, briefly evaluate whether anything learned would
+make future tasks on the same site faster, safer, or less error-prone. Suggest
+maintenance only when there is a clear candidate: a reusable tool for repeated
+browser operations, a workflow for non-obvious sequences or recovery paths, or
+site notes for stable site behavior and constraints.
+
+Do not automatically write experience after every successful task. Ask the user
+whether to maintain the discovered tool, workflow, or site note. If the user
+agrees and the host environment supports background agents or subtasks, the
+maintenance work may be delegated so the completed task result is not blocked.
+
+Runtime maintenance writes to the current installed skill root, not the source
+development directory. In this project that means adding generated site
+experience under `.agents/skills/agent-browser/reference/sites/...`. Use the
+source directory only for reviewed skill capability development, then sync it.
+
+Before adding or editing tools, workflows, or site notes, read
+`reference/experience-authoring.md`. After maintenance, run:
+
+```bash
+python3 scripts/validate-site-experience.py --site example.com
+```
+
 ## Start here
 
 This file is a discovery stub, not the usage guide. Before running any

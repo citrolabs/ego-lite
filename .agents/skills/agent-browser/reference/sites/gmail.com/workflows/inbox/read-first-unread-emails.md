@@ -1,6 +1,11 @@
 ---
 name: read-first-unread-emails
 description: Read and summarize the first N unread Gmail messages.
+tools:
+  - reference/sites/gmail.com/tools/search/search-mail.py
+  - reference/sites/gmail.com/tools/reading/open-search-result.py
+  - reference/sites/gmail.com/tools/reading/read-current-email.py
+  - reference/sites/gmail.com/tools/navigation/back-to-results.py
 ---
 
 # Read first unread emails
