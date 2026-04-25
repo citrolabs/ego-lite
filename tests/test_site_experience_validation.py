@@ -8,9 +8,12 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILL_ROOT = REPO_ROOT / "skills" / "agent-browser"
+INSTALLED_SKILL_ROOT = REPO_ROOT / ".agents" / "skills" / "agent-browser"
 SCRIPT = SKILL_ROOT / "scripts" / "validate-site-experience.py"
 SKILL = SKILL_ROOT / "SKILL.md"
 AUTHORING_GUIDE = SKILL_ROOT / "reference" / "experience-authoring.md"
+INSTALLED_SKILL = INSTALLED_SKILL_ROOT / "SKILL.md"
+INSTALLED_AUTHORING_GUIDE = INSTALLED_SKILL_ROOT / "reference" / "experience-authoring.md"
 
 
 VALID_TOOL = (
@@ -181,15 +184,27 @@ class SiteExperienceMaintenanceDocumentationTest(unittest.TestCase):
         self.assertIn("## Runtime experience maintenance", skill_text)
         self.assertIn("reference/experience-authoring.md", skill_text)
         self.assertIn("current installed skill root", skill_text)
-        self.assertIn("reusable tool", skill_text)
+        self.assertIn("Before the final response", skill_text)
+        self.assertIn("make a checkpoint", skill_text)
+        self.assertIn("before deciding", skill_text)
+        self.assertIn("Final answer: list maintained paths or the skip reason", skill_text)
+        self.assertIn("Default to maintaining", skill_text)
+        self.assertIn("Persist mechanics, not content", skill_text)
+        self.assertLessEqual(len(skill_text.splitlines()), 110)
+        self.assertIn("reusable", skill_text)
         self.assertIn("workflow", skill_text)
-        self.assertIn("Ask the user", skill_text)
+        self.assertIn("Ask before writing only", skill_text)
         self.assertIn("validate-site-experience.py", skill_text)
 
     def test_authoring_guide_records_maintenance_constraints(self):
         guide_text = AUTHORING_GUIDE.read_text(encoding="utf-8")
 
+        self.assertIn("decide with this", guide_text)
+        self.assertIn("guide: when all evidence gates pass", guide_text)
+        self.assertIn("skip reason in the final answer", guide_text)
         self.assertIn("Keep tools atomic", guide_text)
+        self.assertIn("default action is to write", guide_text)
+        self.assertIn("Private or authenticated sessions are allowed", guide_text)
         self.assertIn("Create or update a tool when", guide_text)
         self.assertIn("Create or update a workflow only when", guide_text)
         self.assertIn("site notes", guide_text)
@@ -197,6 +212,16 @@ class SiteExperienceMaintenanceDocumentationTest(unittest.TestCase):
         self.assertIn("30 files", guide_text)
         self.assertIn("Do not save `@eN` refs", guide_text)
         self.assertIn("rsync --delete", guide_text)
+
+    def test_installed_agent_browser_docs_match_source_docs(self):
+        self.assertEqual(
+            SKILL.read_text(encoding="utf-8"),
+            INSTALLED_SKILL.read_text(encoding="utf-8"),
+        )
+        self.assertEqual(
+            AUTHORING_GUIDE.read_text(encoding="utf-8"),
+            INSTALLED_AUTHORING_GUIDE.read_text(encoding="utf-8"),
+        )
 
 
 class GmailValidationTest(unittest.TestCase):

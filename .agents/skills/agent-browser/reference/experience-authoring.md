@@ -1,29 +1,52 @@
 # Experience Authoring
 
-Use this guide only when maintaining Agent Browser site experience after a real
+Use this guide to decide or write Agent Browser site experience during a real
 website task. Runtime experience belongs in the current installed skill root,
 for example `.agents/skills/agent-browser/reference/sites/<site>/`.
 
 ## What to maintain
 
-After a task, identify maintenance candidates and ask the user before writing
-them. Do not add experience only because a task succeeded.
+Maintain candidates while working. Before the final response, decide with this
+guide: when all evidence gates pass, the default action is to write without
+asking; otherwise include the skip reason in the final answer.
 
-Create or update a tool when a browser operation is reusable and would reduce
-future clicking, snapshot inspection, extraction, waiting, pagination, or other
-manual browser steps. Keep tools atomic. A tool should perform one reusable
-action such as search, open a visible result, read the current item, or navigate
-back. Do not create a highly customized one-off tool for a single task unless it
-clearly generalizes.
+- Observed in the current task, not generic or assumed.
+- Site-specific and likely stable enough for reuse.
+- Prevents a mistake, captures recovery, or removes repeated browser work.
+- Recordable without private content, credentials, or one-off data.
+
+Strong write signals:
+
+- Stable selectors, UI labels, URL/query patterns, constraints, or side effects.
+- Pagination, scrolling, extraction, waiting, or aggregation loops.
+- A failed browser action followed by a reliable workaround.
+- A parameterized script or repeated command sequence that emits YAML.
+
+Private or authenticated sessions are allowed. Store mechanics only: selectors,
+labels, URL/query shapes, pagination/extraction rules, waits, recovery paths,
+and validation strategy. Do not store accounts, credentials, tokens, message
+bodies, subjects, sender lists, result values, screenshots, or revealing query
+terms.
+
+Skip generic habits, low-confidence guesses, clean one-off success, or anything
+inseparable from private data. Ask only when the artifact itself would contain
+sensitive content, credentials, destructive side effects, or an ambiguous
+tradeoff.
+
+Prefer the smallest useful artifact. Create or update site notes for stable
+site knowledge such as host aliases, interaction constraints, side effects, or
+areas that are easy to misread.
 
 Create or update a workflow only when the task revealed a non-obvious sequence,
-a meaningful mistake, a recovery path, an important validation strategy, or a
-known side effect that future agents should account for. Workflows should
-compose tools and explain strategy; they should not record every clean success.
+meaningful mistake, recovery path, validation strategy, or known side effect.
+Workflows compose tools and explain strategy; they do not record every clean
+success.
 
-Create or update site notes when the finding is stable site knowledge but not an
-executable action or workflow, such as host aliases, interaction constraints,
-dangerous side effects, or site areas that are easy to misread.
+Create or update a tool when reusable automation would reduce future clicking,
+snapshot inspection, extraction, waiting, pagination, navigation, or other
+manual browser steps. Keep tools atomic. A tool should perform one reusable
+action such as search, open a visible result, read the current item, or navigate
+back.
 
 ## File layout
 
@@ -36,11 +59,12 @@ reference/sites/example.com/
   workflows/<category>/<workflow>.md
 ```
 
-The Markdown body of `site.md` is the site notes area. It must stay under 2000 characters.
+The Markdown body of `site.md` is the site notes area and must stay under 2000 characters.
 Each immediate `tools/<category>/` directory and each immediate
 `workflows/<category>/` directory may contain at most 30 files. Split by a
-clearer category before adding more files. Do not save `@eN` refs as reusable
-experience; refs are snapshot-local and must only be used inside one run.
+clearer category before adding more files.
+Do not save `@eN` refs in notes, workflows, or tools; refs are snapshot-local
+except as temporary variables inside one tool run.
 
 ## Metadata
 
@@ -61,7 +85,9 @@ Python tools use YAML comment metadata:
 Tool stdout must always be YAML with `status`, `message`, and optional `data`.
 Tools may call `agent-browser` commands, including JavaScript evaluation for
 read-only diagnostics, but visible user actions should stay aligned with normal
-Agent Browser UI operations when possible.
+Agent Browser UI operations when possible. Prefer parameters over hardcoded
+queries, account names, selectors derived from private content, or current
+result values.
 
 Workflows are Markdown files with frontmatter:
 
@@ -74,9 +100,8 @@ tools:
 ---
 ```
 
-A workflow should describe strategy, validation, known side effects, and which
-atomic tools it composes. It should not store credentials, private content, or
-snapshot refs.
+A workflow should describe strategy, validation, side effects, and composed
+tools. It should not store credentials, private content, or one-off task data.
 
 ## Validation
 
