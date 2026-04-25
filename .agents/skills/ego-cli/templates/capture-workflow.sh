@@ -22,47 +22,47 @@ mkdir -p "$OUTPUT_DIR"
 # Optional: Load authentication state
 # if [[ -f "./auth-state.json" ]]; then
 #     echo "Loading authentication state..."
-#     agent-browser state load "./auth-state.json"
+#     ego-cli state load "./auth-state.json"
 # fi
 
 # Navigate to target
-agent-browser open "$TARGET_URL"
-agent-browser wait --load networkidle
+ego-cli open "$TARGET_URL"
+ego-cli wait --load networkidle
 
 # Get metadata
-TITLE=$(agent-browser get title)
-URL=$(agent-browser get url)
+TITLE=$(ego-cli get title)
+URL=$(ego-cli get url)
 echo "Title: $TITLE"
 echo "URL: $URL"
 
 # Capture full page screenshot
-agent-browser screenshot --full "$OUTPUT_DIR/page-full.png"
+ego-cli screenshot --full "$OUTPUT_DIR/page-full.png"
 echo "Saved: $OUTPUT_DIR/page-full.png"
 
 # Get page structure with refs
-agent-browser snapshot -i > "$OUTPUT_DIR/page-structure.txt"
+ego-cli snapshot -i > "$OUTPUT_DIR/page-structure.txt"
 echo "Saved: $OUTPUT_DIR/page-structure.txt"
 
 # Extract all text content
-agent-browser get text body > "$OUTPUT_DIR/page-text.txt"
+ego-cli get text body > "$OUTPUT_DIR/page-text.txt"
 echo "Saved: $OUTPUT_DIR/page-text.txt"
 
 # Save as PDF
-agent-browser pdf "$OUTPUT_DIR/page.pdf"
+ego-cli pdf "$OUTPUT_DIR/page.pdf"
 echo "Saved: $OUTPUT_DIR/page.pdf"
 
 # Optional: Extract specific elements using refs from structure
-# agent-browser get text @e5 > "$OUTPUT_DIR/main-content.txt"
+# ego-cli get text @e5 > "$OUTPUT_DIR/main-content.txt"
 
 # Optional: Handle infinite scroll pages
 # for i in {1..5}; do
-#     agent-browser scroll down 1000
-#     agent-browser wait 1000
+#     ego-cli scroll down 1000
+#     ego-cli wait 1000
 # done
-# agent-browser screenshot --full "$OUTPUT_DIR/page-scrolled.png"
+# ego-cli screenshot --full "$OUTPUT_DIR/page-scrolled.png"
 
 # Cleanup
-agent-browser close
+ego-cli close
 
 echo ""
 echo "Capture complete:"

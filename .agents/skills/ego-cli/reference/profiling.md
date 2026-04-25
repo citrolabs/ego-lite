@@ -18,28 +18,28 @@ Capture Chrome DevTools performance profiles during browser automation for perfo
 
 ```bash
 # Start profiling
-agent-browser profiler start
+ego-cli profiler start
 
 # Perform actions
-agent-browser navigate https://example.com
-agent-browser click "#button"
-agent-browser wait 1000
+ego-cli navigate https://example.com
+ego-cli click "#button"
+ego-cli wait 1000
 
 # Stop and save
-agent-browser profiler stop ./trace.json
+ego-cli profiler stop ./trace.json
 ```
 
 ## Profiler Commands
 
 ```bash
 # Start profiling with default categories
-agent-browser profiler start
+ego-cli profiler start
 
 # Start with custom trace categories
-agent-browser profiler start --categories "devtools.timeline,v8.execute,blink.user_timing"
+ego-cli profiler start --categories "devtools.timeline,v8.execute,blink.user_timing"
 
 # Stop profiling and save to file
-agent-browser profiler stop ./trace.json
+ego-cli profiler stop ./trace.json
 ```
 
 ## Categories
@@ -61,30 +61,30 @@ Several `disabled-by-default-*` categories are also included for detailed timeli
 ### Diagnosing Slow Page Loads
 
 ```bash
-agent-browser profiler start
-agent-browser navigate https://app.example.com
-agent-browser wait --load networkidle
-agent-browser profiler stop ./page-load-profile.json
+ego-cli profiler start
+ego-cli navigate https://app.example.com
+ego-cli wait --load networkidle
+ego-cli profiler stop ./page-load-profile.json
 ```
 
 ### Profiling User Interactions
 
 ```bash
-agent-browser navigate https://app.example.com
-agent-browser profiler start
-agent-browser click "#submit"
-agent-browser wait 2000
-agent-browser profiler stop ./interaction-profile.json
+ego-cli navigate https://app.example.com
+ego-cli profiler start
+ego-cli click "#submit"
+ego-cli wait 2000
+ego-cli profiler stop ./interaction-profile.json
 ```
 
 ### CI Performance Regression Checks
 
 ```bash
 #!/bin/bash
-agent-browser profiler start
-agent-browser navigate https://app.example.com
-agent-browser wait --load networkidle
-agent-browser profiler stop "./profiles/build-${BUILD_ID}.json"
+ego-cli profiler start
+ego-cli navigate https://app.example.com
+ego-cli wait --load networkidle
+ego-cli profiler stop "./profiles/build-${BUILD_ID}.json"
 ```
 
 ## Output Format

@@ -21,20 +21,20 @@ Use the `--proxy` flag or set proxy via environment variable:
 
 ```bash
 # Via CLI flag
-agent-browser --proxy "http://proxy.example.com:8080" open https://example.com
+ego-cli --proxy "http://proxy.example.com:8080" open https://example.com
 
 # Via environment variable
 export HTTP_PROXY="http://proxy.example.com:8080"
-agent-browser open https://example.com
+ego-cli open https://example.com
 
 # HTTPS proxy
 export HTTPS_PROXY="https://proxy.example.com:8080"
-agent-browser open https://example.com
+ego-cli open https://example.com
 
 # Both
 export HTTP_PROXY="http://proxy.example.com:8080"
 export HTTPS_PROXY="http://proxy.example.com:8080"
-agent-browser open https://example.com
+ego-cli open https://example.com
 ```
 
 ## Authenticated Proxy
@@ -44,7 +44,7 @@ For proxies requiring authentication:
 ```bash
 # Include credentials in URL
 export HTTP_PROXY="http://username:password@proxy.example.com:8080"
-agent-browser open https://example.com
+ego-cli open https://example.com
 ```
 
 ## SOCKS Proxy
@@ -52,11 +52,11 @@ agent-browser open https://example.com
 ```bash
 # SOCKS5 proxy
 export ALL_PROXY="socks5://proxy.example.com:1080"
-agent-browser open https://example.com
+ego-cli open https://example.com
 
 # SOCKS5 with auth
 export ALL_PROXY="socks5://user:pass@proxy.example.com:1080"
-agent-browser open https://example.com
+ego-cli open https://example.com
 ```
 
 ## Proxy Bypass
@@ -65,12 +65,12 @@ Skip proxy for specific domains using `--proxy-bypass` or `NO_PROXY`:
 
 ```bash
 # Via CLI flag
-agent-browser --proxy "http://proxy.example.com:8080" --proxy-bypass "localhost,*.internal.com" open https://example.com
+ego-cli --proxy "http://proxy.example.com:8080" --proxy-bypass "localhost,*.internal.com" open https://example.com
 
 # Via environment variable
 export NO_PROXY="localhost,127.0.0.1,.internal.company.com"
-agent-browser open https://internal.company.com  # Direct connection
-agent-browser open https://external.com          # Via proxy
+ego-cli open https://internal.company.com  # Direct connection
+ego-cli open https://external.com          # Via proxy
 ```
 
 ## Common Use Cases
@@ -94,9 +94,9 @@ for proxy in "${PROXIES[@]}"; do
     region=$(echo "$proxy" | grep -oP '^\w+-\w+')
     echo "Testing from: $region"
 
-    agent-browser --session "$region" open https://example.com
-    agent-browser --session "$region" screenshot "./screenshots/$region.png"
-    agent-browser --session "$region" close
+    ego-cli open https://example.com
+    ego-cli screenshot "./screenshots/$region.png"
+    ego-cli close
 done
 ```
 
@@ -123,9 +123,9 @@ for i in "${!URLS[@]}"; do
     export HTTP_PROXY="${PROXY_LIST[$proxy_index]}"
     export HTTPS_PROXY="${PROXY_LIST[$proxy_index]}"
 
-    agent-browser open "${URLS[$i]}"
-    agent-browser get text body > "output-$i.txt"
-    agent-browser close
+    ego-cli open "${URLS[$i]}"
+    ego-cli get text body > "output-$i.txt"
+    ego-cli close
 
     sleep 1  # Polite delay
 done
@@ -142,18 +142,18 @@ export HTTPS_PROXY="http://corpproxy.company.com:8080"
 export NO_PROXY="localhost,127.0.0.1,.company.com"
 
 # External sites go through proxy
-agent-browser open https://external-vendor.com
+ego-cli open https://external-vendor.com
 
 # Internal sites bypass proxy
-agent-browser open https://intranet.company.com
+ego-cli open https://intranet.company.com
 ```
 
 ## Verifying Proxy Connection
 
 ```bash
 # Check your apparent IP
-agent-browser open https://httpbin.org/ip
-agent-browser get text body
+ego-cli open https://httpbin.org/ip
+ego-cli get text body
 # Should show proxy's IP, not your real IP
 ```
 
@@ -175,7 +175,7 @@ Some proxies perform SSL inspection. If you encounter certificate errors:
 
 ```bash
 # For testing only - not recommended for production
-agent-browser open https://example.com --ignore-https-errors
+ego-cli open https://example.com --ignore-https-errors
 ```
 
 ### Slow Performance

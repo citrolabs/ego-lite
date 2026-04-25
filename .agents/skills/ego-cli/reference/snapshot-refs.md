@@ -21,7 +21,7 @@ Traditional approach:
 Full DOM/HTML → AI parses → CSS selector → Action (~3000-5000 tokens)
 ```
 
-agent-browser approach:
+ego-cli approach:
 ```
 Compact snapshot → @refs assigned → Direct interaction (~200-400 tokens)
 ```
@@ -30,10 +30,10 @@ Compact snapshot → @refs assigned → Direct interaction (~200-400 tokens)
 
 ```bash
 # Basic snapshot (shows page structure)
-agent-browser snapshot
+ego-cli snapshot
 
 # Interactive snapshot (-i flag) - RECOMMENDED
-agent-browser snapshot -i
+ego-cli snapshot -i
 ```
 
 ### Snapshot Output Format
@@ -66,16 +66,16 @@ Once you have refs, interact directly:
 
 ```bash
 # Click the "Sign In" button
-agent-browser click @e6
+ego-cli click @e6
 
 # Fill email input
-agent-browser fill @e10 "user@example.com"
+ego-cli fill @e10 "user@example.com"
 
 # Fill password
-agent-browser fill @e11 "password123"
+ego-cli fill @e11 "password123"
 
 # Submit the form
-agent-browser click @e12
+ego-cli click @e12
 ```
 
 ## Ref Lifecycle
@@ -84,14 +84,14 @@ agent-browser click @e12
 
 ```bash
 # Get initial snapshot
-agent-browser snapshot -i
+ego-cli snapshot -i
 # @e1 [button] "Next"
 
 # Click triggers page change
-agent-browser click @e1
+ego-cli click @e1
 
 # MUST re-snapshot to get new refs!
-agent-browser snapshot -i
+ego-cli snapshot -i
 # @e1 [h1] "Page 2"  ← Different element now!
 ```
 
@@ -101,29 +101,29 @@ agent-browser snapshot -i
 
 ```bash
 # CORRECT
-agent-browser open https://example.com
-agent-browser snapshot -i          # Get refs first
-agent-browser click @e1            # Use ref
+ego-cli open https://example.com
+ego-cli snapshot -i          # Get refs first
+ego-cli click @e1            # Use ref
 
 # WRONG
-agent-browser open https://example.com
-agent-browser click @e1            # Ref doesn't exist yet!
+ego-cli open https://example.com
+ego-cli click @e1            # Ref doesn't exist yet!
 ```
 
 ### 2. Re-Snapshot After Navigation
 
 ```bash
-agent-browser click @e5            # Navigates to new page
-agent-browser snapshot -i          # Get new refs
-agent-browser click @e1            # Use new refs
+ego-cli click @e5            # Navigates to new page
+ego-cli snapshot -i          # Get new refs
+ego-cli click @e1            # Use new refs
 ```
 
 ### 3. Re-Snapshot After Dynamic Changes
 
 ```bash
-agent-browser click @e1            # Opens dropdown
-agent-browser snapshot -i          # See dropdown items
-agent-browser click @e7            # Select item
+ego-cli click @e1            # Opens dropdown
+ego-cli snapshot -i          # See dropdown items
+ego-cli click @e7            # Select item
 ```
 
 ### 4. Snapshot Specific Regions
@@ -132,7 +132,7 @@ For complex pages, snapshot specific areas:
 
 ```bash
 # Snapshot just the form
-agent-browser snapshot @e9
+ego-cli snapshot @e9
 ```
 
 ## Ref Notation Details
@@ -167,7 +167,7 @@ agent-browser snapshot @e9
 Snapshots automatically detect and inline iframe content. When the main-frame snapshot runs, each `Iframe` node is resolved and its child accessibility tree is included directly beneath it in the output. Refs assigned to elements inside iframes carry frame context, so interactions like `click`, `fill`, and `type` work without manually switching frames.
 
 ```bash
-agent-browser snapshot -i
+ego-cli snapshot -i
 # @e1 [heading] "Checkout"
 # @e2 [Iframe] "payment-frame"
 #   @e3 [input] "Card number"
@@ -176,9 +176,9 @@ agent-browser snapshot -i
 # @e6 [button] "Cancel"
 
 # Interact with iframe elements directly using their refs
-agent-browser fill @e3 "4111111111111111"
-agent-browser fill @e4 "12/28"
-agent-browser click @e5
+ego-cli fill @e3 "4111111111111111"
+ego-cli fill @e4 "12/28"
+ego-cli click @e5
 ```
 
 **Key details:**
@@ -193,27 +193,27 @@ agent-browser click @e5
 
 ```bash
 # Ref may have changed - re-snapshot
-agent-browser snapshot -i
+ego-cli snapshot -i
 ```
 
 ### Element Not Visible in Snapshot
 
 ```bash
 # Scroll down to reveal element
-agent-browser scroll down 1000
-agent-browser snapshot -i
+ego-cli scroll down 1000
+ego-cli snapshot -i
 
 # Or wait for dynamic content
-agent-browser wait 1000
-agent-browser snapshot -i
+ego-cli wait 1000
+ego-cli snapshot -i
 ```
 
 ### Too Many Elements
 
 ```bash
 # Snapshot specific container
-agent-browser snapshot @e5
+ego-cli snapshot @e5
 
 # Or use get text for content-only extraction
-agent-browser get text @e5
+ego-cli get text @e5
 ```
