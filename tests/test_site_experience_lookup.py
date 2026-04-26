@@ -196,9 +196,10 @@ class SiteExperienceSkillInstructionTest(unittest.TestCase):
         self.assertIn("status: found", skill_text)
         self.assertIn("status: none", skill_text)
         self.assertIn("normal exploration", skill_text)
+        self.assertIn("read `site.path`", skill_text)
+        self.assertIn("first for site notes", skill_text)
         self.assertIn("Tool paths are executable Python scripts", skill_text)
         self.assertIn("Tool scripts print YAML", skill_text)
-        self.assertIn("Never save `@eN` refs", skill_text)
 
 
 if __name__ == "__main__":
