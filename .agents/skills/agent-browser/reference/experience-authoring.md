@@ -12,14 +12,16 @@ and write or update site experience only when all gates pass:
 - Observed in the current task, not generic or assumed.
 - Site-specific and likely stable enough for reuse.
 - Prevents a mistake, captures recovery, or removes repeated browser work.
-- Recordable as mechanics without private content, credentials, or one-off data.
+- Expressible as mechanics without private content, credentials, or one-off data.
 
-Use existing artifacts first: update or generalize the closest fit, and add a new artifact only when the mechanic has no clear home. When all gates pass and no
-sensitive or ambiguous tradeoff is present, write/update without asking. Skip
-generic habits, low-confidence guesses, clean one-off successes, or mechanics
-inseparable from private data, then report the skip reason. Ask only when the
-artifact itself would contain sensitive content, credentials, destructive side
-effects, or an ambiguous tradeoff.
+Use existing artifacts first: update or generalize the closest fit, and add a
+new artifact only when the mechanic has no clear home.
+
+When all gates pass and no sensitive or ambiguous tradeoff is present, write or
+update without asking. Skip generic mechanics, low-confidence guesses, clean
+one-off successes, or mechanics inseparable from private data, and report the
+skip reason. Ask only when the artifact itself would contain sensitive content,
+credentials, destructive side effects, or an ambiguous tradeoff.
 
 ## Artifact choice
 
@@ -27,11 +29,10 @@ Use the smallest artifact that preserves reuse:
 
 - Site note: stable site knowledge such as labels, URL shapes, constraints,
   side effects, recovery hints, or easy-to-misread areas.
-- Tool: reusable automation for one runnable action that reduces clicking, inspection, extraction,
-  waiting, pagination, navigation, or other repeated browser work. Examples
-  include JavaScript evaluation, read-only page-context requests, CDP calls,
-  scrolling loops, deduplication, polling/wait logic, and parameterized command
-  sequences. Tools emit YAML.
+- Tool: reusable automation for one runnable action — clicking, extraction, waiting,
+  pagination, navigation, or any repeated browser work. Implementations include
+  JavaScript evaluation, read-only API requests, CDP calls, scrolling loops,
+  deduplication, and polling logic. Tools emit YAML.
 - Workflow: non-obvious sequence, validation strategy, known side effect, or
   recovery path. Workflows compose tools and explain strategy; they do not
   record every clean success.
@@ -39,8 +40,7 @@ Use the smallest artifact that preserves reuse:
 Escalate beyond a site note when reusable mechanics would otherwise be copied
 into prose as executable behavior. Site notes can summarize or point to tools
 and workflows; runnable logic belongs in tools, and ordering or validation logic
-belongs in workflows. Keep tools atomic. Tool and workflow budgets are limited, so keep tools
-atomic and workflows focused.
+belongs in workflows. Tool and workflow budgets are limited; keep tools atomic and workflows focused.
 
 Private or authenticated sessions are allowed. Maintain mechanics only:
 data-free selectors, labels, URL/query shapes, extraction rules, waits, recovery
@@ -59,10 +59,9 @@ reference/sites/example.com/
   workflows/<category>/<workflow>.md
 ```
 
-The Markdown body of `site.md` is the site notes area and must stay under 2000 characters.
-Each immediate `tools/<category>/` directory and each immediate
-`workflows/<category>/` directory may contain at most 20 files. Split by a
-clearer category before adding more files.
+The `site.md` body contains site notes and must stay under 2000 characters.
+Each `tools/<category>/` and `workflows/<category>/` directory may contain at most 20 files.
+Split by a clearer category before adding more files.
 Do not save `@eN` refs in notes, workflows, or tools; refs are snapshot-local
 except as temporary variables inside one tool run.
 
@@ -85,9 +84,9 @@ Python tools use YAML comment metadata:
 Tool stdout must always be YAML with `status`, `message`, and optional `data`.
 Tools may call `agent-browser`, JavaScript evaluation, read-only page-context
 requests, or CDP when those are the stable way to perform diagnostics or
-parameterized extraction. Visible user actions should stay aligned with normal
-Agent Browser UI operations when possible. Prefer parameters over hardcoded
-queries, account names, private-derived selectors, or current result values.
+parameterized extraction. Where possible, simulate actions a user would take rather than relying on
+undocumented internals. Prefer parameters over hardcoded queries, account names,
+private-derived selectors, or current result values.
 
 Workflows are Markdown files with frontmatter:
 

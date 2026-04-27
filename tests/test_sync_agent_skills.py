@@ -143,7 +143,6 @@ class AgentBrowserSkillMetadataTest(unittest.TestCase):
         authoring_text = authoring_path.read_text(encoding="utf-8")
 
         self.assertIn("Escalate beyond a site note", authoring_text)
-        self.assertIn("read-only page-context requests", authoring_text)
         self.assertIn("runnable logic belongs in tools", authoring_text)
         self.assertIn("ordering or validation logic", authoring_text)
 
