@@ -53,14 +53,20 @@ verification. Tool paths are executable Python scripts. Tool scripts print YAML
 
 ## Runtime experience maintenance
 
-During website work, keep a maintenance check on reusable mechanics. Before the final response, if
-any candidate qualifies, read `reference/experience-authoring.md` before deciding; it covers
-decision gates, artifact choice, file layout, and metadata.
+During website work, keep a maintenance check on reusable mechanics. Default to writing
+maintenance; skip only when the mechanic is generic, low-confidence, one-off, or inseparable
+from private data. Maintain mechanics, not content. Ask before writing only if the artifact
+would contain sensitive content, destructive side effects, or an ambiguous tradeoff.
 
-Default to maintaining site experience: write when the mechanic is stable, site-specific, and
-reusable; skip when generic, low-confidence, one-off, or inseparable from private data.
-Maintain mechanics, not content. Ask before writing only if the artifact would contain sensitive
-content, destructive side effects, or an ambiguous tradeoff.
+Use the smallest artifact: **site note** for stable selectors, URL shapes, labels, constraints,
+and recovery hints; **tool** for any runnable automation — extraction, clicking, waiting,
+pagination, network/API calls, CDP, or polling; **workflow** for multi-step sequences,
+validation strategy, or recovery paths. Escalate from a site note whenever the logic would
+otherwise be written as executable prose. Before adding anything, update or generalize an
+existing artifact first.
+
+Before the final response, if any candidate qualifies, read `reference/experience-authoring.md`
+for decision gates, file layout, and metadata specs.
 
 Maintenance writes to `reference/sites/<site>/` in the current installed skill root.
 

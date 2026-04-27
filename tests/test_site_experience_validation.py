@@ -186,8 +186,6 @@ class SiteExperienceMaintenanceDocumentationTest(unittest.TestCase):
         self.assertIn("current installed skill root", skill_text)
         self.assertIn("Before the final response", skill_text)
         self.assertIn("maintenance check", skill_text)
-        self.assertIn("before deciding", skill_text)
-        self.assertIn("maintaining site experience", skill_text)
         self.assertIn("Final answer: list maintained paths or the skip reason", skill_text)
         self.assertIn("Maintain mechanics, not content", skill_text)
         self.assertIn("Ask before writing only", skill_text)
