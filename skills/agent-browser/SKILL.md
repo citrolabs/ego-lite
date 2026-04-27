@@ -44,34 +44,36 @@ python3 scripts/check-site-experience.py --url https://example.com
 ```
 
 Use `--site example.com` instead of `--url` when no browser session is open.
-Omit both flags to use the current open page. If `status: found`, read `site.path`
-first for site notes, then read only relevant returned tools/workflows. If
-`status: none`, continue with normal exploration:
-`--auto-connect`, `snapshot -i`, semantic locators, targeted waits, and
-verification. Tool paths are executable Python scripts. Tool scripts print YAML
-(`status`, `message`, optional `data`); workflows explain tool composition.
+Omit both flags to use the current open page. If `status: found`, read the file at
+`site.path` for site notes, then read only the relevant tools/workflows. If
+`status: none`, proceed with normal exploration using `--auto-connect`, `snapshot -i`,
+semantic locators, and targeted waits.
+Tool files are executable Python scripts that print YAML (`status`, `message`,
+optional `data`); workflow files describe how to compose them.
 
 ## Runtime experience maintenance
 
-During website work, keep a maintenance check on reusable mechanics. Default to writing
+While working on a website, watch for reusable mechanics worth saving. Default to writing
 maintenance; skip only when the mechanic is generic, low-confidence, one-off, or inseparable
 from private data. Maintain mechanics, not content. Ask before writing only if the artifact
 would contain sensitive content, destructive side effects, or an ambiguous tradeoff.
 
-Use the smallest artifact: **site note** for stable selectors, URL shapes, labels, constraints,
-and recovery hints; **tool** for any runnable automation — extraction, clicking, waiting,
-pagination, network/API calls, CDP, or polling; **workflow** for multi-step sequences,
-validation strategy, or recovery paths. Escalate from a site note whenever the logic would
-otherwise be written as executable prose. Before adding anything, update or generalize an
-existing artifact first.
+Use the smallest artifact that preserves reuse:
+- **Site note**: stable selectors, URL shapes, labels, constraints, recovery hints
+- **Tool**: any runnable automation — extraction, clicking, waiting, pagination,
+  network/API calls, CDP, or polling
+- **Workflow**: multi-step sequences, validation strategy, or recovery paths
 
-Before the final response, if any candidate qualifies, read `reference/experience-authoring.md`
+Prefer a tool over a site note whenever the mechanic involves runnable logic rather than
+just knowledge. Before adding anything, update or generalize an existing artifact first.
+
+Before your final response, if anything is worth saving, read `reference/experience-authoring.md`
 for decision gates, file layout, and metadata specs.
 
 Maintenance writes to `reference/sites/<site>/` in the current installed skill root.
 
-Final answer: list maintained paths or the skip reason. After any writes, run from the installed
-skill root:
+In your response, list the paths of anything written, or explain why you skipped. After any
+writes, run from the installed skill root:
 
 ```bash
 python3 scripts/validate-site-experience.py --site example.com
@@ -80,7 +82,7 @@ python3 scripts/validate-site-experience.py --site example.com
 
 ## Specialized skills
 
-Load a specialized CLI skill when the task falls outside web pages:
+For tasks beyond general web interaction, load a specialized skill:
 
 ```bash
 agent-browser skills get dogfood           # Exploratory testing / QA / bug hunts
