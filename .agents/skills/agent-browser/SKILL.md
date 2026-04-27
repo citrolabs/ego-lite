@@ -36,13 +36,15 @@ agent-browser --auto-connect open https://example.com
 
 ## Site experience lookup
 
-Before operating a website, check saved site experience:
+Before operating a website, check saved site experience. Run from the installed
+skill root (the directory containing this file):
 
 ```bash
 python3 scripts/check-site-experience.py --url https://example.com
+python3 scripts/check-site-experience.py --site example.com
 ```
 
-Omit `--url` to use the current page. If `status: found`, read `site.path`
+Omit both flags to use the current open page. If `status: found`, read `site.path`
 first for site notes, then read only relevant returned tools/workflows. If
 `status: none`, continue with normal exploration:
 `--auto-connect`, `snapshot -i`, semantic locators, targeted waits, and
@@ -51,37 +53,19 @@ verification. Tool paths are executable Python scripts. Tool scripts print YAML
 
 ## Runtime experience maintenance
 
-During website work, keep a maintenance check. Before the final response, if
-any observed site mechanic may be reusable, read
-`reference/experience-authoring.md` before deciding. Default to maintaining site experience:
-update when mechanics are stable, site-specific, and reusable; skip only when
-generic, low-confidence, one-off, or inseparable from private data.
+During website work, keep a maintenance check on reusable mechanics. Before the final response, if
+any candidate qualifies, read `reference/experience-authoring.md` before deciding; it covers
+decision gates, artifact choice, file layout, and metadata.
 
-Use the smallest useful artifact: site note for selectors, labels, URL
-patterns, constraints, or recovery hints; workflow for non-obvious sequences,
-validation, side effects, or recovery; tool for reusable clicking, extraction,
-waiting, pagination, navigation, or parameterized scripts. Before adding
-anything, first look for related existing artifacts; update or generalize the closest fit.
-Tool and workflow budgets are limited.
-
-Escalate beyond a site note when the reusable mechanic would otherwise be
-documented as executable behavior: DOM or script extraction, direct read-only
-network/API requests, CDP calls, scrolling or pagination loops, deduplication,
-polling/wait logic, or repeatable command sequences. Keep the site note concise;
-put runnable logic in a tool and multi-step strategy or validation in a workflow.
-
-Maintain mechanics, not content. Authenticated/private sessions are allowed:
-keep data-free selectors, URL/query shapes, pagination/extraction rules, waits,
-and recoveries; never store accounts, credentials, tokens, message
-bodies/subjects, sender lists, result values, screenshots, or private query
-terms. Ask before writing only if the artifact itself must contain sensitive
+Default to maintaining site experience: write when the mechanic is stable, site-specific, and
+reusable; skip when generic, low-confidence, one-off, or inseparable from private data.
+Maintain mechanics, not content. Ask before writing only if the artifact would contain sensitive
 content, destructive side effects, or an ambiguous tradeoff.
 
-Runtime maintenance writes to the current installed skill root. In this project that means adding generated site
-experience under `.agents/skills/agent-browser/reference/sites/...`.
+Maintenance writes to `reference/sites/<site>/` in the current installed skill root.
 
-Final answer: list maintained paths or the skip reason. After writing
-maintenance, run:
+Final answer: list maintained paths or the skip reason. After any writes, run from the installed
+skill root:
 
 ```bash
 python3 scripts/validate-site-experience.py --site example.com

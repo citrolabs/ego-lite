@@ -11,19 +11,21 @@ import argparse
 import sys
 from pathlib import Path
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+
+from _lib import (  # noqa: E402
+    DANGEROUS_PATTERNS,
+    display_path,
+    is_under,
+    output,
+    read_frontmatter,
+    read_python_comment_metadata,
+)
+
 SCRIPT_SKILL_ROOT = SCRIPT_DIR.parent
 MAX_CATEGORY_FILES = 20
 MAX_SITE_BODY_CHARS = 2000
-
-DANGEROUS_PATTERNS = [
-    "rm -rf",
-    "git reset --hard",
-    "os.remove",
-    "shutil.rmtree",
-    ".unlink(",
-]
 
 
 def default_skill_root() -> Path:
@@ -40,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Return YAML validation results for one site experience folder."
     )
-    parser.add_argument("--site", help="Site folder name, for example gmail.com.")
+    parser.add_argument("--site", required=True, help="Site folder name, for example gmail.com.")
     parser.add_argument(
         "--skill-root",
         type=Path,
@@ -48,106 +50,6 @@ def parse_args() -> argparse.Namespace:
         help="Agent Browser skill root. Defaults to the current installed skill root.",
     )
     return parser.parse_args()
-
-
-def yaml_scalar(value: object) -> str:
-    text = "" if value is None else str(value)
-    if text == "":
-        return '""'
-    if text == "[]":
-        return text
-    needs_quotes = any(char in text for char in [": ", "#", "\n", '"', "[", "]", "{", "}"])
-    if needs_quotes or text.strip() != text:
-        return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
-    return text
-
-
-def emit_yaml(data: dict[str, object]) -> str:
-    lines: list[str] = []
-
-    def emit_value(key: str, value: object, indent: int) -> None:
-        prefix = " " * indent
-        if isinstance(value, dict):
-            if not value:
-                lines.append(f"{prefix}{key}: {{}}")
-                return
-            lines.append(f"{prefix}{key}:")
-            for child_key, child_value in value.items():
-                emit_value(child_key, child_value, indent + 2)
-            return
-        if isinstance(value, list):
-            if not value:
-                lines.append(f"{prefix}{key}: []")
-                return
-            lines.append(f"{prefix}{key}:")
-            for item in value:
-                if isinstance(item, dict):
-                    item_pairs = list(item.items())
-                    first_key, first_value = item_pairs[0]
-                    lines.append(f"{prefix}  - {first_key}: {yaml_scalar(first_value)}")
-                    for child_key, child_value in item_pairs[1:]:
-                        emit_value(child_key, child_value, indent + 4)
-                else:
-                    lines.append(f"{prefix}  - {yaml_scalar(item)}")
-            return
-        lines.append(f"{prefix}{key}: {yaml_scalar(value)}")
-
-    for key, value in data.items():
-        emit_value(key, value, 0)
-    return "\n".join(lines) + "\n"
-
-
-def output(data: dict[str, object], exit_code: int = 0) -> int:
-    sys.stdout.write(emit_yaml(data))
-    return exit_code
-
-
-def strip_quotes(value: str) -> str:
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        return value[1:-1]
-    return value
-
-
-def parse_metadata_lines(lines: list[str]) -> dict[str, object]:
-    data: dict[str, object] = {}
-    current_list_key: str | None = None
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if current_list_key and stripped.startswith("- "):
-            data.setdefault(current_list_key, [])
-            list_value = data[current_list_key]
-            if isinstance(list_value, list):
-                list_value.append(strip_quotes(stripped[2:].strip()))
-            continue
-        current_list_key = None
-        if ":" not in stripped:
-            continue
-        key, value = stripped.split(":", 1)
-        key = key.strip()
-        value = value.strip()
-        if value:
-            data[key] = strip_quotes(value)
-        else:
-            data[key] = []
-            current_list_key = key
-    return data
-
-
-def read_frontmatter(path: Path) -> dict[str, object]:
-    if not path.exists():
-        return {}
-
-    text = path.read_text(encoding="utf-8")
-    if not text.startswith("---\n"):
-        return {}
-
-    try:
-        raw = text.split("---", 2)[1]
-    except IndexError:
-        return {}
-    return parse_metadata_lines(raw.splitlines())
 
 
 def read_markdown_body(path: Path) -> str:
@@ -159,49 +61,11 @@ def read_markdown_body(path: Path) -> str:
     return text.strip("\n")
 
 
-def read_python_comment_metadata(path: Path) -> dict[str, object]:
-    if not path.exists():
-        return {}
-
-    lines: list[str] = []
-    in_block = False
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        stripped = raw_line.strip()
-        if not stripped.startswith("#"):
-            if in_block:
-                break
-            continue
-        comment = stripped[1:].strip()
-        if comment == "---":
-            if in_block:
-                return parse_metadata_lines(lines)
-            in_block = True
-            continue
-        if in_block:
-            lines.append(comment)
-    return {}
-
-
-def display_path(path: Path, skill_root: Path) -> str:
-    try:
-        return path.resolve().relative_to(skill_root.resolve()).as_posix()
-    except ValueError:
-        return path.resolve().as_posix()
-
-
 def add_error(errors: list[dict[str, str]], message: str, path: Path | str | None = None) -> None:
     item = {"message": message}
     if path is not None:
         item["path"] = str(path)
     errors.append(item)
-
-
-def is_under(path: Path, root: Path) -> bool:
-    try:
-        path.resolve().relative_to(root.resolve())
-        return True
-    except ValueError:
-        return False
 
 
 def validate_required_metadata(
@@ -341,26 +205,12 @@ def validate_site(site: str, skill_root: Path) -> tuple[list[dict[str, str]], li
 def main() -> int:
     args = parse_args()
     skill_root = args.skill_root.resolve()
-    site = args.site
-
-    if not site:
-        return output(
-            {
-                "status": "error",
-                "message": "--site is required",
-                "errors": [{"message": "--site is required"}],
-                "warnings": [],
-            },
-            exit_code=2,
-        )
-
-    errors, warnings = validate_site(site, skill_root)
+    errors, warnings = validate_site(args.site, skill_root)
     status = "error" if errors else "ok"
     return output(
         {
             "status": status,
-            "site": site,
-            "skill_root": skill_root,
+            "site": args.site,
             "errors": errors,
             "warnings": warnings,
         },
