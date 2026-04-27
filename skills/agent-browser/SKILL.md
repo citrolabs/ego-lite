@@ -41,9 +41,9 @@ skill root (the directory containing this file):
 
 ```bash
 python3 scripts/check-site-experience.py --url https://example.com
-python3 scripts/check-site-experience.py --site example.com
 ```
 
+Use `--site example.com` instead of `--url` when no browser session is open.
 Omit both flags to use the current open page. If `status: found`, read `site.path`
 first for site notes, then read only relevant returned tools/workflows. If
 `status: none`, continue with normal exploration:
