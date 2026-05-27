@@ -1,0 +1,51 @@
+{
+  "id": "x-com",
+  "name": "X (Twitter)",
+  "domains": ["x.com", "*.x.com", "twitter.com", "*.twitter.com"],
+  "notes": ["notes/overview.md", "notes/timeline.md"],
+  "nodeTools": {
+    "get_timeline_posts": {
+      "description": "Extract posts from the current X timeline using the anti-click-wrap pattern.",
+      "path": "tools/timeline.js",
+      "callable": "getTimelinePosts",
+      "args": {
+        "maxPosts": {
+          "type": "integer",
+          "required": false,
+          "description": "Maximum number of posts to extract."
+        }
+      },
+      "returns": {
+        "type": "array",
+        "description": "Array of post objects with text, author, and timestamp."
+      }
+    },
+    "search_users": {
+      "description": "Search for users on X.",
+      "path": "tools/search-users.js",
+      "callable": "searchUsers",
+      "args": {
+        "query": {
+          "type": "string",
+          "required": true,
+          "description": "Search query string."
+        }
+      },
+      "returns": {
+        "type": "array",
+        "description": "Array of user info objects."
+      }
+    }
+  },
+  "browserTools": {
+    "post_from_active_element": {
+      "description": "Extract tweet data from the currently focused element in the timeline.",
+      "path": "browser-tools/extract-post.js",
+      "args": {},
+      "returns": {
+        "type": "object",
+        "description": "Tweet text, author, timestamp."
+      }
+    }
+  }
+}

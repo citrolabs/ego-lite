@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ego-browser demo</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0b1220;
+        --panel: #111827;
+        --text: #e5e7eb;
+        --muted: #9ca3af;
+        --accent: #38bdf8;
+        --accent2: #a78bfa;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: radial-gradient(circle at top, #172554, var(--bg) 55%);
+        color: var(--text);
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        display: grid;
+        place-items: center;
+        min-height: 100vh;
+      }
+      .frame {
+        width: 1280px;
+        height: 720px;
+        border-radius: 28px;
+        background: rgba(17, 24, 39, 0.96);
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        overflow: hidden;
+        position: relative;
+      }
+      .bar {
+        height: 64px;
+        background: #0f172a;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.16);
+        display: flex;
+        align-items: center;
+        padding: 0 20px;
+        gap: 10px;
+      }
+      .dot { width: 12px; height: 12px; border-radius: 999px; }
+      .red { background: #ef4444; } .yellow { background: #f59e0b; } .green { background: #22c55e; }
+      .title { margin-left: 16px; color: var(--muted); font-size: 18px; }
+      .grid {
+        display: grid;
+        grid-template-columns: 1.05fr 0.95fr;
+        height: calc(100% - 64px);
+      }
+      .left, .right { padding: 44px; }
+      h1 { margin: 0; font-size: 58px; line-height: 1.02; letter-spacing: -0.04em; }
+      p.lead { margin: 18px 0 0; color: var(--muted); font-size: 24px; line-height: 1.5; max-width: 540px; }
+      .steps {
+        margin-top: 32px;
+        display: grid;
+        gap: 14px;
+      }
+      .step {
+        background: linear-gradient(180deg, rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.7));
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 18px;
+        padding: 18px 20px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        overflow: hidden;
+        position: relative;
+      }
+      .step::after {
+        content: "";
+        position: absolute;
+        inset: auto -10% -30px auto;
+        width: 180px;
+        height: 180px;
+        background: radial-gradient(circle, rgba(56, 189, 248, 0.35), transparent 70%);
+        transform: rotate(12deg);
+      }
+      .step strong { font-size: 22px; }
+      .step span { color: var(--muted); font-size: 18px; }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 14px;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        background: rgba(15, 23, 42, 0.75);
+        color: #cbd5e1;
+        font-size: 15px;
+      }
+      .pill i { width: 10px; height: 10px; border-radius: 999px; background: linear-gradient(90deg, var(--accent), var(--accent2)); display: inline-block; }
+      .terminal {
+        height: 100%;
+        border-radius: 24px;
+        background: #020617;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        padding: 24px;
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .terminal .label { color: var(--muted); font-size: 16px; text-transform: uppercase; letter-spacing: 0.14em; }
+      .code {
+        background: #0f172a;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 18px;
+        padding: 18px 20px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        font-size: 20px;
+        line-height: 1.6;
+        color: #dbeafe;
+      }
+      .line { display: flex; gap: 14px; white-space: pre; }
+      .prompt { color: #38bdf8; }
+      .ok { color: #86efac; }
+      .ref { color: #f9a8d4; }
+      .mini {
+        margin-top: auto;
+        display: grid;
+        gap: 10px;
+      }
+      .mini-row {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        color: #cbd5e1;
+        font-size: 17px;
+      }
+      .badge {
+        padding: 6px 12px;
+        border-radius: 999px;
+        background: rgba(56, 189, 248, 0.16);
+        color: #7dd3fc;
+        border: 1px solid rgba(56, 189, 248, 0.22);
+      }
+      .footer {
+        position: absolute;
+        left: 44px;
+        right: 44px;
+        bottom: 24px;
+        display: flex;
+        justify-content: space-between;
+        color: var(--muted);
+        font-size: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="frame">
+      <div class="bar">
+        <span class="dot red"></span>
+        <span class="dot yellow"></span>
+        <span class="dot green"></span>
+        <div class="title">ego-browser</div>
+      </div>
+      <div class="grid">
+        <section class="left">
+          <div class="pill"><i></i> Real Chrome, not a fake browser</div>
+          <h1>Snapshot. Act. Re-snapshot.</h1>
+          <p class="lead">A browser automation CLI for AI agents, built around semantic page snapshots, short-lived refs, and reusable site learnings.</p>
+          <div class="steps">
+            <div class="step"><strong>1. Observe</strong><span>Read the page with <code>snapshot()</code></span></div>
+            <div class="step"><strong>2. Act</strong><span>Click or fill using <code>@eN</code> refs</span></div>
+            <div class="step"><strong>3. Reuse</strong><span>Promote reliable flows into site tools</span></div>
+          </div>
+        </section>
+        <section class="right">
+          <div class="terminal">
+            <div class="label">Quick start</div>
+            <div class="code">
+              <div class="line"><span class="prompt">$</span><span>ego-browser &lt;&lt;'JS'</span></div>
+              <div class="line">await newTab("https://example.com")</div>
+              <div class="line">await waitForLoad()</div>
+              <div class="line">const snap = await snapshot({ includeActionMarks: true, includeStableLocator: true })</div>
+              <div class="line">print(snap.content)</div>
+              <div class="line">await click("@e1")</div>
+              <div class="line"><span class="ok">✓</span> Re-snapshot after the page changes</div>
+            </div>
+            <div class="mini">
+              <div class="mini-row"><span class="badge">@e1</span> short-lived ref from the latest snapshot</div>
+              <div class="mini-row"><span class="badge">loc=...</span> stable locator for reuse</div>
+              <div class="mini-row"><span class="badge">siteSkills()</span> load existing site learnings first</div>
+            </div>
+          </div>
+        </section>
+      </div>
+      <div class="footer">
+        <span>Accessibility-tree snapshots • Stable locators • Site learnings</span>
+        <span>MIT · Node 22+ · v0.1.0</span>
+      </div>
+    </div>
+  </body>
+</html>

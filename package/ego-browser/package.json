@@ -1,0 +1,33 @@
+{
+  "name": "ego-browser-v2",
+  "version": "0.1.0",
+  "description": "A TypeScript single-file build of the ego-browser CDP harness.",
+  "type": "module",
+  "bin": {
+    "index": "./artifacts/ego-browser/index.js"
+  },
+  "scripts": {
+    "clean": "rm -rf dist artifacts",
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && npm run typecheck && node --test",
+    "validate:learnings": "npm run build && node dist/scripts/validate-site-skills.js",
+    "validate:site-skills": "npm run build && node dist/scripts/validate-site-skills.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-typescript": "^12.3.0",
+    "@types/node": "^22.15.29",
+    "esbuild": "^0.25.5",
+    "rollup": "^4.60.4",
+    "tslib": "^2.8.1",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "acorn": "^8.16.0"
+  }
+}

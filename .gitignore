@@ -1,0 +1,79 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Build artifacts
+build/
+dist/
+site/
+*.egg-info/
+.eggs/
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+coverage/
+
+# Environment and local config
+.env
+.env.*
+*.local
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Archives
+*.zip
+*.tar
+*.gz
+*.bz2
+*.7z
+
+# raw data — original session data and unprocessed exports, not for version control
+raw_data/
+over_rewrite_candidates/
+Raw*
+preprocessed/
+assignments/
+review_results/
+response_time_test
+
+agent-home/.pi/agent/skills/*/sites/*
+
+evals/reports/*
+.agents/skills
+.gitmodules
+
+issues.md
+browser/
+task/
+test-e2e/

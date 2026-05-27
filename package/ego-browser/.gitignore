@@ -1,0 +1,5 @@
+node_modules/
+dist/
+ego-browser.js
+bin/
+.build.lock

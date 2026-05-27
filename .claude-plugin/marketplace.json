@@ -1,0 +1,23 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "ego-agent-skills",
+  "description": "Browser automation for AI agents",
+  "owner": {
+    "name": "citrolabs",
+    "email": "contact@citrolabs.ai"
+  },
+  "metadata": {
+    "description": "ego example skills",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "browser-skills",
+      "description": "Automates browser interactions for web testing, form filling, screenshots, and data extraction",
+      "source": "./",
+      "strict": false,
+      "skills": ["./skills/ego-browser"],
+      "category": "development"
+    }
+  ]
+}
