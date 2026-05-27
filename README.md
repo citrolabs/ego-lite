@@ -7,9 +7,9 @@
 [![CI](https://github.com/CitroLabs/ego-lite/actions/workflows/ci.yml/badge.svg)](https://github.com/CitroLabs/ego-lite/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/npm/v/ego-browser.svg)](https://www.npmjs.com/package/ego-browser)
 
-<img src="docs/hero.svg" alt="ego-browser hero" width="1200" />
+<img src="public/hero.svg" alt="ego-browser hero" width="1200" />
 
-<img src="docs/demo.gif" alt="ego-browser demo" width="1200" />
+<img src="public/demo.gif" alt="ego-browser demo" width="1200" />
 
 </div>
 
