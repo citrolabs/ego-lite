@@ -20,3 +20,33 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run validate:site-skills
+
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: package/ego-browser
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package/ego-browser/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - name: Upload to latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          gh release delete latest --yes 2>/dev/null || true
+          gh release create latest \
+            --title "Latest Build" \
+            --notes "Auto-built from main ($(git rev-parse --short HEAD))" \
+            --target main \
+            package/ego-browser/artifacts/ego-browser/index.js
