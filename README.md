@@ -1,4 +1,3 @@
-<!-- Banner: ego lite 宣传图. 设计 蒋维龙 提供, 比例 2:1 或 16:9. 替换下方 src. -->
 <div align="center">
 
 <img src="docs/assets/banner.png" alt="ego lite" width="100%" />
@@ -122,13 +121,7 @@ Tutorials, the full tool reference, and integration guides live at [lite.ego.app
 
 ## Star History
 
-<a href="https://www.star-history.com/?repos=citrolabs%2Fego-lite&type=date&legend=bottom-right">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=citrolabs/ego-lite&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=citrolabs/ego-lite&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=citrolabs/ego-lite&type=date&legend=top-left" />
- </picture>
-</a>
+[![Star History Chart](https://api.star-history.com/chart?repos=citrolabs/ego-lite&type=date&legend=top-left)](https://www.star-history.com/?repos=citrolabs%2Fego-lite&type=date&legend=top-left)
 
 ## License
 
