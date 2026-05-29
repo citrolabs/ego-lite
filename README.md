@@ -116,6 +116,9 @@ Tutorials, the full tool reference, and integration guides live at [lite.ego.app
 - [GitHub Discussions](https://github.com/citrolabs/ego-lite/discussions), ideas and longer threads
 - [X/Twitter](https://x.com/ego_agent), updates and releases
 
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=citrolabs/ego-lite&type=Date)](https://star-history.com/#citrolabs/ego-lite&Date)
 
 ## License
 
