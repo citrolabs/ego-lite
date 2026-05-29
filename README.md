@@ -95,15 +95,6 @@ Most tools can automate a browser. The real questions are what browser the agent
 
 Two other categories try to solve the same problem. Browser automation frameworks like Browser-Use and Vercel's agent-browser are libraries the agent calls; they ship no browser of their own, so they need a separate one to drive and your logins rarely carry cleanly. AI browsers like ChatGPT Atlas and Perplexity Comet ship a built-in agent, and only that agent can drive the browser. ego lite is one browser, designed from the start for you and any agent you bring to share.
 
-## What's in this repo
-
-```
-ego-browser/   the ego-browser skill: the in-page tool surface and skill
-               definition that teaches any agent to drive ego lite (MIT)
-```
-
-The browser itself is a free download from [lite.ego.app](https://lite.ego.app/download). The product documentation site lives at [lite.ego.app/document/](https://lite.ego.app/document/), deployed separately.
-
 
 ## Benchmarks
 
