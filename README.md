@@ -1,172 +1,147 @@
-# ego-browser
-
+<!-- Banner: ego lite 宣传图. 设计 蒋维龙 提供, 比例 2:1 或 16:9. 替换下方 src. -->
 <div align="center">
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node](https://img.shields.io/badge/node-%3E=22-brightgreen)](https://nodejs.org/)
-[![CI](https://github.com/CitroLabs/ego-lite/actions/workflows/ci.yml/badge.svg)](https://github.com/CitroLabs/ego-lite/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/release-latest-blue)](https://github.com/CitroLabs/ego-lite/releases/latest)
+<img src="docs/assets/banner.png" alt="ego lite" width="100%" />
 
-<img src="public/hero.svg" alt="ego-browser hero" width="1200" />
+# ego lite
 
-<img src="public/demo.gif" alt="ego-browser demo" width="1200" />
+**The best browser for both you and your AI agents work in parallel.**
+
+<p>
+  <a href="https://lite.ego.app/download"><img src="https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" /></a>
+  <a href="https://discord.gg/5eGZVvHbTq"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" /></a>
+  <a href="https://x.com/ego_agent"><img src="https://img.shields.io/badge/Follow-%40REPLACE__HANDLE-000000?style=for-the-badge&logo=x&logoColor=white" alt="X" /></a>
+  <a href="https://lite.ego.app/docs"><img src="https://img.shields.io/badge/Docs-lite.ego.app-1E90FF?style=for-the-badge&logo=gitbook&logoColor=white" alt="Docs" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-3DA639?style=for-the-badge" alt="License MIT" /></a>
+</p>
 
 </div>
 
-`ego-browser` is a Chromium-based browser designed from the ground up to be friendly to both human users and AI agents. The browser hosts an `ego` runtime that exposes tabs, CDP, snapshots, and an isolated **task space** per agent. Agents reuse the user's login state without competing for the user's windows.
+ego (lite) is a browser where you and your AI agents work in parallel. Your agents run multiple browser tasks in their own Spaces while your tabs stay yours, and tasks complete faster on fewer tokens.
 
-This repo (`ego-lite`) ships the **Node.js helper runtime and agent skill** that run on top of that browser. It does not contain the browser binary itself — install `ego-browser` separately and this repo provides everything that runs inside it.
+Existing tools like browser-use and agent-browser are browser automation frameworks: they need a separate browser to drive, logins never carry cleanly, and you and the agent end up fighting for the same tabs. ego lite is one browser designed from the start for the two of you to share. No extra setup, and the agent can always reach your real logins and tabs through `ego-browser`.
 
-## Real-world comparison
+## Highlight of ego lite
 
-We ran `ego-browser` and `agent-browser` head-to-head on four real-world web tasks — each a multi-step flow on a live site, and each stopping short of any irreversible action (no application submitted, no payment made):
+| Feature | What it does |
+|---|---|
+| **Code base, not CLI base, for faster runs with fewer tokens on complex tasks** | The capabilities ego lite exposes to the agent are wrapped as JavaScript functions the agent calls directly. The agent gets to do what it does best: write code, composing a multi-step task into a single output instead of getting stuck in a "call two commands, look at the result, call two more commands" loop. Compared to the conventional CLI approach, complex workflows finish 20-50% faster with higher task success rates and far fewer tool calls per task. |
+| **A dedicated Space for every agent** | ego lite gives each agent its own fully isolated Space. You browse up front, your agent works in the background, and they don't get in each other's way. You can see which Space has an agent running at any moment, and take it over or stop it whenever you want. |
+| **Your agents multitask in Spaces, parallel workspaces inside the same browser** | Each Space gets its own AI agent or its own task, all running at the same time. Claude Code enriching 10 leads in 10 parallel Spaces. Codex scraping 5 competitor sites in 5 more. They don't collide or steal your tabs. Your mouse stays where you left it. |
+| **The strongest page Snapshot on the market** | Thanks to kernel-level customization, ego lite produces the highest-quality page snapshots, the view text models rely on to "see" and act on a webpage. It reliably handles tough cases like deeply nested iframes, exactly where other approaches consistently break down. |
+| **Any agent can drive it through `ego-browser`** | `ego-browser` is the connection layer between any agent CLI (Claude Code, Codex, Cursor, or a custom one) and ego lite. It exposes the browser as a set of in-page JavaScript tools: snapshot, fill, click, wait, navigate, capture. The agent writes a JavaScript snippet calling those tools, and `ego-browser` runs it on the page in one pass. |
+| **Experience accumulation that makes your agent faster the more you use it** *(coming soon)* | Most of an agent's time on browser tasks goes to trial and error. ego lite's official Skill distills every successful action into reusable tools and workflows, so similar tasks down the line run up to 5x faster. |
 
-- **Scrape OpenAI's top X posts** — rank @OpenAI's original posts from the last 7 days by views, then report the averages across all of them.
-- **Fill a LinkedIn job application** — search and filter roles, follow the redirect to the linked Ashby form, upload a résumé, and fill every required field — stopping just before Submit.
-- **Estimate a Redfin mortgage payment** — filter Austin single-family listings, set a 20% down payment, and read off the monthly estimate.
-- **Book a flight on Expedia** — find the cheapest nonstop JFK→MIA fare and fill in the passenger details up to the payment page.
+## Quick Start
 
-Across all four, `ego-browser` finishes faster and uses fewer tokens and fewer steps. On Expedia, `agent-browser` was blocked by bot-detection on every run — so the chart marks it N/A, since there was no completed run to compare against.
+ego lite runs on macOS today. Windows and Linux are on the [roadmap](https://lite.ego.app/roadmap).
 
-<div align="center">
+### 1. Install
 
-<img src="public/benchmark.png" alt="ego-browser vs agent-browser across four real-world web tasks — duration, tokens, and agent steps, lower is better; agent-browser was blocked by bot-detection on the Expedia task (N/A)" width="1200" />
+Pick whichever fits your flow.
 
-</div>
+**Download the macOS app**
+
+<a href="https://lite.ego.app/download/ego-lite-latest.dmg"><img src="https://img.shields.io/badge/⬇%20Download%20ego%20lite%20for%20macOS-.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download ego lite for macOS" /></a>
+
+Double-click to install.
+
+**Or install from your agent CLI**
+
+```bash
+curl -fsSL https://lite.ego.app/install.sh | sh
+```
+
+Either way installs the browser, the `ego-browser` helper, and writes the skill into every agent CLI on your machine. On first launch, ego lite asks one question, whether to migrate your Chrome data. Say yes and your agent inherits your existing logins, cookies, extensions, and bookmarks.
+
+### 2. Run your first task
+
+In your agent CLI, type `/ego-browser` followed by a space, then describe what you want in plain language:
+
+```
+/ego-browser follow @ego_agent on x.com for me
+```
+
+The agent picks up the `ego-browser` skill, opens the page in its own Space, reads a Snapshot, acts on the page, and reports back, all while your own tabs stay untouched.
+
+Your browsing data stays on your device. ego lite only records whether you opted into Chrome migration during setup.
+
+## Demo
+
+Find and apply to jobs automatically
+
+https://github.com/user-attachments/assets/e5ef79b7-f8db-4b72-bef9-b2303f62caf3
+
+Scrape and aggregate social posts
+
+https://github.com/user-attachments/assets/ffe7954b-58ee-411e-b35d-ec30c58a08bc
+
+##  ego lite vs existing produces
+
+Most tools can automate a browser. The real questions are what browser the agent gets, whether you can keep working at the same time, and whether the tool is built for the agent you already use or a built-in one.
+
+| Capability | ego lite | Browser-Use | Agent Browser (Vercel) | ChatGPT Atlas | Perplexity Comet |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Multitask in parallel | ✓ | — | — | — | — |
+| Reusable skills | ✓ | — | — | — | — |
+| Inherits Chrome's data | ✓ | — | — | ✓ | ✓ |
+| Same browser, separate workspace | ✓ | — | — | — | — |
+| Compressed semantic input | ✓ | — | ✓ | — | — |
+| Controllable by external agents | ✓ | ✓ | ✓ | — | — |
+| Data stored locally | ✓ | ✓ | ✓ | — | — |
+| No login friction | ✓ | — | — | ✓ | ✓ |
+| Daily-use browser | ✓ | — | — | ✓ | ✓ |
+| Free | ✓ | ✓ | ✓ | — | — |
+
+Two other categories try to solve the same problem. Browser automation frameworks like Browser-Use and Vercel's agent-browser are libraries the agent calls; they ship no browser of their own, so they need a separate one to drive and your logins rarely carry cleanly. AI browsers like ChatGPT Atlas and Perplexity Comet ship a built-in agent, and only that agent can drive the browser. ego lite is one browser, designed from the start for you and any agent you bring to share.
+
+## Architecture
+
+```
+   You                          ego lite browser                     Your agent
+ ┌───────┐    your tabs      ┌──────────────────────┐   over CDP   ┌──────────────┐
+ │ tabs, │ ◀───────────────▶ │  Chromium kernel      │ ◀──────────▶ │ Claude Code  │
+ │ mouse │                   │  + your Chrome state  │  ego-browser │ Codex, Cursor│
+ │ focus │                   │                       │   in-page    │ or custom    │
+ └───────┘                   │  ┌─────┐ ┌─────┐ ...  │   JS tools   └──────────────┘
+                             │  │Space│ │Space│      │
+   agents work here ───────▶ │  └─────┘ └─────┘      │
+                             └──────────────────────┘
+```
+
+Your tabs and the agents' Spaces live in one browser. The agent connects through `ego-browser` over CDP and calls in-page JavaScript tools to read and act on the page.
 
 ## What's in this repo
 
-- `package/ego-browser/` — Node.js helper runtime. Bundles to a single `artifacts/ego-browser/index.js` that the browser invokes via `ego-browser nodejs <<'EOF' ... EOF`.
-- `skills/ego-browser/` — agent skill (`SKILL.md`, `SKILL.zh.md`) and reusable site learnings under `learnings/{github,google,x-com,...}/`.
-- `.claude-plugin/marketplace.json` — exposes the skill as a Claude Code plugin (`browser-skills`).
-
-## Quick start
-
-Inside the ego-browser browser, drive a page with a heredoc:
-
-```bash
-ego-browser nodejs <<'EOF'
-const task = await useOrCreateTaskSpace('open example')
-
-await openOrReuseTab('https://example.com', { wait: true, timeout: 20 })
-cliLog(await snapshotText())
-
-await completeTaskSpace(task, { keep: true })
-EOF
+```
+ego-browser/   the ego-browser skill: the in-page tool surface and skill
+               definition that teaches any agent to drive ego lite (MIT)
 ```
 
-Each heredoc runs in a fresh Node process with all helpers pre-imported. State persists in the browser (task space, tabs, login), not in the Node process — so every heredoc must re-call `useOrCreateTaskSpace(name)` to rejoin the same space.
+The browser itself is a free download from [lite.ego.app](https://lite.ego.app/download). The product documentation site lives at [lite.ego.app/docs](https://lite.ego.app/docs), deployed separately.
 
-## Core loop
 
-```bash
-ego-browser nodejs <<'EOF'
-const name = 'demo'
-await useOrCreateTaskSpace(name)
+## Benchmarks
 
-await openOrReuseTab('https://example.com', { wait: true })
-cliLog(await snapshotText())          // refs like @1, @2, ... are reassigned every snapshot
+We benchmarked ego lite against Vercel's agent-browser on four complex browser automation tasks. ego lite finished each task up to 2.6× faster, with substantially fewer tokens. The harder the task, the bigger the gap. Check the comparison.
 
-await click('@3')
-cliLog(await snapshotText())          // re-observe after any action
-EOF
-```
+<div align="center">
 
-Snapshot refs (`@N`) are short-lived. Re-snapshot after navigation, clicks, or dynamic re-render. For values that must survive runs, keep the `loc=...` field from the snapshot or use a stable CSS / ARIA locator.
+<img src="docs/assets/ego-vs-agent-benchmark.png" alt="ego lite vs agent-browser, speed and cost across four tasks" width="100%" />
 
-## Helper surface
+</div>
 
-All helpers are pre-imported into the heredoc scope. Use `cliLog(help('name'))` for usage.
+## Docs
 
-| Group | Helpers |
-| --- | --- |
-| Task spaces | `listTaskSpaces`, `useOrCreateTaskSpace`, `handOffTaskSpace`, `takeOverTaskSpace`, `waitForAgentControl`, `completeTaskSpace` |
-| Tabs / navigation | `listTabs`, `currentTab`, `switchTab`, `newTab`, `openOrReuseTab`, `gotoUrl`, `gotoAndWait`, `pageInfo`, `ensureRealTab`, `iframeTarget` |
-| Observation | `snapshot`, `snapshotText`, `snapshotRaw`, `captureScreenshot`, `elementCenter`, `drainEvents` |
-| Pointer / scroll | `click`, `doubleClick`, `hover`, `dragMouse`, `scrollBy`, `scrollToBottomUntil`, `scroll({ dx?, dy? })` |
-| Keyboard / input | `typeText`, `fillInput`, `pressKey`, `dispatchKey`, `uploadFile` |
-| Waits | `wait`, `waitForLoad`, `waitForElement`, `waitForNetworkIdle` |
-| Fetch | `httpGet` |
-| CDP / evaluate | `js`, `elementEval`, `cdp` |
-| Site learnings | `siteSkills`, `siteSkillsForUrl`, `runSiteTool`, `runSiteBrowserTool`, `learnContext` |
-| Output | `cliLog`, `help` |
+Tutorials, the full tool reference, and integration guides live at [lite.ego.app/docs](https://lite.ego.app/docs).
 
-`cliLog` is the only output channel inside a heredoc — all results the agent should see must go through it.
+## Community
 
-## Task spaces and control handoff
+- [Discord](https://discord.gg/5eGZVvHbTq), questions, setup help, and skill sharing
+- [GitHub Discussions](https://github.com/citrolabs/ego-lite/discussions), ideas and longer threads
+- [X/Twitter](https://x.com/ego_agent), updates and releases
 
-A **task space** is an isolated browsing context with its own tabs, but inheriting the user's login state. Multiple agents and the user can operate concurrently without stepping on each other.
-
-Only one side (agent or user) holds control of a task space at a time:
-
-```js
-await handOffTaskSpace(name)         // give control to the user (e.g. for login/captcha)
-cliLog('Please complete the login')
-
-await waitForAgentControl(name)       // block until user returns control
-// ...continue working
-```
-
-`takeOverTaskSpace(name)` is the explicit way to reclaim control after the user says "continue" in chat. `completeTaskSpace(name, { keep })` is called **only in the final heredoc round** — `keep: false` closes the space, `keep: true` leaves the page visible.
-
-See `skills/ego-browser/SKILL.md` for the full protocol.
-
-## Site learnings
-
-Reusable site knowledge lives under `skills/ego-browser/learnings/<site>/`:
-
-- `manifest.json` — site metadata, domain matching, declared tools.
-- `notes/` — entry points, structural notes, caveats (markdown).
-- `tools/*.js` — Node-side tools.
-- `browser-tools/*.js` — page-context tools.
-
-Before starting work on a site, check what is already known:
-
-```bash
-ego-browser nodejs <<'EOF'
-await useOrCreateTaskSpace('survey')
-await openOrReuseTab('https://github.com', { wait: true })
-cliLog(await siteSkills())
-EOF
-```
-
-Validate learnings before submitting:
-
-```bash
-cd package/ego-browser
-npm run validate:site-skills    # alias: validate:learnings
-```
-
-## Development
-
-All commands run from `package/ego-browser/`:
-
-```bash
-npm ci
-npm run build                 # bundle to artifacts/ego-browser/index.js
-npm test                      # build + tsc --noEmit + node --test
-npm run validate:site-skills
-```
-
-CI publishes the bundled `artifacts/ego-browser/index.js` to the GitHub `latest` release on every push to `main`.
-
-Key sources (TypeScript, under `package/ego-browser/src/`):
-
-- `run.ts` — CLI entry; reads stdin and executes as an async function body.
-- `helpers.ts` — public helper surface re-exported into the script scope.
-- `browser-runtime.ts` — bridge to the in-browser `ego` runtime (CDP, sessions, events).
-- `driver/pointer.ts`, `driver/observe.ts`, `driver/keyboard.ts` — interaction primitives.
-- `element-resolver.ts` — resolves `@N`, CSS, XPath, and ARIA/role targets.
-- `learning/` — site learnings discovery, domain checks, manifest validation.
-
-## Design principles
-
-- The browser owns the world (tabs, CDP, sessions, events). The Node CLI is a thin helper layer.
-- Prefer accessibility-tree snapshots and stable locators over pixel coordinates.
-- Snapshot refs are short-lived; re-observe after every meaningful action.
-- Public helpers are camelCase only.
-- Site learnings must be verifiable. No secrets, no pixel coordinates, no flow narration.
 
 ## License
 
-MIT © 2026 CitroLabs
+The contents of this repository are released under the [MIT License](LICENSE). The ego lite browser is a separate, free download.
