@@ -118,7 +118,7 @@ Tutorials, the full tool reference, and integration guides live at [lite.ego.app
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=citrolabs/ego-lite&type=Date)](https://star-history.com/#citrolabs/ego-lite&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=citrolabs/ego-lite&type=date&legend=top-left)](https://www.star-history.com/#citrolabs/ego-lite&type=date&legend=top-left)
 
 ## License
 
