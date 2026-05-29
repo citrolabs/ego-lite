@@ -3,8 +3,6 @@
 
 <img src="docs/assets/banner.png" alt="ego lite" width="100%" />
 
-# ego lite
-
 **The best browser for both you and your AI agents work in parallel.**
 
 <p>
