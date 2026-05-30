@@ -9,5 +9,9 @@ jobs:
   purge:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: kevincobain2000/action-camo-purge@v1
+      - name: Purge star-history camo cache from README
+        run: |
+          curl -sL "https://github.com/citrolabs/ego-lite/blob/main/README.md" \
+            | grep -Eo 'https://camo\.githubusercontent\.com/[a-zA-Z0-9/]+' \
+            | sort -u \
+            | xargs -I {} sh -c 'echo "Purging: {}" && curl -s -X PURGE "{}"'
