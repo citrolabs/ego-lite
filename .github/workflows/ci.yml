@@ -2,6 +2,12 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
+    tags:
+      - "*"
+      - "!last"
+      - "!latest"
   pull_request:
 
 jobs:
@@ -22,7 +28,7 @@ jobs:
       - run: npm run validate:site-skills
 
   release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.ref_name != 'last' && github.ref_name != 'latest'
     needs: test
     runs-on: ubuntu-latest
     permissions:
@@ -32,6 +38,8 @@ jobs:
         working-directory: package/ego-browser
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -39,14 +47,35 @@ jobs:
           cache-dependency-path: package/ego-browser/package-lock.json
       - run: npm ci
       - run: npm run build
-      - name: Upload to latest release
+      - name: Create tag release and update last release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd "$GITHUB_WORKSPACE"
-          gh release delete latest --yes 2>/dev/null || true
-          gh release create latest \
-            --title "Latest" \
-            --notes "Auto-built from main ($(git rev-parse --short HEAD))" \
-            --target main \
-            package/ego-browser/artifacts/ego-browser/index.js
+
+          version_tag="${GITHUB_REF_NAME}"
+          rolling_tag="last"
+          commit_sha="$(git rev-parse HEAD)"
+          short_sha="$(git rev-parse --short HEAD)"
+          artifact="package/ego-browser/artifacts/ego-browser/index.js"
+
+          if gh release view "$version_tag" >/dev/null 2>&1; then
+            echo "Release $version_tag already exists; leaving it unchanged."
+          else
+            gh release create "$version_tag" \
+              --title "$version_tag" \
+              --notes "Auto-built from $version_tag ($short_sha)" \
+              --verify-tag \
+              --latest=false \
+              "$artifact"
+          fi
+
+          gh release delete "$rolling_tag" --cleanup-tag --yes 2>/dev/null || true
+          git push origin ":refs/tags/$rolling_tag" 2>/dev/null || true
+
+          gh release create "$rolling_tag" \
+            --title "Latest ($version_tag)" \
+            --notes "Auto-built from $version_tag ($short_sha). Commit: $commit_sha" \
+            --target "$commit_sha" \
+            --latest \
+            "$artifact"
