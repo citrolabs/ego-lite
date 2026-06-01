@@ -1,0 +1,17 @@
+name: Main PR Source
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  require-developer-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require developer branch
+        run: |
+          if [ "${{ github.head_ref }}" != "developer" ]; then
+            echo "Pull requests into main must come from the developer branch."
+            exit 1
+          fi
