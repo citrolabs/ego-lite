@@ -401,28 +401,26 @@ test("useOrCreateTaskSpace reuses matching normalized task spaces", async () => 
   }
 });
 
-test("fillInput focuses, clears selection, inserts text, and fires framework events", async () => {
-  const cdpCalls = [];
-  const jsExpressions = [];
+test("fillInput resolves the selector, clears via native value setter, inserts text, and fires framework events", async () => {
+  const calls = [];
   await withOverrides({
     cdpOverride: async (method, params, sessionId) => {
-      cdpCalls.push([method, params, sessionId]);
-      if (method === "Runtime.evaluate") {
-        jsExpressions.push(params.expression);
-        return { result: { value: params.expression.includes("focus") ? true : null } };
-      }
+      calls.push([method, params, sessionId]);
+      if (method === "Runtime.evaluate") return { result: { objectId: "obj-css" } };
       return {};
     }
   }, async () => {
     await helpers.fillInput("#my-input", "x");
   });
 
-  const keyEvents = cdpCalls.filter(([method]) => method === "Input.dispatchKeyEvent").map(([, params]) => params);
-  assert.equal(keyEvents.some((event) => event.key === "a"), false);
-  assert.ok(keyEvents.some((event) => event.key === "Backspace"));
-  assert.ok(cdpCalls.some(([method, params]) => method === "Input.insertText" && params.text === "x"));
-  assert.ok(jsExpressions.some((expression) => expression.includes("setSelectionRange")));
-  assert.ok(jsExpressions.some((expression) => expression.includes("input") && expression.includes("change")));
+  const callFnOn = calls.filter(([m]) => m === "Runtime.callFunctionOn").map(([, p]) => p);
+  assert.ok(calls.some(([m, p]) => m === "Runtime.evaluate" && /querySelector/.test(p.expression || "")), "must resolve raw CSS via the unified resolver");
+  assert.ok(callFnOn.length > 0 && callFnOn.every((p) => p.objectId === "obj-css"), "callFunctionOn must target the resolved objectId");
+  assert.equal(callFnOn.some((p) => /setSelectionRange/.test(p.functionDeclaration)), false, "must not use setSelectionRange");
+  assert.equal(calls.some(([m, p]) => m === "Input.dispatchKeyEvent" && p.key === "Backspace"), false, "must not clear with Backspace");
+  assert.ok(callFnOn.some((p) => /this\.value\s*=\s*''/.test(p.functionDeclaration)), "must clear via native value setter");
+  assert.ok(calls.some(([m, p]) => m === "Input.insertText" && p.text === "x"), "must insert text via CDP");
+  assert.ok(callFnOn.some((p) => /'input'/.test(p.functionDeclaration) && /'change'/.test(p.functionDeclaration)), "must fire input/change events");
 });
 
 test("pressKey sends printable text on keyDown", async () => {
@@ -552,11 +550,13 @@ test("click doubleClick and hover accept viewport coordinate targets", async () 
 });
 
 test("waitForElement visible check uses checkVisibility with computed-style fallback", async () => {
-  const expressions = [];
+  const calls = [];
   await withOverrides({
     cdpOverride: async (method, params) => {
-      expressions.push(params.expression);
-      return { result: { value: true } };
+      calls.push([method, params]);
+      if (method === "Runtime.evaluate") return { result: { objectId: "obj-btn" } };
+      if (method === "Runtime.callFunctionOn") return { result: { value: true } };
+      return {};
     },
     now: (() => {
       let value = 1000;
@@ -566,9 +566,11 @@ test("waitForElement visible check uses checkVisibility with computed-style fall
   }, async () => {
     assert.equal(await helpers.waitForElement("#btn", { visible: true }), true);
   });
-  assert.ok(expressions.some((expression) => expression.includes("checkVisibility")));
-  assert.ok(expressions.some((expression) => expression.includes("getComputedStyle")));
-  assert.equal(expressions.some((expression) => expression.includes("offsetParent")), false);
+  const callFnOn = calls.find(([m]) => m === "Runtime.callFunctionOn");
+  assert.ok(callFnOn, "visibility must be checked via callFunctionOn on the resolved element");
+  assert.match(callFnOn[1].functionDeclaration, /checkVisibility/);
+  assert.match(callFnOn[1].functionDeclaration, /getComputedStyle/);
+  assert.equal(callFnOn[1].functionDeclaration.includes("offsetParent"), false);
 });
 
 test("captureScreenshot clips to CSS viewport with scale=1/DPR by default", async () => {
@@ -760,10 +762,11 @@ test("fillInput on @ref resolves to objectId and uses callFunctionOn + Input.ins
   const callFnOn = calls.filter(([m]) => m === "Runtime.callFunctionOn");
   assert.ok(callFnOn.every(([, p]) => p.objectId === "obj-42"), "callFunctionOn must target the resolved objectId");
   assert.ok(callFnOn.some(([, p]) => /this\.focus\(\)/.test(p.functionDeclaration)), "must focus the element");
-  assert.ok(callFnOn.some(([, p]) => /setSelectionRange/.test(p.functionDeclaration)), "must select existing value before clearing");
+  assert.equal(callFnOn.some(([, p]) => /setSelectionRange/.test(p.functionDeclaration)), false, "must not use setSelectionRange");
+  assert.ok(callFnOn.some(([, p]) => /this\.value\s*=\s*''/.test(p.functionDeclaration)), "must clear via native value setter");
   assert.ok(callFnOn.some(([, p]) => /dispatchEvent\(new Event\('input'/.test(p.functionDeclaration) && /'change'/.test(p.functionDeclaration)), "must fire input/change events");
   assert.ok(calls.some(([m, p]) => m === "Input.insertText" && p.text === "hello"), "must insert text via CDP");
-  assert.ok(calls.some(([m, p]) => m === "Input.dispatchKeyEvent" && p.key === "Backspace"), "must clear by pressing Backspace");
+  assert.equal(calls.some(([m, p]) => m === "Input.dispatchKeyEvent" && p.key === "Backspace"), false, "must not clear by pressing Backspace");
 });
 
 test("fillInput with clearFirst:false on @ref skips the clear+Backspace path", async () => {
@@ -812,8 +815,78 @@ test("dispatchKey on @ref focuses via objectId and dispatches a synthetic Keyboa
   assert.deepEqual(callFnOn[0][1].arguments, [
     { value: 13 },
     { value: "Enter" },
+    { value: "Enter" },
     { value: "keypress" }
   ]);
+});
+
+test("fillInput routes xpath= selectors through the unified resolver", async () => {
+  const calls = [];
+  await withOverrides({
+    cdpOverride: async (method, params) => {
+      calls.push([method, params]);
+      if (method === "Runtime.evaluate") return { result: { objectId: "obj-xp" } };
+      return {};
+    }
+  }, async () => {
+    await helpers.fillInput("xpath=//input[@name='email']", "a@b.com");
+  });
+  assert.ok(calls.some(([m, p]) => m === "Runtime.evaluate" && /document\.evaluate/.test(p.expression || "")), "xpath must resolve via document.evaluate, not querySelector");
+  assert.ok(calls.filter(([m]) => m === "Runtime.callFunctionOn").every(([, p]) => p.objectId === "obj-xp"));
+  assert.ok(calls.some(([m, p]) => m === "Input.insertText" && p.text === "a@b.com"));
+});
+
+test("fillInput routes loc=css: selectors through the unified resolver", async () => {
+  const calls = [];
+  await withOverrides({
+    cdpOverride: async (method, params) => {
+      calls.push([method, params]);
+      if (method === "Runtime.evaluate") {
+        return /querySelectorAll/.test(params.expression) ? { result: { value: 1 } } : { result: { objectId: "obj-loc" } };
+      }
+      return {};
+    }
+  }, async () => {
+    await helpers.fillInput("loc=css:input[name=\"email\"]", "a@b.com");
+  });
+  assert.ok(calls.some(([m, p]) => m === "Runtime.evaluate" && /querySelectorAll/.test(p.expression || "")), "loc=css must check uniqueness via querySelectorAll");
+  assert.ok(calls.some(([m, p]) => m === "Input.insertText" && p.text === "a@b.com"));
+});
+
+test("dispatchKey routes xpath= selectors through the unified resolver", async () => {
+  const calls = [];
+  await withOverrides({
+    cdpOverride: async (method, params) => {
+      calls.push([method, params]);
+      if (method === "Runtime.evaluate") return { result: { objectId: "obj-xp" } };
+      return {};
+    }
+  }, async () => {
+    await helpers.dispatchKey("xpath=//button", "Enter");
+  });
+  assert.ok(calls.some(([m, p]) => m === "Runtime.evaluate" && /document\.evaluate/.test(p.expression || "")));
+  const callFnOn = calls.find(([m]) => m === "Runtime.callFunctionOn");
+  assert.ok(callFnOn, "must dispatch the KeyboardEvent via callFunctionOn on the resolved element");
+  assert.match(callFnOn[1].functionDeclaration, /new KeyboardEvent/);
+});
+
+test("waitForElement routes xpath= selectors through the unified resolver", async () => {
+  const calls = [];
+  await withOverrides({
+    cdpOverride: async (method, params) => {
+      calls.push([method, params]);
+      if (method === "Runtime.evaluate") return { result: { objectId: "obj-xp" } };
+      return {};
+    },
+    now: (() => {
+      let value = 1000;
+      return () => (value += 1);
+    })(),
+    sleep: async () => {}
+  }, async () => {
+    assert.equal(await helpers.waitForElement("xpath=//button"), true);
+  });
+  assert.ok(calls.some(([m, p]) => m === "Runtime.evaluate" && /document\.evaluate/.test(p.expression || "")), "xpath must resolve via document.evaluate, not querySelector");
 });
 
 test("waitForElement on @ref polls resolveElementObjectId and returns true when it succeeds", async () => {

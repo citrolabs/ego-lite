@@ -104,3 +104,53 @@ test("elementEval: arrow (el)=>el.X, (el,arg)=>el[arg], and legacy function(){th
   assert.equal(payload.arrowWithArg, "H1", "arrow (el, prop)=>el[prop] must forward args after el");
   assert.equal(payload.legacyThisForm, "H1", "legacy function(){return this.tagName} must remain bound to el");
 });
+
+test("fillInput writes into email/number/text inputs without InvalidStateError (symptom A)", e2eSkip, () => {
+  const script = `
+    const name = 'e2e-fill-input';
+    await useOrCreateTaskSpace(name);
+    const html = '<input name="email" type="email" value="old@example.com">'
+      + '<input name="number" type="number" value="123">'
+      + '<input name="text" type="text" value="oldtext">';
+    await gotoAndWait('data:text/html;charset=utf-8,' + encodeURIComponent(html), { wait: true, timeout: 20 });
+
+    await fillInput('input[name="email"]', 'new@example.com');
+    await fillInput('input[name="number"]', '456');
+    await fillInput('input[name="text"]', 'newtext');
+
+    const email  = await elementEval('input[name="email"]', (el) => el.value);
+    const number = await elementEval('input[name="number"]', (el) => el.value);
+    const text   = await elementEval('input[name="text"]', (el) => el.value);
+
+    await completeTaskSpace(name, { keep: false });
+    cliLog(JSON.stringify({ email, number, text }));
+  `;
+  const result = runScript(script);
+  const payload = lastJsonLine(result.stderr);
+  assert.equal(payload.email, "new@example.com", "fillInput must write into type=email without InvalidStateError");
+  assert.equal(payload.number, "456", "fillInput must write into type=number without InvalidStateError");
+  assert.equal(payload.text, "newtext");
+});
+
+test("fillInput addresses inputs by xpath= and loc=css: (symptom B)", e2eSkip, () => {
+  const script = `
+    const name = 'e2e-fill-selectors';
+    await useOrCreateTaskSpace(name);
+    const html = '<input name="a" type="email" value="">'
+      + '<input name="b" type="text" value="">';
+    await gotoAndWait('data:text/html;charset=utf-8,' + encodeURIComponent(html), { wait: true, timeout: 20 });
+
+    await fillInput('xpath=//input[@name="a"]', 'xp@example.com');
+    await fillInput('loc=css:input[name="b"]', 'loc-value');
+
+    const a = await elementEval('input[name="a"]', (el) => el.value);
+    const b = await elementEval('input[name="b"]', (el) => el.value);
+
+    await completeTaskSpace(name, { keep: false });
+    cliLog(JSON.stringify({ a, b }));
+  `;
+  const result = runScript(script);
+  const payload = lastJsonLine(result.stderr);
+  assert.equal(payload.a, "xp@example.com", "fillInput must accept xpath= selectors");
+  assert.equal(payload.b, "loc-value", "fillInput must accept loc=css: selectors");
+});

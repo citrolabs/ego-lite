@@ -320,32 +320,46 @@ test("waitForNetworkIdle returns false when timeout elapses without idle window"
   });
 });
 
-test("uploadFile resolves selector via DOM and sets file inputs", async () => {
+test("uploadFile resolves the selector via the unified resolver and sets file inputs by objectId", async () => {
   const calls = [];
   await withOverrides({
     cdpOverride: async (method, params) => {
       calls.push([method, params]);
-      if (method === "DOM.getDocument") return { root: { nodeId: 1 } };
-      if (method === "DOM.querySelector") return { nodeId: params.selector === "input#file" ? 42 : 0 };
+      if (method === "Runtime.evaluate") return { result: { objectId: "obj-file" } };
       return {};
     }
   }, async () => {
     await helpers.uploadFile("input#file", "/tmp/a.png");
     await helpers.uploadFile("input#file", ["/tmp/a.png", "/tmp/b.png"]);
   });
-  assert.deepEqual(calls.at(-1), ["DOM.setFileInputFiles", { files: ["/tmp/a.png", "/tmp/b.png"], nodeId: 42 }]);
+  assert.equal(calls.some(([m]) => m === "DOM.getDocument"), false, "must not walk DOM via DOM.getDocument");
+  assert.deepEqual(calls.at(-1), ["DOM.setFileInputFiles", { files: ["/tmp/a.png", "/tmp/b.png"], objectId: "obj-file" }]);
 });
 
 test("uploadFile throws when selector matches no element", async () => {
   await withOverrides({
     cdpOverride: async (method) => {
-      if (method === "DOM.getDocument") return { root: { nodeId: 1 } };
-      if (method === "DOM.querySelector") return { nodeId: 0 };
+      if (method === "Runtime.evaluate") return { result: {} };
       return {};
     }
   }, async () => {
-    await assert.rejects(() => helpers.uploadFile("input#missing", "/tmp/a.png"), /no element for input#missing/);
+    await assert.rejects(() => helpers.uploadFile("input#missing", "/tmp/a.png"), /Element not found: input#missing/);
   });
+});
+
+test("uploadFile routes xpath= selectors through the unified resolver", async () => {
+  const calls = [];
+  await withOverrides({
+    cdpOverride: async (method, params) => {
+      calls.push([method, params]);
+      if (method === "Runtime.evaluate") return { result: { objectId: "obj-xp" } };
+      return {};
+    }
+  }, async () => {
+    await helpers.uploadFile("xpath=//input[@type='file']", "/tmp/a.png");
+  });
+  assert.ok(calls.some(([m, p]) => m === "Runtime.evaluate" && /document\.evaluate/.test(p.expression || "")), "xpath must resolve via document.evaluate, not querySelector");
+  assert.deepEqual(calls.at(-1), ["DOM.setFileInputFiles", { files: ["/tmp/a.png"], objectId: "obj-xp" }]);
 });
 
 test("uploadFile on @ref resolves to objectId and calls DOM.setFileInputFiles with objectId", async () => {
