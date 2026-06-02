@@ -1,8 +1,7 @@
 import { state } from "../state.js";
-import { cdp, js } from "../cdp-eval.js";
-import { parseRef } from "../ref-map.js";
-import { browserRefMap, ensureRefMapForRef } from "../ref-state.js";
-import { resolveElementObjectId } from "../element-resolver.js";
+import { cdp } from "../cdp-eval.js";
+import { resolveHandle, releaseHandle } from "./element-ops.js";
+import { ElementResolutionError } from "../element-resolver.js";
 import { type WaitForLoadOptions, waitForDocumentLoad } from "./load.js";
 import { drainEvents } from "./observe.js";
 
@@ -36,7 +35,7 @@ export async function waitForLoad(options: WaitForLoadOptions = {}) {
 
 /**
  * Wait until an element exists, optionally requiring visibility.
- * @param {string} selector CSS selector or @ref to poll.
+ * @param {string} selector CSS selector / @ref / loc= / xpath= to poll.
  * @param {{timeout?: number, visible?: boolean}} [options]
  * @returns {Promise<boolean>} True when found before timeout.
  */
@@ -44,33 +43,31 @@ export async function waitForElement(selector: string, options: WaitForElementOp
   const timeout = options.timeout ?? 10.0;
   const visible = options.visible ?? false;
   const deadline = state.now() + timeout * 1000;
-  if (parseRef(selector)) {
-    await ensureRefMapForRef(selector);
-    const visibilityFn = "function(){if(typeof this.checkVisibility==='function')return this.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});const s=getComputedStyle(this);return s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';}";
-    while (state.now() < deadline) {
-      try {
-        const { objectId, sessionId } = await resolveElementObjectId({ sendRaw: cdp }, undefined, browserRefMap, selector);
-        if (!visible) return true;
-        const response = await cdp("Runtime.callFunctionOn", {
-          functionDeclaration: visibilityFn,
-          objectId,
-          returnByValue: true,
-          awaitPromise: false
-        }, sessionId);
-        if (response.result?.value) return true;
-      } catch {
-        // ref not yet resolvable; keep polling.
-      }
-      await state.sleep(300);
-    }
-    return false;
-  }
-  const check = visible
-    ? `(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return false;if(typeof e.checkVisibility==='function')return e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});const s=getComputedStyle(e);return s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0'})()`
-    : `!!document.querySelector(${JSON.stringify(selector)})`;
+  const visibilityFn = "function(){if(typeof this.checkVisibility==='function')return this.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});const s=getComputedStyle(this);return s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';}";
   while (state.now() < deadline) {
-    if (await js(check)) {
-      return true;
+    let handle;
+    try {
+      handle = await resolveHandle(selector);
+    } catch (err) {
+      if (err instanceof ElementResolutionError && err.kind === "transient") {
+        await state.sleep(300);
+        continue; // not found / not ready yet — keep polling.
+      }
+      throw err; // permanent (bad selector / ambiguous) or unknown error — fail loud.
+    }
+    try {
+      if (!visible) return true;
+      const response = await cdp("Runtime.callFunctionOn", {
+        functionDeclaration: visibilityFn,
+        objectId: handle.objectId,
+        returnByValue: true,
+        awaitPromise: false
+      }, handle.sessionId);
+      if (response.result?.value) return true;
+    } catch {
+      // visibility check failed (element raced away); treat as not-ready, keep polling.
+    } finally {
+      await releaseHandle(handle.objectId, handle.sessionId);
     }
     await state.sleep(300);
   }

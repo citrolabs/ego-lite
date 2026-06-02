@@ -5,7 +5,8 @@ import { state } from "../state.js";
 import { cdp, js } from "../cdp-eval.js";
 import { pageInfo } from "./nav.js";
 import { browserEgo, browserSnapshotRefsToRefMap, drainBrowserEvents } from "../browser-runtime.js";
-import { resolveElementCenter, resolveElementObjectId } from "../element-resolver.js";
+import { resolveElementCenter } from "../element-resolver.js";
+import { withHandle } from "./element-ops.js";
 import { browserRefMap, ensureRefMapForRef, registerSnapshotForRefRefresh } from "../ref-state.js";
 
 type SnapshotOptions = {
@@ -68,21 +69,21 @@ export async function elementCenter(selectorOrRef) {
 }
 
 export async function fillElement(selectorOrRef, value) {
-  await ensureRefMapForRef(selectorOrRef);
-  const resolved = await resolveElementObjectId({ sendRaw: cdp }, undefined, browserRefMap, selectorOrRef);
-  await cdp("Runtime.callFunctionOn", {
-    functionDeclaration: "function() { this.focus(); }",
-    objectId: resolved.objectId,
-    returnByValue: true,
-    awaitPromise: false
-  }, resolved.sessionId);
-  await cdp("Runtime.callFunctionOn", {
-    functionDeclaration: "function() { this.select && this.select(); this.value = ''; this.dispatchEvent(new Event('input', { bubbles: true })); }",
-    objectId: resolved.objectId,
-    returnByValue: true,
-    awaitPromise: false
-  }, resolved.sessionId);
-  await cdp("Input.insertText", { text: String(value) });
+  await withHandle(selectorOrRef, async ({ objectId, sessionId }) => {
+    await cdp("Runtime.callFunctionOn", {
+      functionDeclaration: "function() { this.focus(); }",
+      objectId,
+      returnByValue: true,
+      awaitPromise: false
+    }, sessionId);
+    await cdp("Runtime.callFunctionOn", {
+      functionDeclaration: "function() { this.select && this.select(); this.value = ''; this.dispatchEvent(new Event('input', { bubbles: true })); }",
+      objectId,
+      returnByValue: true,
+      awaitPromise: false
+    }, sessionId);
+    await cdp("Input.insertText", { text: String(value) }, sessionId);
+  });
 }
 
 export async function captureScreenshot(path = join(tmpdir(), "ego-browser-shot.png"), options: CaptureScreenshotOptions = {}) {
@@ -118,15 +119,16 @@ export async function captureScreenshot(path = join(tmpdir(), "ego-browser-shot.
 }
 
 async function evaluateBrowserElement(selectorOrRef, functionDeclaration, args) {
-  const resolved = await resolveElementObjectId({ sendRaw: cdp }, undefined, browserRefMap, selectorOrRef);
-  const response = await cdp("Runtime.callFunctionOn", {
-    functionDeclaration,
-    objectId: resolved.objectId,
-    arguments: [{ objectId: resolved.objectId }, ...args.map((value) => ({ value }))],
-    returnByValue: true,
-    awaitPromise: true
-  }, resolved.sessionId);
-  return remoteValue(response);
+  return withHandle(selectorOrRef, async ({ objectId, sessionId }) => {
+    const response = await cdp("Runtime.callFunctionOn", {
+      functionDeclaration,
+      objectId,
+      arguments: [{ objectId }, ...args.map((value) => ({ value }))],
+      returnByValue: true,
+      awaitPromise: true
+    }, sessionId);
+    return remoteValue(response);
+  });
 }
 
 function remoteValue(response) {

@@ -7161,12 +7161,29 @@ function refSortKey(refId) {
     return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
 }
 
+class ElementResolutionError extends Error {
+    kind;
+    constructor(message, kind) {
+        super(message);
+        this.name = "ElementResolutionError";
+        this.kind = kind;
+    }
+}
+function exceptionText(result) {
+    const d = result?.exceptionDetails;
+    return d?.exception?.description || d?.text || "evaluation error";
+}
+function matchCountKind(message) {
+    const m = /matched (\d+)/.exec(message);
+    const n = m ? Number(m[1]) : 0;
+    return n > 1 ? "permanent" : "transient";
+}
 async function resolveElementCenter(cdp, sessionId, refMap, selectorOrRef, iframeSessions = new Map()) {
     const refId = parseRef(selectorOrRef);
     if (refId) {
         const entry = refMap.get(refId);
         if (!entry) {
-            throw new Error(`Unknown ref: ${refId}`);
+            throw new ElementResolutionError(`Unknown ref: ${refId}`, "transient");
         }
         const effectiveSessionId = resolveFrameSession(entry.frameId, sessionId, iframeSessions);
         if (entry.backendNodeId !== undefined && entry.backendNodeId !== null) {
@@ -7191,9 +7208,12 @@ async function resolveElementCenter(cdp, sessionId, refMap, selectorOrRef, ifram
         returnByValue: true,
         awaitPromise: false
     }, sessionId);
+    if (result.exceptionDetails) {
+        throw new ElementResolutionError(`Invalid selector: ${selectorOrRef}: ${exceptionText(result)}`, "permanent");
+    }
     const value = result.result?.value;
     if (typeof value?.x !== "number" || typeof value?.y !== "number") {
-        throw new Error(`Element not found: ${selectorOrRef}`);
+        throw new ElementResolutionError(`Element not found: ${selectorOrRef}`, "transient");
     }
     return { x: value.x, y: value.y, sessionId };
 }
@@ -7202,7 +7222,7 @@ async function resolveElementObjectId(cdp, sessionId, refMap, selectorOrRef, ifr
     if (refId) {
         const entry = refMap.get(refId);
         if (!entry) {
-            throw new Error(`Unknown ref: ${refId}`);
+            throw new ElementResolutionError(`Unknown ref: ${refId}`, "transient");
         }
         const effectiveSessionId = resolveFrameSession(entry.frameId, sessionId, iframeSessions);
         if (entry.backendNodeId !== undefined && entry.backendNodeId !== null) {
@@ -7224,7 +7244,7 @@ async function resolveElementObjectId(cdp, sessionId, refMap, selectorOrRef, ifr
         const result = await send(cdp, "DOM.resolveNode", { backendNodeId, objectGroup: "ego-browser" }, effectiveSessionId);
         const objectId = result.object?.objectId;
         if (!objectId) {
-            throw new Error(`No objectId for ref ${refId}`);
+            throw new ElementResolutionError(`No objectId for ref ${refId}`, "permanent");
         }
         return { objectId, sessionId: effectiveSessionId };
     }
@@ -7235,11 +7255,15 @@ async function resolveElementObjectId(cdp, sessionId, refMap, selectorOrRef, ifr
     const result = await send(cdp, "Runtime.evaluate", {
         expression: buildFindElementJs(selectorOrRef),
         returnByValue: false,
-        awaitPromise: false
+        awaitPromise: false,
+        objectGroup: "ego-browser"
     }, sessionId);
+    if (result.exceptionDetails) {
+        throw new ElementResolutionError(`Invalid selector: ${selectorOrRef}: ${exceptionText(result)}`, "permanent");
+    }
     const objectId = result.result?.objectId;
     if (!objectId) {
-        throw new Error(`Element not found: ${selectorOrRef}`);
+        throw new ElementResolutionError(`Element not found: ${selectorOrRef}`, "transient");
     }
     return { objectId, sessionId };
 }
@@ -7263,12 +7287,15 @@ async function resolveLocatorCenter(cdp, sessionId, locator) {
         returnByValue: true,
         awaitPromise: false
     }, sessionId);
+    if (result.exceptionDetails) {
+        throw new ElementResolutionError(`Invalid selector: ${locator.raw}: ${exceptionText(result)}`, "permanent");
+    }
     const value = result.result?.value;
     if (value?.error) {
-        throw new Error(value.error);
+        throw new ElementResolutionError(value.error, matchCountKind(value.error));
     }
     if (typeof value?.x !== "number" || typeof value?.y !== "number") {
-        throw new Error(`Element not found: ${locator.raw}`);
+        throw new ElementResolutionError(`Element not found: ${locator.raw}`, "transient");
     }
     return { x: value.x, y: value.y, sessionId };
 }
@@ -7278,22 +7305,26 @@ async function resolveLocatorObjectId(cdp, sessionId, locator) {
         const result = await send(cdp, "DOM.resolveNode", { backendNodeId, objectGroup: "ego-browser" }, sessionId);
         const objectId = result.object?.objectId;
         if (!objectId) {
-            throw new Error(`No objectId for locator ${locator.raw}`);
+            throw new ElementResolutionError(`No objectId for locator ${locator.raw}`, "permanent");
         }
         return { objectId, sessionId };
     }
     const count = await locatorCount(cdp, sessionId, locator);
-    if (count !== 1) {
-        throw new Error(`Locator ${locator.raw} matched ${count} elements`);
+    if (count === 0) {
+        throw new ElementResolutionError(`Locator ${locator.raw} matched 0 elements`, "transient");
+    }
+    if (count > 1) {
+        throw new ElementResolutionError(`Locator ${locator.raw} matched ${count} elements`, "permanent");
     }
     const result = await send(cdp, "Runtime.evaluate", {
         expression: buildLocatorFindJs(locator),
         returnByValue: false,
-        awaitPromise: false
+        awaitPromise: false,
+        objectGroup: "ego-browser"
     }, sessionId);
     const objectId = result.result?.objectId;
     if (!objectId) {
-        throw new Error(`Element not found: ${locator.raw}`);
+        throw new ElementResolutionError(`Element not found: ${locator.raw}`, "transient");
     }
     return { objectId, sessionId };
 }
@@ -7303,6 +7334,9 @@ async function locatorCount(cdp, sessionId, locator) {
         returnByValue: true,
         awaitPromise: false
     }, sessionId);
+    if (result.exceptionDetails) {
+        throw new ElementResolutionError(`Invalid selector: ${locator.raw}: ${exceptionText(result)}`, "permanent");
+    }
     return Number(result.result?.value || 0);
 }
 async function findBackendNodeIdByRoleName(cdp, sessionId, role, name, nth = undefined, frameId = undefined, iframeSessions = new Map()) {
@@ -7319,13 +7353,13 @@ async function findBackendNodeIdByRoleName(cdp, sessionId, role, name, nth = und
         }
         if (matchCount === nthIndex) {
             if (node.backendDOMNodeId === undefined || node.backendDOMNodeId === null) {
-                throw new Error(`AX node has no backendDOMNodeId for role=${role} name=${name}`);
+                throw new ElementResolutionError(`AX node has no backendDOMNodeId for role=${role} name=${name}`, "permanent");
             }
             return node.backendDOMNodeId;
         }
         matchCount += 1;
     }
-    throw new Error(`Could not locate element with role=${role} name=${name}`);
+    throw new ElementResolutionError(`Could not locate element with role=${role} name=${name}`, "transient");
 }
 async function findUniqueBackendNodeIdByRoleName(cdp, sessionId, role, name) {
     const result = await send(cdp, "Accessibility.getFullAXTree", {}, sessionId);
@@ -7338,12 +7372,15 @@ async function findUniqueBackendNodeIdByRoleName(cdp, sessionId, role, name) {
             matches.push(node);
         }
     }
-    if (matches.length !== 1) {
-        throw new Error(`Locator role:${role}[name=${JSON.stringify(name)}] matched ${matches.length} elements`);
+    if (matches.length === 0) {
+        throw new ElementResolutionError(`Locator role:${role}[name=${JSON.stringify(name)}] matched 0 elements`, "transient");
+    }
+    if (matches.length > 1) {
+        throw new ElementResolutionError(`Locator role:${role}[name=${JSON.stringify(name)}] matched ${matches.length} elements`, "permanent");
     }
     const backendNodeId = matches[0].backendDOMNodeId;
     if (backendNodeId === undefined || backendNodeId === null) {
-        throw new Error(`AX node has no backendDOMNodeId for role=${role} name=${name}`);
+        throw new ElementResolutionError(`AX node has no backendDOMNodeId for role=${role} name=${name}`, "permanent");
     }
     return backendNodeId;
 }
@@ -7494,6 +7531,72 @@ async function ensureRefMapForRef(selectorOrRef) {
     }
 }
 
+/**
+ * Resolve any selector form to a CDP Runtime objectId handle.
+ * Accepts @ref / ref=N, loc=css:/loc=role:/loc=href:, xpath=, and raw CSS —
+ * the same surface as the pointer/observe helpers, via the unified resolver.
+ * Refreshes the RefMap on demand when the input is a ref and the map is empty.
+ * @param {string} selectorOrRef Selector or ref string.
+ * @returns {Promise<{objectId: string, sessionId?: string}>}
+ */
+async function resolveHandle(selectorOrRef) {
+    await ensureRefMapForRef(selectorOrRef);
+    return resolveElementObjectId({ sendRaw: cdp }, undefined, browserRefMap, selectorOrRef);
+}
+/**
+ * Release a Runtime objectId handle. Best-effort: swallows "already gone"
+ * errors (stale handle, lost session, destroyed context).
+ * @param {string} objectId Runtime remote object id to release.
+ * @param {string} [sessionId] Session that owns the handle.
+ * @returns {Promise<void>}
+ */
+async function releaseHandle(objectId, sessionId) {
+    if (!objectId)
+        return;
+    try {
+        await cdp("Runtime.releaseObject", { objectId }, sessionId);
+    }
+    catch {
+        // Handle/session already invalid; releasing is best-effort.
+    }
+}
+/**
+ * Resolve a handle, run fn(handle), then release the handle — even if fn throws.
+ * @param {string} selectorOrRef Selector or ref string.
+ * @param {(handle: {objectId: string, sessionId?: string}) => Promise<any>} fn Callback bound to the resolved handle.
+ * @returns {Promise<any>} Whatever fn returns.
+ */
+async function withHandle(selectorOrRef, fn) {
+    const handle = await resolveHandle(selectorOrRef);
+    try {
+        return await fn(handle);
+    }
+    finally {
+        await releaseHandle(handle.objectId, handle.sessionId);
+    }
+}
+/**
+ * Resolve an element and call a function on it via Runtime.callFunctionOn,
+ * with the element bound as `this`. The resolved handle is released afterward;
+ * the returned objectId is already freed and must not be reused.
+ * @param {string} selectorOrRef Selector or ref string.
+ * @param {string} functionDeclaration Function source whose `this` is the element.
+ * @param {Array<unknown>} [args=[]] Arguments passed by value.
+ * @returns {Promise<{result: any, objectId: string, sessionId?: string}>}
+ */
+async function resolveAndCall(selectorOrRef, functionDeclaration, args = []) {
+    return withHandle(selectorOrRef, async ({ objectId, sessionId }) => {
+        const result = await cdp("Runtime.callFunctionOn", {
+            functionDeclaration,
+            objectId,
+            arguments: args.map((value) => ({ value })),
+            returnByValue: true,
+            awaitPromise: false
+        }, sessionId);
+        return { result, objectId, sessionId };
+    });
+}
+
 async function drainEvents() {
     return drainBrowserEvents();
 }
@@ -7527,21 +7630,21 @@ async function elementCenter(selectorOrRef) {
     return resolveElementCenter({ sendRaw: cdp }, undefined, browserRefMap, selectorOrRef);
 }
 async function fillElement(selectorOrRef, value) {
-    await ensureRefMapForRef(selectorOrRef);
-    const resolved = await resolveElementObjectId({ sendRaw: cdp }, undefined, browserRefMap, selectorOrRef);
-    await cdp("Runtime.callFunctionOn", {
-        functionDeclaration: "function() { this.focus(); }",
-        objectId: resolved.objectId,
-        returnByValue: true,
-        awaitPromise: false
-    }, resolved.sessionId);
-    await cdp("Runtime.callFunctionOn", {
-        functionDeclaration: "function() { this.select && this.select(); this.value = ''; this.dispatchEvent(new Event('input', { bubbles: true })); }",
-        objectId: resolved.objectId,
-        returnByValue: true,
-        awaitPromise: false
-    }, resolved.sessionId);
-    await cdp("Input.insertText", { text: String(value) });
+    await withHandle(selectorOrRef, async ({ objectId, sessionId }) => {
+        await cdp("Runtime.callFunctionOn", {
+            functionDeclaration: "function() { this.focus(); }",
+            objectId,
+            returnByValue: true,
+            awaitPromise: false
+        }, sessionId);
+        await cdp("Runtime.callFunctionOn", {
+            functionDeclaration: "function() { this.select && this.select(); this.value = ''; this.dispatchEvent(new Event('input', { bubbles: true })); }",
+            objectId,
+            returnByValue: true,
+            awaitPromise: false
+        }, sessionId);
+        await cdp("Input.insertText", { text: String(value) }, sessionId);
+    });
 }
 async function captureScreenshot(path = join(tmpdir(), "ego-browser-shot.png"), options = {}) {
     const full = options.full ?? false;
@@ -7577,15 +7680,16 @@ async function captureScreenshot(path = join(tmpdir(), "ego-browser-shot.png"), 
     return path;
 }
 async function evaluateBrowserElement(selectorOrRef, functionDeclaration, args) {
-    const resolved = await resolveElementObjectId({ sendRaw: cdp }, undefined, browserRefMap, selectorOrRef);
-    const response = await cdp("Runtime.callFunctionOn", {
-        functionDeclaration,
-        objectId: resolved.objectId,
-        arguments: [{ objectId: resolved.objectId }, ...args.map((value) => ({ value }))],
-        returnByValue: true,
-        awaitPromise: true
-    }, resolved.sessionId);
-    return remoteValue(response);
+    return withHandle(selectorOrRef, async ({ objectId, sessionId }) => {
+        const response = await cdp("Runtime.callFunctionOn", {
+            functionDeclaration,
+            objectId,
+            arguments: [{ objectId }, ...args.map((value) => ({ value }))],
+            returnByValue: true,
+            awaitPromise: true
+        }, sessionId);
+        return remoteValue(response);
+    });
 }
 function remoteValue(response) {
     const result = response.result || {};
@@ -7938,7 +8042,7 @@ async function waitForLoad(options = {}) {
 }
 /**
  * Wait until an element exists, optionally requiring visibility.
- * @param {string} selector CSS selector or @ref to poll.
+ * @param {string} selector CSS selector / @ref / loc= / xpath= to poll.
  * @param {{timeout?: number, visible?: boolean}} [options]
  * @returns {Promise<boolean>} True when found before timeout.
  */
@@ -7946,36 +8050,36 @@ async function waitForElement(selector, options = {}) {
     const timeout = options.timeout ?? 10.0;
     const visible = options.visible ?? false;
     const deadline = state.now() + timeout * 1000;
-    if (parseRef(selector)) {
-        await ensureRefMapForRef(selector);
-        const visibilityFn = "function(){if(typeof this.checkVisibility==='function')return this.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});const s=getComputedStyle(this);return s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';}";
-        while (state.now() < deadline) {
-            try {
-                const { objectId, sessionId } = await resolveElementObjectId({ sendRaw: cdp }, undefined, browserRefMap, selector);
-                if (!visible)
-                    return true;
-                const response = await cdp("Runtime.callFunctionOn", {
-                    functionDeclaration: visibilityFn,
-                    objectId,
-                    returnByValue: true,
-                    awaitPromise: false
-                }, sessionId);
-                if (response.result?.value)
-                    return true;
-            }
-            catch {
-                // ref not yet resolvable; keep polling.
-            }
-            await state.sleep(300);
-        }
-        return false;
-    }
-    const check = visible
-        ? `(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return false;if(typeof e.checkVisibility==='function')return e.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});const s=getComputedStyle(e);return s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0'})()`
-        : `!!document.querySelector(${JSON.stringify(selector)})`;
+    const visibilityFn = "function(){if(typeof this.checkVisibility==='function')return this.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});const s=getComputedStyle(this);return s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';}";
     while (state.now() < deadline) {
-        if (await js(check)) {
-            return true;
+        let handle;
+        try {
+            handle = await resolveHandle(selector);
+        }
+        catch (err) {
+            if (err instanceof ElementResolutionError && err.kind === "transient") {
+                await state.sleep(300);
+                continue; // not found / not ready yet — keep polling.
+            }
+            throw err; // permanent (bad selector / ambiguous) or unknown error — fail loud.
+        }
+        try {
+            if (!visible)
+                return true;
+            const response = await cdp("Runtime.callFunctionOn", {
+                functionDeclaration: visibilityFn,
+                objectId: handle.objectId,
+                returnByValue: true,
+                awaitPromise: false
+            }, handle.sessionId);
+            if (response.result?.value)
+                return true;
+        }
+        catch {
+            // visibility check failed (element raced away); treat as not-ready, keep polling.
+        }
+        finally {
+            await releaseHandle(handle.objectId, handle.sessionId);
         }
         await state.sleep(300);
     }
@@ -8075,7 +8179,7 @@ async function typeText(text) {
 }
 /**
  * Focus an input, optionally clear it, type text, and fire input/change events.
- * @param {string} selector CSS selector or @ref for the input-like element.
+ * @param {string} selector CSS selector / @ref / loc= / xpath= for the input-like element.
  * @param {string} text Text to write.
  * @param {{clearFirst?: boolean, timeout?: number}} [options]
  * @returns {Promise<void>}
@@ -8086,9 +8190,7 @@ async function fillInput(selector, text, options = {}) {
     if (timeout > 0 && !await waitForElement(selector, { timeout })) {
         throw new Error(`fillInput: element not found: ${JSON.stringify(selector)}`);
     }
-    if (parseRef(selector)) {
-        await ensureRefMapForRef(selector);
-        const { objectId, sessionId } = await resolveElementObjectId({ sendRaw: cdp }, undefined, browserRefMap, selector);
+    await withHandle(selector, async ({ objectId, sessionId }) => {
         await cdp("Runtime.callFunctionOn", {
             functionDeclaration: "function(){this.focus(); if(typeof this.select==='function') this.select();}",
             objectId,
@@ -8097,12 +8199,11 @@ async function fillInput(selector, text, options = {}) {
         }, sessionId);
         if (clearFirst) {
             await cdp("Runtime.callFunctionOn", {
-                functionDeclaration: "function(){const v=this.value??this.textContent??''; if(typeof this.setSelectionRange==='function'){this.setSelectionRange(0,v.length);return;} if(typeof this.select==='function')this.select();}",
+                functionDeclaration: "function(){this.value=''; this.dispatchEvent(new Event('input',{bubbles:true}));}",
                 objectId,
                 returnByValue: true,
                 awaitPromise: false
             }, sessionId);
-            await pressKey("Backspace");
         }
         await cdp("Input.insertText", { text }, sessionId);
         await cdp("Runtime.callFunctionOn", {
@@ -8111,43 +8212,19 @@ async function fillInput(selector, text, options = {}) {
             returnByValue: true,
             awaitPromise: false
         }, sessionId);
-        return;
-    }
-    const focused = await js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return false;e.focus();if(typeof e.select==='function')e.select();return true;})()`);
-    if (!focused) {
-        throw new Error(`fillInput: element not found: ${JSON.stringify(selector)}`);
-    }
-    if (clearFirst) {
-        await js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return;const value=e.value??e.textContent??'';if(typeof e.setSelectionRange==='function'){e.setSelectionRange(0,value.length);return;}if(typeof e.select==='function')e.select();})()`);
-        await pressKey("Backspace");
-    }
-    await typeText(text);
-    await js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return;e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    });
 }
 /**
  * Focus an element and dispatch a DOM KeyboardEvent in page JavaScript.
  * Note: dispatched event has isTrusted=false; some frameworks ignore it (see docs/issues/dispatchKey-synthetic-keyboard-event.md).
- * @param {string} selector CSS selector or @ref for the target element.
+ * @param {string} selector CSS selector / @ref / loc= / xpath= for the target element.
  * @param {string} [key="Enter"] Event key.
  * @param {"keydown"|"keypress"|"keyup"|string} [event="keypress"] Event type.
  * @returns {Promise<void>}
  */
 async function dispatchKey(selector, key = "Enter", event = "keypress") {
-    const keyCodes = { Enter: 13, Tab: 9, Escape: 27, Backspace: 8, " ": 32, ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40 };
-    const keyCode = keyCodes[key] || (key.length === 1 ? key.codePointAt(0) : 0);
-    if (parseRef(selector)) {
-        await ensureRefMapForRef(selector);
-        const { objectId, sessionId } = await resolveElementObjectId({ sendRaw: cdp }, undefined, browserRefMap, selector);
-        await cdp("Runtime.callFunctionOn", {
-            functionDeclaration: "function(keyCode, key, event){this.focus(); this.dispatchEvent(new KeyboardEvent(event,{key,code:key,keyCode,which:keyCode,bubbles:true}));}",
-            objectId,
-            arguments: [{ value: keyCode }, { value: key }, { value: event }],
-            returnByValue: true,
-            awaitPromise: false
-        }, sessionId);
-        return;
-    }
-    await js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(e){e.focus();e.dispatchEvent(new KeyboardEvent(${JSON.stringify(event)},{key:${JSON.stringify(key)},code:${JSON.stringify(key)},keyCode:${keyCode},which:${keyCode},bubbles:true}));}})()`);
+    const { vk, code } = keyDefinition(key);
+    await resolveAndCall(selector, "function(keyCode, key, code, event){this.focus(); this.dispatchEvent(new KeyboardEvent(event,{key,code,keyCode,which:keyCode,bubbles:true}));}", [vk, key, code, event]);
 }
 
 var keyboard = /*#__PURE__*/Object.freeze({
@@ -8160,24 +8237,15 @@ var keyboard = /*#__PURE__*/Object.freeze({
 
 /**
  * Set files on a file input.
- * @param {string} selector CSS selector or @ref for an input[type=file].
+ * @param {string} selector CSS selector / @ref / loc= / xpath= for an input[type=file].
  * @param {string|string[]} path Absolute file path or paths to upload.
  * @returns {Promise<void>}
  */
 async function uploadFile(selector, path) {
     const files = Array.isArray(path) ? path : [path];
-    if (parseRef(selector)) {
-        await ensureRefMapForRef(selector);
-        const { objectId, sessionId } = await resolveElementObjectId({ sendRaw: cdp }, undefined, browserRefMap, selector);
+    await withHandle(selector, async ({ objectId, sessionId }) => {
         await cdp("DOM.setFileInputFiles", { files, objectId }, sessionId);
-        return;
-    }
-    const doc = await cdp("DOM.getDocument", { depth: -1 });
-    const nodeId = (await cdp("DOM.querySelector", { nodeId: doc.root.nodeId, selector })).nodeId;
-    if (!nodeId) {
-        throw new Error(`no element for ${selector}`);
-    }
-    await cdp("DOM.setFileInputFiles", { files, nodeId });
+    });
 }
 
 var files = /*#__PURE__*/Object.freeze({
