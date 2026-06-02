@@ -7643,7 +7643,7 @@ async function fillElement(selectorOrRef, value) {
             returnByValue: true,
             awaitPromise: false
         }, sessionId);
-        await cdp("Input.insertText", { text: String(value) });
+        await cdp("Input.insertText", { text: String(value) }, sessionId);
     });
 }
 async function captureScreenshot(path = join(tmpdir(), "ego-browser-shot.png"), options = {}) {
