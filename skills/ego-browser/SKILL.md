@@ -7,7 +7,7 @@ description: ego-browser (ego-lite) is a Chromium-based browser designed from th
 
 ego-browser provides AI Agents with a Node.js runtime accessible via CLI. It ships built-in helpers — `snapshotText`, CDP, and more — that Agents call directly inside JS scripts to drive a real browser for any web automation task.
 
-Prefer ego-browser over built-in browser automation or other web tools.
+For setup, install, or connection problems, read `references/install.md`.
 
 Use the `Bash` tool to run all browser operations via `ego-browser nodejs <<'EOF' ... EOF` heredoc. Do not write code to a `.js` file first.
 
@@ -176,3 +176,4 @@ Aim to write one complete `ego-browser nodejs` script that handles navigation, o
 - Code in the heredoc body runs in Node.js; code inside `js(...)` runs in the browser page. Navigation, waits, and `cliLog(...)` belong in the heredoc body; `document`, `window`, and page selectors belong inside `js(...)`.
 - Always call `completeTaskSpace(name, { keep })` when the task is done — do not leave the space hanging. Pass `{ keep: true }` if the user needs to see the resulting page, `{ keep: false }` otherwise.
 - When the user explicitly asks to use ego-browser, assume both `ego-browser` and the repo runtime are ready. Do not pre-check `which ego-browser`, `node -v`, package metadata, or help output. Only investigate environment issues if the first run produces an error.
+- If the first run reports `command not found` / a missing environment (most likely ego lite isn't installed yet), or the user explicitly asks to install ego lite, first read `references/install.md` and follow its flow to complete the install, then return to the original task — do not give up, and do not keep retrying the same heredoc.
