@@ -72,8 +72,8 @@ agent-home/.pi/agent/skills/*/sites/*
 evals/reports/*
 .agents/skills
 .gitmodules
-
 issues.md
 browser/
 task/
 test-e2e/
+skills/ego-browser/SKILL.zh.md

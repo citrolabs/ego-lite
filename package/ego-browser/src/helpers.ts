@@ -12,6 +12,7 @@ import * as observe from "./driver/observe.js";
 import * as waits from "./driver/waits.js";
 import * as files from "./driver/files.js";
 import { httpGet } from "./http.js";
+import { createWorkStudio } from "./work-studio/create.js";
 import {
   loadBrowserToolSource,
   loadLearnedContext,
@@ -40,6 +41,7 @@ export { snapshot, snapshotRaw, snapshotText, captureScreenshot, elementEval, el
 export { wait, waitForLoad, waitForElement, waitForNetworkIdle } from "./driver/waits.js";
 export { uploadFile } from "./driver/files.js";
 export { httpGet } from "./http.js";
+export { createWorkStudio } from "./work-studio/create.js";
 
 /**
  * List all task spaces.
@@ -358,6 +360,7 @@ export function helperContext(extra: any = {}) {
     handOffTaskSpace,
     takeOverTaskSpace,
     waitForAgentControl,
+    createWorkStudio,
     ...extra
   };
   return {

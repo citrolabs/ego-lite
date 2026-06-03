@@ -37,6 +37,7 @@ heredoc 代码运行在 Node.js 进程，可直接调用所有 ego-browser helpe
 - 等待：`wait`, `waitForLoad`, `waitForElement`, `waitForNetworkIdle`
 - Fetch：`httpGet`
 - CDP/evaluate：`js`, `elementEval`, `cdp`
+- Work Studio：`createWorkStudio`
 - 输出：`cliLog`, `help`
 
 说明：
@@ -154,7 +155,9 @@ const data = await js(String.raw`(() => {
 2. 打开或切换页面：优先用 `openOrReuseTab(url, { wait: true })`；在当前标签页内导航用 `gotoAndWait(url, { timeout, settle })`。
 3. 观察页面：用 `snapshotText()` 获取带 `[ref=N, loc=..., url=...]` 的整页语义树文本，ref 会自动注册到 refMap，之后即可 `click('@N')` / `fillInput('@N', ...)` / `elementEval('@N', ...)`。
 4. 执行动作或抽取数据：能用 DOM 一次性完成的逻辑，封装进一个 browser-side 闭包并一次返回。
-5. 输出最终结果：用 `cliLog(...)` 输出。
+5. 按任务类型选择最终输出路径：
+   - 多 tab 调研、对比、购物、预订、选择，或任何留下可交互来源页面的任务，必须用 `createWorkStudio(...)` 创建并打开 Work Studio 页面，然后 `completeTaskSpace(name, { keep: true })`。
+   - 只有短小、非交互、无需持久结果页和 tab 历史的任务，才用纯 `cliLog(...)` 输出。
 
 当任务更适合以其他方式执行时，再切换路径；这些路径也可以组合使用：
 - **snapshotText + ref/loc**：语义结构、标签、链接、表单控件比较清晰时，推荐作为默认路径。
@@ -162,6 +165,58 @@ const data = await js(String.raw`(() => {
 - **js / elementEval / cdp**：适合直接抽取 DOM、查看浏览器状态，或常规观察 helper 不够直接的情况。
 
 优先写一个完整的 `ego-browser nodejs` 脚本，一次性完成导航、观察、滚动、抽取、过滤、聚合计算和结果输出，不要再额外用第二个本地 `node` 脚本处理同一批数据。
+
+最终输出规则：如果任务打开了多个 tab、收集了来源、对比了候选项，或留下任何用户可能继续交互的页面，不要只用 `cliLog(...)` 结束。必须创建 Work Studio 页面、打开 `studio.url`，并保留 task space 给用户查看。
+
+## Work Studio 结果页
+
+当一个对话任务应该以持久的 A2UI 结果页结束，而不是只输出文本时，使用 `createWorkStudio(...)`。每个 task space 对应一个本地 Work Studio bridge server。这个 server 负责提供 A2UI shell 页面、保存任务数据，并把页面动作转换成同一 task space 内的 CDP/helper 操作。
+
+Tab role 决定任务结束后的空间形态：
+
+- `result_studio`：保留生成的 Work Studio 页面。
+- `interactive_source`：保留需要继续实时交互的原始页面，如商品页、购物车、预订页、表单页。
+- `information_source`：归档论文、资讯、调研来源页，并默认关闭；Work Studio 页面保留历史入口，用户可按需展开和恢复。
+- `temporary`：默认关闭一次性的搜索页或跳转页。
+
+Work Studio 页面以 A2UI 为主。可以直接传 `a2ui.messages`，也可以传较高层的 `document`/`items`，由 ego-browser 生成一个简单 A2UI surface。页面按钮应触发 A2UI user action，如 `open_original`、`load_history`、`restore_history_tabs` 或 `run_binding`。
+
+Bridge binding 把 A2UI 动作连接到真实浏览器操作：
+
+```js
+const studio = await createWorkStudio({
+  taskId: name,
+  title: '外套候选结果',
+  mode: 'interactive-action',
+  document: {
+    summary: '两件外套符合预算和风格要求。',
+    items: [{ id: 'coat_1', title: '黑色短款外套', url: 'https://item.example/coat' }]
+  },
+  tabs: [
+    { id: 'product_tab', role: 'interactive_source', targetId: product.targetId, url: product.url },
+    { id: 'review_tab', role: 'information_source', targetId: review.targetId, url: review.url }
+  ],
+  bindings: [{
+    id: 'coat_1_add_to_cart',
+    itemId: 'coat_1',
+    sourceTabId: 'product_tab',
+    type: 'run_sequence',
+    steps: [
+      { type: 'click', selector: '#add-to-cart' }
+    ]
+  }]
+})
+
+await openOrReuseTab(studio.url, { wait: true })
+await completeTaskSpace(name, { keep: true })
+```
+
+内置 bridge actions：
+
+- `open_original`：切到 item 对应的实时来源 tab，或重新打开它的 URL。
+- `load_history`：返回已归档的浏览历史，供 A2UI 页面渲染。
+- `restore_history_tabs`：恢复一个或全部已归档的信息来源 tab。
+- `run_binding`：在 item 的来源 tab 上执行已保存的 binding。支持的 binding steps 包括 `switch_tab`、`open_url`、`click`、`fill`、`wait` 和 `eval`。
 
 
 ## 注意事项

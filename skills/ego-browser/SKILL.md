@@ -37,6 +37,7 @@ The heredoc body runs in a Node.js process with direct access to all ego-browser
 - Wait: `wait`, `waitForLoad`, `waitForElement`, `waitForNetworkIdle`
 - Fetch: `httpGet`
 - CDP / evaluate: `js`, `elementEval`, `cdp`
+- Work Studio: `createWorkStudio`
 - Output: `cliLog`, `help`
 
 Notes:
@@ -154,7 +155,9 @@ Start with snapshotText + ref/loc when possible — it preserves semantic struct
 2. Open or switch pages: prefer `openOrReuseTab(url, { wait: true })`; use `gotoAndWait(url, { timeout, settle })` to navigate within the current tab.
 3. Observe the page: call `snapshotText()` to get a full-page semantic tree annotated with `[ref=N, loc=..., url=...]`. Refs are auto-registered in refMap, so you can immediately do `click('@N')` / `fillInput('@N', ...)` / `elementEval('@N', ...)`.
 4. Act or extract data: if the logic can be done in the DOM in one shot, wrap it in a browser-side closure and return once.
-5. Output the final result: use `cliLog(...)`.
+5. Finish with the correct output path:
+   - For multi-tab research, comparison, shopping, booking, selection, or any task with interactive source pages, create and open a Work Studio page with `createWorkStudio(...)`, then `completeTaskSpace(name, { keep: true })`.
+   - Use plain `cliLog(...)` only for short, non-interactive tasks that do not need a persistent result page or tab history.
 
 Switch to a different path when it fits better; paths can be combined:
 - **snapshotText + ref/loc** — default when semantic structure, labels, links, and form controls are clear.
@@ -162,6 +165,58 @@ Switch to a different path when it fits better; paths can be combined:
 - **js / elementEval / cdp** — for direct DOM extraction, inspecting browser state, or when the observation helpers aren't direct enough.
 
 Aim to write one complete `ego-browser nodejs` script that handles navigation, observation, scrolling, extraction, filtering, aggregation, and output in a single pass. Don't use a second local `node` script to post-process the same data.
+
+Final output rule: if the task opened multiple tabs, collected sources, compared candidates, or leaves any page that the user may continue interacting with, do **not** finish with only `cliLog(...)`. Build a Work Studio page, open `studio.url`, and keep the task space visible.
+
+## Work Studio result pages
+
+Use `createWorkStudio(...)` when a conversation task should end with a persistent A2UI result page instead of plain text. Each task space gets one local Work Studio bridge server. The server serves the A2UI shell page, stores task data, and turns page actions into CDP/helper operations against tabs in the same task space.
+
+Tab roles control the final task-space shape:
+
+- `result_studio` — keep the generated Work Studio page visible.
+- `interactive_source` — keep original pages that must remain live for user interaction, such as product pages, carts, booking pages, or forms.
+- `information_source` — archive research/news/paper/source tabs and close them by default; the Work Studio page keeps a history control so the user can expand and restore them on demand.
+- `temporary` — close disposable search or navigation tabs by default.
+
+A Work Studio page is A2UI-first. Pass either `a2ui.messages` directly, or pass a higher-level `document`/`items` model and let ego-browser generate a simple A2UI surface. Page buttons should emit A2UI user actions such as `open_original`, `load_history`, `restore_history_tabs`, or `run_binding`.
+
+Bridge bindings connect A2UI actions to real browser work:
+
+```js
+const studio = await createWorkStudio({
+  taskId: name,
+  title: 'Jacket shortlist',
+  mode: 'interactive-action',
+  document: {
+    summary: 'Two candidate jackets match the requested budget and style.',
+    items: [{ id: 'coat_1', title: 'Short black jacket', url: 'https://item.example/coat' }]
+  },
+  tabs: [
+    { id: 'product_tab', role: 'interactive_source', targetId: product.targetId, url: product.url },
+    { id: 'review_tab', role: 'information_source', targetId: review.targetId, url: review.url }
+  ],
+  bindings: [{
+    id: 'coat_1_add_to_cart',
+    itemId: 'coat_1',
+    sourceTabId: 'product_tab',
+    type: 'run_sequence',
+    steps: [
+      { type: 'click', selector: '#add-to-cart' }
+    ]
+  }]
+})
+
+await openOrReuseTab(studio.url, { wait: true })
+await completeTaskSpace(name, { keep: true })
+```
+
+The built-in bridge actions are:
+
+- `open_original` — switch to the item's live source tab, or reopen its URL.
+- `load_history` — return archived browsing history for the A2UI page to render.
+- `restore_history_tabs` — reopen one or all archived information tabs.
+- `run_binding` — execute a stored binding against the item's source tab. Supported binding steps are `switch_tab`, `open_url`, `click`, `fill`, `wait`, and `eval`.
 
 
 ## Caveats

@@ -5,6 +5,8 @@ import * as helpers from "./helpers.js";
 import { clearPreferredTarget, invalidateSession, setPreferredTarget } from "./browser-runtime.js";
 import { formatCliLogValue } from "./format.js";
 import { runMain } from "./run.js";
+import { startWorkStudioServer } from "./work-studio/server.js";
+import { readStoredTask, writeServerInfo } from "./work-studio/store.js";
 
 type HelperFunction = (...args: unknown[]) => unknown;
 type EgoRuntime = Record<string, unknown> & {
@@ -65,7 +67,11 @@ export function installEgoSdk(target: InstallTarget = globalThis, options: Insta
 
 if (isDirectCli()) {
   try {
-    process.exitCode = await runMain();
+    if (process.argv[2] === "--work-studio-server") {
+      await runWorkStudioServer(process.argv[3]);
+    } else {
+      process.exitCode = await runMain();
+    }
   } catch (error) {
     console.error(error?.stack || error?.message || String(error));
     process.exitCode = 1;
@@ -82,6 +88,22 @@ function createCliLog(stream: { write(chunk: string): unknown } = process.stdout
 
 function isDirectCli() {
   return process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
+}
+
+async function runWorkStudioServer(taskId?: string) {
+  if (!taskId) {
+    throw new Error("--work-studio-server requires a taskId");
+  }
+  const task = await readStoredTask(taskId);
+  const started = await startWorkStudioServer({ taskId });
+  await writeServerInfo(taskId, {
+    taskId,
+    safeTaskId: task.safeTaskId,
+    host: started.host,
+    port: started.port,
+    pid: process.pid,
+    startedAt: new Date().toISOString()
+  });
 }
 
 function wrapInvalidating(ego: EgoRuntime, methodNames: string[]) {
