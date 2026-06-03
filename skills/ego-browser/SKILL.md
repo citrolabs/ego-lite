@@ -35,7 +35,7 @@ The heredoc body runs in a Node.js process with direct access to all ego-browser
 - Keyboard & input: `typeText`, `fillInput`, `pressKey`, `dispatchKey`
 - File: `uploadFile`
 - Wait: `wait`, `waitForLoad`, `waitForElement`, `waitForNetworkIdle`
-- Fetch: `httpGet`
+- Fetch: `serverFetch`, `browserFetch`
 - CDP / evaluate: `js`, `elementEval`, `cdp`
 - Output: `cliLog`, `help`
 
@@ -44,7 +44,8 @@ Notes:
 - `pageInfo()` — returns the current tab's `url`, `title`, and other basic metadata.
 - `ensureRealTab()` — ensures a real tab exists (a freshly created task space may have none).
 - `drainEvents()` — consumes and returns the async event queue produced by the page (navigation events, network events, etc.).
-- `httpGet(url)` — issues a GET request in the browser context and returns the response body.
+- `serverFetch(url, options)` — issues a request from Node and returns the response body.
+- `browserFetch(url, options)` — issues a request from the current browser page context and returns the response body.
 - `help(name)` — prints usage for a given helper, e.g. `cliLog(help('click'))`.
 
 

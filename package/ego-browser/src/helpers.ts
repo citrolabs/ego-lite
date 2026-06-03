@@ -11,7 +11,7 @@ import * as nav from "./driver/nav.js";
 import * as observe from "./driver/observe.js";
 import * as waits from "./driver/waits.js";
 import * as files from "./driver/files.js";
-import { httpGet } from "./http.js";
+import { browserFetch, serverFetch } from "./http.js";
 import {
   loadBrowserToolSource,
   loadLearnedContext,
@@ -39,7 +39,7 @@ export {
 export { snapshot, snapshotRaw, snapshotText, captureScreenshot, elementEval, elementCenter, drainEvents } from "./driver/observe.js";
 export { wait, waitForLoad, waitForElement, waitForNetworkIdle } from "./driver/waits.js";
 export { uploadFile } from "./driver/files.js";
-export { httpGet } from "./http.js";
+export { browserFetch, serverFetch } from "./http.js";
 
 /**
  * List all task spaces.
@@ -345,7 +345,8 @@ export function helperContext(extra: any = {}) {
     ...files,
     cdp,
     js,
-    httpGet,
+    serverFetch,
+    browserFetch,
     gotoUrl,
     siteSkills,
     siteSkillsForUrl,

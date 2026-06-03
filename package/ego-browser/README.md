@@ -72,7 +72,7 @@ src/
     load.ts              waitForLoad and load orchestration
     waits.ts             waitForElement, waitForNetworkIdle, wait
     files.ts             uploadFile
-  http.ts                httpGet
+  http.ts                serverFetch, browserFetch
   cdp-eval.ts            cdp() and js() raw eval
   learning/              site-learnings discovery and manifest validation
 scripts/
