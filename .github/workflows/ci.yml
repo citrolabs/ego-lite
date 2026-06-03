@@ -47,6 +47,11 @@ jobs:
           cache-dependency-path: package/ego-browser/package-lock.json
       - run: npm ci
       - run: npm run build
+      - name: Package release payload
+        run: |
+          version_tag="${GITHUB_REF_NAME}"
+          cd dist/out
+          zip -r "../ego-browser-${version_tag}.zip" .
       - name: Create tag release and update last release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -57,7 +62,12 @@ jobs:
           rolling_tag="last"
           commit_sha="$(git rev-parse HEAD)"
           short_sha="$(git rev-parse --short HEAD)"
-          artifact="package/ego-browser/artifacts/ego-browser/index.js"
+          artifact="package/ego-browser/dist/ego-browser-${version_tag}.zip"
+
+          if ! git merge-base --is-ancestor "$commit_sha" origin/main; then
+            echo "Release tags must point to commits reachable from main."
+            exit 1
+          fi
 
           if gh release view "$version_tag" >/dev/null 2>&1; then
             echo "Release $version_tag already exists; leaving it unchanged."
