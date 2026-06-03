@@ -25,6 +25,8 @@ const KEYS = {
 };
 
 const PRINTABLE_CODE_RE = /^[A-Za-z0-9]$/;
+const CTRL_MODIFIER = 2;
+const META_MODIFIER = 4;
 
 function keyDefinition(key) {
   const special = KEYS[key];
@@ -39,16 +41,29 @@ function keyDefinition(key) {
   return { vk, key, code, text: key };
 }
 
+function editingCommandsForKey(key, modifiers) {
+  if ((modifiers === CTRL_MODIFIER || modifiers === META_MODIFIER) && key.toLowerCase() === "a") {
+    return ["selectAll"];
+  }
+  return undefined;
+}
+
 /**
  * Dispatch a key press through CDP.
  * @param {string} key Key name such as Enter, Tab, ArrowLeft, or a single printable character.
- * @param {number} [modifiers=0] CDP modifier bitfield.
+ * @param {number} [modifiers=0] CDP modifier bitfield: Alt=1, Ctrl=2, Meta/Cmd=4, Shift=8.
  * @returns {Promise<void>}
  */
 export async function pressKey(key, modifiers = 0) {
   const { vk, code, text } = keyDefinition(key);
   const base = { key, code, modifiers, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk };
-  await cdp("Input.dispatchKeyEvent", { type: "keyDown", ...base, ...(text ? { text, unmodifiedText: text } : {}) });
+  const commands = editingCommandsForKey(key, modifiers);
+  await cdp("Input.dispatchKeyEvent", {
+    type: "keyDown",
+    ...base,
+    ...(text ? { text, unmodifiedText: text } : {}),
+    ...(commands ? { commands } : {})
+  });
   await cdp("Input.dispatchKeyEvent", { type: "keyUp", ...base });
 }
 
