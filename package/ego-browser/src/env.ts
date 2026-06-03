@@ -6,7 +6,16 @@ export const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 export const REPO_ROOT = resolve(SRC_DIR, "..");
 
 export function agentWorkspace() {
-  return resolvePath(process.env.EGO_BROWSER_AGENT_WORKSPACE || resolve(REPO_ROOT, "..", "..", "skills", "ego-browser"));
+  if (process.env.EGO_BROWSER_AGENT_WORKSPACE) {
+    return resolvePath(process.env.EGO_BROWSER_AGENT_WORKSPACE);
+  }
+
+  const bundledSkill = resolve(SRC_DIR, "ego-browser");
+  if (existsSync(bundledSkill)) {
+    return bundledSkill;
+  }
+
+  return resolve(REPO_ROOT, "..", "..", "skills", "ego-browser");
 }
 
 export function resolvePath(path) {

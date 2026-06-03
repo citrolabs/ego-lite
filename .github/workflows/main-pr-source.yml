@@ -6,12 +6,12 @@ on:
       - main
 
 jobs:
-  require-developer-source:
+  require-dev-source:
     runs-on: ubuntu-latest
     steps:
-      - name: Require developer branch
+      - name: Require dev branch
         run: |
-          if [ "${{ github.head_ref }}" != "developer" ]; then
-            echo "Pull requests into main must come from the developer branch."
+          if [ "${{ github.head_ref }}" != "dev" ]; then
+            echo "Pull requests into main must come from the dev branch."
             exit 1
           fi

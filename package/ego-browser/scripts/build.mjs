@@ -1,4 +1,4 @@
-import { chmod, mkdir, open, readdir, rm } from "node:fs/promises";
+import { chmod, cp, mkdir, open, readdir, rm } from "node:fs/promises";
 import { builtinModules } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -9,10 +9,13 @@ import resolve from "@rollup/plugin-node-resolve";
 import typescript from "@rollup/plugin-typescript";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const repoRoot = dirname(dirname(root));
 const distDir = join(root, "dist");
-const artifactsDir = join(root, "artifacts");
-const bundledCliDir = join(artifactsDir, "ego-browser");
+const outDir = join(distDir, "out");
+const bundledCliDir = outDir;
 const bundledCli = join(bundledCliDir, "index.js");
+const skillSourceDir = join(repoRoot, "skills", "ego-browser");
+const bundledSkillDir = join(outDir, "ego-browser");
 const buildLock = join(root, ".build.lock");
 
 let lock;
@@ -27,7 +30,7 @@ try {
 
 try {
   await rm(distDir, { recursive: true, force: true });
-  await rm(artifactsDir, { recursive: true, force: true });
+  await rm(join(root, "artifacts"), { recursive: true, force: true });
   await rm(join(root, "ego-browser.js"), { force: true });
   await rm(join(root, "bin"), { recursive: true, force: true });
   await mkdir(bundledCliDir, { recursive: true });
@@ -68,6 +71,7 @@ try {
   await bundle.write({ file: bundledCli, format: "esm", sourcemap: false });
   await bundle.close();
 
+  await cp(skillSourceDir, bundledSkillDir, { recursive: true });
   await chmod(bundledCli, 0o755);
 } finally {
   await lock.close();

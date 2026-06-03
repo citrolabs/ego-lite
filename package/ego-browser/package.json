@@ -4,15 +4,15 @@
   "description": "A TypeScript single-file build of the ego-browser CDP harness.",
   "type": "module",
   "bin": {
-    "index": "./artifacts/ego-browser/index.js"
+    "index": "./dist/out/index.js"
   },
   "scripts": {
     "clean": "rm -rf dist artifacts",
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && npm run typecheck && node --test",
-    "validate:learnings": "npm run build && node dist/scripts/validate-site-skills.js",
-    "validate:site-skills": "npm run build && node dist/scripts/validate-site-skills.js"
+    "validate:learnings": "npm run build && EGO_BROWSER_AGENT_WORKSPACE=../../skills/ego-browser node dist/scripts/validate-site-skills.js",
+    "validate:site-skills": "npm run build && EGO_BROWSER_AGENT_WORKSPACE=../../skills/ego-browser node dist/scripts/validate-site-skills.js"
   },
   "engines": {
     "node": ">=22"
