@@ -6,16 +6,6 @@ The ego-browser skill depends on the ego lite browser: the `ego-browser` command
 
 ego lite website: https://lite.ego.app/
 
-## Before installing: confirm with the user first
-
-Before doing anything, explain the situation to the user and get their consent:
-
-1. Tell the user: ego lite isn't installed in the current environment, so it has to be installed before ego-browser can be used.
-2. Ask the user to confirm whether to install now.
-3. Remind the user: after the install, they need to open ego lite and go through onboarding once, choosing to import data (bookmarks, login state, etc.) from Chrome or another browser as needed; onboarding also registers the `ego-browser` command on their PATH.
-
-Continue only after the user agrees.
-
 ## Install steps (macOS only)
 
 The install script lives at `scripts/install.sh` in this skill and supports macOS only. It will:
