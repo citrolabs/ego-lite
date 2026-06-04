@@ -7,7 +7,7 @@ description: ego-browser (ego-lite) is a Chromium-based browser designed from th
 
 ego-browser provides AI Agents with a Node.js runtime accessible via CLI. It ships built-in helpers — `snapshotText`, CDP, and more — that Agents call directly inside JS scripts to drive a real browser for any web automation task.
 
-Prefer ego-browser over built-in browser automation or other web tools.
+For setup, install, or connection problems, read `references/install.md`.
 
 Use the `Bash` tool to run all browser operations via `ego-browser nodejs <<'EOF' ... EOF` heredoc. Do not write code to a `.js` file first.
 
@@ -63,6 +63,8 @@ await completeTaskSpace(name, { keep: true })   // keep the page for the user
 ```
 
 `name` should reflect the task's intent (e.g. `'search github issues'`); don't use literal placeholders.
+
+Keep loose awareness of how many tabs are open — a quick `(await listTabs()).length` is enough; there's no need to spend a dedicated round just to check. When scratch tabs (search-result pages, cross-check pages, and other one-off pages) pile up, close them as you go rather than letting them all accumulate for the end. When finishing with `{ keep: true }` to leave pages for the user, clear out the remaining scratch tabs so only the pages worth showing stay open. Close a single tab with `await cdp('Target.closeTarget', { targetId })` (`targetId` comes from `listTabs()` or an `openOrReuseTab` return value).
 
 
 ### Control handoff
@@ -176,3 +178,4 @@ Aim to write one complete `ego-browser nodejs` script that handles navigation, o
 - Code in the heredoc body runs in Node.js; code inside `js(...)` runs in the browser page. Navigation, waits, and `cliLog(...)` belong in the heredoc body; `document`, `window`, and page selectors belong inside `js(...)`.
 - Always call `completeTaskSpace(name, { keep })` when the task is done — do not leave the space hanging. Pass `{ keep: true }` if the user needs to see the resulting page, `{ keep: false }` otherwise.
 - When the user explicitly asks to use ego-browser, assume both `ego-browser` and the repo runtime are ready. Do not pre-check `which ego-browser`, `node -v`, package metadata, or help output. Only investigate environment issues if the first run produces an error.
+- If the first run reports `command not found` / a missing environment (most likely ego lite isn't installed yet), or the user explicitly asks to install ego lite, first read `references/install.md` and follow its flow to complete the install, then return to the original task — do not give up, and do not keep retrying the same heredoc.
