@@ -1,5 +1,5 @@
 #!/bin/sh
-#v1.4 2026.05.28 16:47
+#v1.5 2026.06.04 17:16
 
 set -eu
 
@@ -225,16 +225,10 @@ main() {
 	fi
 
 	strip_quarantine_attributes "$installed_app_path"
-	browser_path=$(find_ego_browser_in_app "$installed_app_path") ||
-		die "$EGO_BROWSER_HELPER_NAME was not found"
 	cleanup
 
-	log "Running $EGO_BROWSER_HELPER_NAME: $browser_path"
-	if [ "$#" -eq 0 ]; then
-		exec "$browser_path" onboarding
-	fi
-	exec "$browser_path" "$@"
+	log "Launching $APP_NAME ..."
+	exec open "$installed_app_path"
 }
 
-main "$@"
-export PATH="$HOME/.local/bin:$PATH"
+main
