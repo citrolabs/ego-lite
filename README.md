@@ -43,9 +43,29 @@ Pick whichever fits your flow.
 <a href="https://cdn.ego.app/setup/macos/arm64/egolite.dmg"><img src="https://img.shields.io/badge/⬇%20Apple%20Silicon-.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download ego lite for Apple Silicon" /></a>
 <a href="https://cdn.ego.app/setup/macos/x64/egolite.dmg"><img src="https://img.shields.io/badge/⬇%20Intel-.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download ego lite for Intel" /></a>
 
-Double-click to install.
+Click to download, then open it to install. Either way, ego lite adds the `ego-browser` skill to every agent's skills directory on your machine.
 
-Either way installs the browser, the `ego-browser` helper, and writes the skill into every agent CLI on your machine. On first launch, ego lite asks one question, whether to migrate your Chrome data. Say yes and your agent inherits your existing logins, cookies, extensions, and bookmarks.
+**Add the skill with npx**
+
+Install just the `ego-browser` skill:
+
+```bash
+npx skills add citrolabs/ego-lite
+```
+
+The first time your agent runs a browser task, it walks you through installing the ego lite app.
+
+**Let your agent set it up**
+
+Paste this into your agent:
+
+```
+Set up ego lite for me: https://github.com/citrolabs/ego-lite
+
+Read `skills/ego-browser/references/install.md` and follow the steps to install ego lite.
+```
+
+On first launch, ego lite asks one question, whether to migrate your Chrome data. Say yes and your agent inherits your existing logins, cookies, extensions, and bookmarks.
 
 ### 2. Run your first task
 
