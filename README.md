@@ -55,15 +55,14 @@ npx skills add citrolabs/ego-lite
 
 The first time your agent runs a browser task, it walks you through installing the ego lite app.
 
-**Let your agent install it**
+**Let your agent set it up**
 
-Paste this into your agent and it downloads and runs the macOS installer for you:
+Paste this into your agent:
 
 ```
-Install ego lite for me: download and run
-https://raw.githubusercontent.com/citrolabs/ego-lite/main/skills/ego-browser/scripts/install.sh
+Set up ego lite for me: https://github.com/citrolabs/ego-lite
 
-It installs the ego lite browser and the `ego-browser` command, then opens onboarding. Wait for me to finish onboarding, then verify with `command -v ego-browser`.
+Read `skills/ego-browser/references/install.md` and follow the steps to install ego lite.
 ```
 
 On first launch, ego lite asks one question, whether to migrate your Chrome data. Say yes and your agent inherits your existing logins, cookies, extensions, and bookmarks.
