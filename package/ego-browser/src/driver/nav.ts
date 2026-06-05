@@ -73,7 +73,7 @@ export async function pageInfo() {
  */
 export async function listTabs(options: ListTabsOptions = {}): Promise<TabInfo[]> {
   const includeChrome = options.includeChrome ?? true;
-  const result = await browserEgo().listTabs();
+  const result = assertNoEgoError(await browserEgo().listTabs(), "listTabs");
   const tabs = result.tabs || [];
   return tabs
     .filter((tab) => includeChrome || !INTERNAL_URL_PREFIXES.some((prefix) => (tab.url || "").startsWith(prefix)))
@@ -112,7 +112,10 @@ export async function switchTab(target: string | { targetId: string }) {
  * @returns {Promise<string>} New target id.
  */
 export async function newTab(url = "about:blank") {
-  const result = await browserEgo().createTab(url);
+  const result = assertNoEgoError(await browserEgo().createTab(url), "newTab");
+  if (!result.targetId) {
+    throw new Error("newTab returned no targetId");
+  }
   return result.targetId;
 }
 
@@ -201,4 +204,26 @@ function tabMatchesUrl(tabUrl: string, wantedUrl: string, match: UrlMatchMode) {
 
 function trimSlash(pathname: string) {
   return pathname.replace(/\/+$/, "") || "/";
+}
+
+function assertNoEgoError(result, op: string) {
+  if (result && typeof result === "object" && "error" in result && result.error != null) {
+    throw new Error(`${op}: ${formatEgoError(result.error)}`);
+  }
+  return result;
+}
+
+function formatEgoError(err: unknown): string {
+  if (err == null) return String(err);
+  if (typeof err === "string") return err;
+  if (typeof err === "object") {
+    const obj = err as Record<string, unknown>;
+    if (typeof obj.message === "string") return obj.message;
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
+  }
+  return String(err);
 }
