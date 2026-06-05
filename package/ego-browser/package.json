@@ -9,6 +9,7 @@
   "scripts": {
     "clean": "rm -rf dist artifacts",
     "build": "node scripts/build.mjs",
+    "e2e": "bash scripts/run-e2e.sh",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && npm run typecheck && node --test",
     "validate:learnings": "npm run build && EGO_BROWSER_AGENT_WORKSPACE=../../skills/ego-browser node dist/scripts/validate-site-skills.js",

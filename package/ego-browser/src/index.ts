@@ -57,7 +57,7 @@ export function installEgoSdk(target: InstallTarget = globalThis, options: Insta
     target.ego.helpers = installed;
     target.ego.learnings = {};
     wrapCreateTab(target.ego);
-    wrapInvalidating(target.ego, ["useTaskSpace", "closeTaskSpace", "createTaskSpace"]);
+    wrapInvalidating(target.ego, ["useTaskSpace", "closeTaskSpace", "createTaskSpace", "claimTaskSpace"]);
     exposeEgoMethods(target, target.ego);
   }
   return target;
@@ -125,7 +125,7 @@ function wrapCreateTab(ego: EgoRuntime) {
 }
 
 function exposeEgoMethods(target: InstallTarget, ego: EgoRuntime) {
-  const skip = new Set(["helpers", "learnings", "useTaskSpace", "createTaskSpace", "closeTaskSpace"]);
+  const skip = new Set(["helpers", "learnings", "useTaskSpace", "createTaskSpace", "claimTaskSpace", "closeTaskSpace"]);
   for (const key of Object.keys(ego)) {
     if (skip.has(key)) continue;
     if (key in target) continue;
