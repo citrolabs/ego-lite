@@ -167,6 +167,23 @@ Switch to a different path when it fits better; paths can be combined:
 Aim to write one complete `ego-browser nodejs` script that handles navigation, observation, scrolling, extraction, filtering, aggregation, and output in a single pass. Don't use a second local `node` script to post-process the same data.
 
 
+## Long multi-round tasks: track progress
+
+A long task spans many heredoc rounds, and it's easy to lose the thread across them — which pages you've already settled, what each one told you, what's still on the plan. Keeping an external ledger prevents repeating work and drifting off the original goal.
+
+When you judge a task to be long or complex, keep a small progress file at `.ego-browser/task-progress.md`: the goal, the plan, one-line conclusions per page, findings so far, and the next concrete action. Update it each round and treat it as the source of truth for where the task stands. It holds conclusions and state only — never raw `snapshotText` / screenshots — so it stays small and quick to consult.
+
+Create it at task start when any of these hold:
+- the task likely needs more than ~3 heredoc rounds, or spans more than ~2 pages/sites;
+- it's open-ended exploration where the page set isn't known upfront;
+- it needs a control handoff (login / captcha), so you may resume after a gap;
+- the request has multiple deliverables or a multi-step flow (multi-page form, checkout, cross-page aggregation).
+
+If you didn't create one and the task is dragging (past ~3 rounds, or you're losing track of what you've already done), create it now from current memory.
+
+Full protocol, file format, and recovery steps: `references/task-progress.md`.
+
+
 ## Caveats
 
 - `wait(...)` and `timeout` values are in **seconds**; only parameters whose names end in `Ms` are milliseconds.
