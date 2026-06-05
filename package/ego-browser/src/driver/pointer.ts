@@ -1,4 +1,5 @@
 import { cdp, js } from "../cdp-eval.js";
+import { browserCdp } from "../browser-runtime.js";
 import { elementCenter, elementEval } from "./observe.js";
 
 type MouseButton = "left" | "middle" | "right";
@@ -178,13 +179,18 @@ export async function scroll(x: number | ScrollOptions = 0, y: number | ScrollOp
     options = y;
     y = 0;
   }
-  await cdp("Input.dispatchMouseEvent", {
+  const params = {
     type: "mouseWheel",
     x: Number(x) || 0,
     y: Number(y) || 0,
     deltaX: options.dx ?? 0,
     deltaY: options.dy ?? -300
-  });
+  };
+  try {
+    await browserCdp("Input.dispatchMouseEvent", params, undefined, 1000);
+  } catch {
+    return scrollBy({ dx: params.deltaX, dy: params.deltaY });
+  }
 }
 
 /**
