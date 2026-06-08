@@ -169,19 +169,14 @@ Aim to write one complete `ego-browser nodejs` script that handles navigation, o
 
 ## Long multi-round tasks: track progress
 
-A long task spans many heredoc rounds, and it's easy to lose the thread across them — which pages you've already settled, what each one told you, what's still on the plan. Keeping an external ledger prevents repeating work and drifting off the original goal.
+When a task will span many heredoc rounds (≥~3 rounds or ~2+ pages/sites, open-ended exploration, a login/captcha handoff, or multiple deliverables), keep an external ledger at `.ego-browser/task-progress.md` so you don't repeat work or drift off-goal — create it at task start, or retroactively once a task starts dragging. Store **conclusions and state only, never raw `snapshotText` / screenshots**, so it stays small enough to re-read at a glance. The `ego-browser nodejs` heredoc is stateless and never touches this file — you maintain it with `Read` / `Write` / `Edit`, distilling each round's `cliLog`. Update it every round, re-read it when resuming, and delete it when the task is done. Format:
 
-When you judge a task to be long or complex, keep a small progress file at `.ego-browser/task-progress.md`: the goal, the plan, one-line conclusions per page, findings so far, and the next concrete action. Update it each round and treat it as the source of truth for where the task stands. It holds conclusions and state only — never raw `snapshotText` / screenshots — so it stays small and quick to consult.
-
-Create it at task start when any of these hold:
-- the task likely needs more than ~3 heredoc rounds, or spans more than ~2 pages/sites;
-- it's open-ended exploration where the page set isn't known upfront;
-- it needs a control handoff (login / captcha), so you may resume after a gap;
-- the request has multiple deliverables or a multi-step flow (multi-page form, checkout, cross-page aggregation).
-
-If you didn't create one and the task is dragging (past ~3 rounds, or you're losing track of what you've already done), create it now from current memory.
-
-Full protocol, file format, and recovery steps: `references/task-progress.md`.
+```markdown
+# <task> — status: in-progress | blocked | done   ·   space name: <useOrCreateTaskSpace name>
+## Goal — <success criterion; set once, rarely changes>
+## Plan — [x] done step · [ ] current ← you are here · [ ] next step
+## Next action — <the single concrete next step; the most important anchor>
+```
 
 
 ## Caveats
