@@ -57,12 +57,6 @@ export async function snapshotText(options: SnapshotOptions = {}) {
   return result.content || "";
 }
 
-export async function elementEval(selectorOrRef, fn, ...args) {
-  await ensureRefMapForRef(selectorOrRef);
-  const functionDeclaration = typeof fn === "function" ? fn.toString() : String(fn);
-  return evaluateBrowserElement(selectorOrRef, functionDeclaration, args);
-}
-
 export async function elementCenter(selectorOrRef) {
   await ensureRefMapForRef(selectorOrRef);
   return resolveElementCenter({ sendRaw: cdp }, undefined, browserRefMap, selectorOrRef);
@@ -116,28 +110,4 @@ export async function captureScreenshot(path = join(tmpdir(), "ego-browser-shot.
   const result = await cdp("Page.captureScreenshot", params);
   await state.writeFile(path, Buffer.from(result.data, "base64"));
   return path;
-}
-
-async function evaluateBrowserElement(selectorOrRef, functionDeclaration, args) {
-  return withHandle(selectorOrRef, async ({ objectId, sessionId }) => {
-    const response = await cdp("Runtime.callFunctionOn", {
-      functionDeclaration,
-      objectId,
-      arguments: [{ objectId }, ...args.map((value) => ({ value }))],
-      returnByValue: true,
-      awaitPromise: true
-    }, sessionId);
-    return remoteValue(response);
-  });
-}
-
-function remoteValue(response) {
-  const result = response.result || {};
-  if (Object.hasOwn(result, "value")) {
-    return result.value;
-  }
-  if (Object.hasOwn(result, "unserializableValue")) {
-    return result.unserializableValue;
-  }
-  return null;
 }

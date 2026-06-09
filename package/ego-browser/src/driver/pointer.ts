@@ -1,6 +1,7 @@
 import { cdp, js } from "../cdp-eval.js";
 import { browserCdp } from "../browser-runtime.js";
-import { elementCenter, elementEval } from "./observe.js";
+import { elementCenter } from "./observe.js";
+import { resolveAndCall } from "./element-ops.js";
 
 type MouseButton = "left" | "middle" | "right";
 type Point = {
@@ -281,13 +282,7 @@ async function resolveMouseTarget(target: MouseTarget): Promise<Point> {
       if (target.x === undefined && target.y === undefined) {
         return elementCenter(target.selector);
       }
-      const [topLeft, center] = await Promise.all([
-        elementEval(target.selector, function () {
-          const rect = this.getBoundingClientRect();
-          return { x: rect.left, y: rect.top };
-        }),
-        elementCenter(target.selector)
-      ]);
+      const [topLeft, center] = await Promise.all([elementTopLeft(target.selector), elementCenter(target.selector)]);
       return {
         x: topLeft.x + numberValue(target.x),
         y: topLeft.y + numberValue(target.y),
@@ -299,6 +294,18 @@ async function resolveMouseTarget(target: MouseTarget): Promise<Point> {
     }
   }
   throw new Error(`invalid mouse target: ${JSON.stringify(target)}`);
+}
+
+async function elementTopLeft(selectorOrRef: string): Promise<Point> {
+  const { result } = await resolveAndCall(
+    selectorOrRef,
+    "function(){const rect=this.getBoundingClientRect();return {x:rect.left,y:rect.top};}"
+  );
+  const value = result.result?.value;
+  if (typeof value?.x !== "number" || typeof value?.y !== "number") {
+    throw new Error(`element top-left unavailable: ${selectorOrRef}`);
+  }
+  return { x: value.x, y: value.y };
 }
 
 function pointFrom(point: [number, number] | { x?: number; y?: number }) {

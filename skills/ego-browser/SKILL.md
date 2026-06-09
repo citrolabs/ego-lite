@@ -36,7 +36,7 @@ The heredoc body runs in a Node.js process with direct access to all ego-browser
 - File: `uploadFile`
 - Wait: `wait`, `waitForLoad`, `waitForElement`, `waitForNetworkIdle`
 - Fetch: `serverFetch`, `browserFetch`
-- CDP / evaluate: `js`, `elementEval`, `cdp`
+- CDP / evaluate: `js`, `cdp`
 - Output: `cliLog`, `help`
 
 Notes:
@@ -161,14 +161,14 @@ Start with snapshotText + ref/loc when possible — it preserves semantic struct
 
 1. Reuse or create a task space: `const task = await useOrCreateTaskSpace(name)`.
 2. Open or switch pages: prefer `openOrReuseTab(url, { wait: true })`; use `gotoAndWait(url, { timeout, settle })` to navigate within the current tab.
-3. Observe the page: call `snapshotText()` to get a full-page semantic tree annotated with `[ref=N, loc=..., url=...]`. Refs are auto-registered in refMap, so you can immediately do `click('@N')` / `fillInput('@N', ...)` / `elementEval('@N', ...)`.
+3. Observe the page: call `snapshotText()` to get a full-page semantic tree annotated with `[ref=N, loc=..., url=...]`. Refs are auto-registered in refMap, so you can immediately do `click('@N')` / `fillInput('@N', ...)`, or use the `loc=...` value in direct DOM logic.
 4. Act or extract data: if the logic can be done in the DOM in one shot, wrap it in a browser-side closure and return once.
 5. Output the final result: use `cliLog(...)`.
 
 Switch to a different path when it fits better; paths can be combined:
 - **snapshotText + ref/loc** — default when semantic structure, labels, links, and form controls are clear.
 - **captureScreenshot + click([x, y])** — for visual layouts, canvas-like UIs, virtual lists, or pages with incomplete accessibility info.
-- **js / elementEval / cdp** — for direct DOM extraction, inspecting browser state, or when the observation helpers aren't direct enough.
+- **js / cdp** — for direct DOM extraction, inspecting browser state, or when the observation helpers aren't direct enough.
 
 Aim to write one complete `ego-browser nodejs` script that handles navigation, observation, scrolling, extraction, filtering, aggregation, and output in a single pass. Don't use a second local `node` script to post-process the same data.
 

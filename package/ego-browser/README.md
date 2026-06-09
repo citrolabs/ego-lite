@@ -66,7 +66,7 @@ src/
   element-resolver.ts    resolves @eN / CSS / XPath / ARIA targets
   driver/
     pointer.ts           click, hover, drag, scroll, scrollBy
-    observe.ts           snapshot, captureScreenshot, elementEval
+    observe.ts           snapshot, captureScreenshot, elementCenter
     keyboard.ts          typeText, pressKey, fillInput, dispatchKey
     nav.ts               tabs, gotoUrl, openOrReuseTab
     load.ts              waitForLoad and load orchestration

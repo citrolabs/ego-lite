@@ -36,7 +36,7 @@ export {
   ensureRealTab,
   iframeTarget
 } from "./driver/nav.js";
-export { snapshot, snapshotRaw, snapshotText, captureScreenshot, elementEval, elementCenter, drainEvents } from "./driver/observe.js";
+export { snapshot, snapshotRaw, snapshotText, captureScreenshot, elementCenter, drainEvents } from "./driver/observe.js";
 export { wait, waitForLoad, waitForElement, waitForNetworkIdle } from "./driver/waits.js";
 export { uploadFile } from "./driver/files.js";
 export { browserFetch, serverFetch } from "./http.js";
