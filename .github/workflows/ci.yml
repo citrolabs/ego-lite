@@ -128,7 +128,7 @@ jobs:
           release_args=()
           notes_args=()
 
-          if [[ "$release_tag" == nightly-* ]]; then
+          if [[ "$release_tag" == v*.*.*-nightly.* ]]; then
             git tag -f "$release_tag" "$commit_sha"
             git push -f origin "refs/tags/$release_tag"
           elif [ "$prerelease" = "false" ] && ! git merge-base --is-ancestor "$commit_sha" origin/main; then
