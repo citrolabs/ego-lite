@@ -71,7 +71,7 @@ jobs:
 
             version_tag="$base_version-nightly.$(date -u +%Y%m%d).$short_sha"
             release_tag="$version_tag"
-            title="Nightly $version_tag"
+            title="$version_tag"
             prerelease="true"
             latest="false"
             previous_tag="$(git tag --merged HEAD --sort=-creatordate --list 'v*.*.*-nightly.*' | grep -v "^$release_tag$" | head -1 || true)"
