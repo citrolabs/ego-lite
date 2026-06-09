@@ -316,7 +316,7 @@ Add at least one release-note label so generated releases are grouped correctly:
 
 - CI config: `.github/workflows/ci.yml`
   - Every push / PR: on Node 22 + ubuntu-latest, runs `npm ci` → `npm test` → `npm run validate:site-skills`
-  - After push to `dev`: the `release` job builds a `nightly-YYYYMMDD-SHA` prerelease
+  - After push to `dev`: the `release` job builds a `vX.Y.Z-nightly.YYYYMMDD.SHA` prerelease
   - Tags matching `vX.Y.Z-beta.N`: build a beta prerelease
   - Tags matching `vX.Y.Z`: build a stable release and mark it as latest
 - Release notes are generated automatically from merged PRs and grouped by `.github/release.yml` labels: Features, Fixes, Documentation, Maintenance, and Other Changes.
