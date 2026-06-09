@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   completeTaskSpace,
+  handOffTaskSpace,
   newTaskSpace,
   helperContext,
   listTaskSpaces,
@@ -128,6 +129,26 @@ test("switchTaskSpace rejects non-agent-owned task spaces", async () => {
     await assert.rejects(
       () => switchTaskSpace("checkout-flow"),
       /switchTaskSpace requires an agent-owned task space/
+    );
+  });
+});
+
+test("switchTaskSpace awaits useTaskSpace binding errors", async () => {
+  await withEgo({
+    async listTaskSpaces() {
+      return {
+        taskSpaces: [
+          { taskId: "checkout-flow", id: 7, name: "checkout-flow", ownership: "agent" }
+        ]
+      };
+    },
+    async useTaskSpace() {
+      return { error: "Task space not selected" };
+    }
+  }, async () => {
+    await assert.rejects(
+      () => switchTaskSpace("checkout-flow"),
+      /switchTaskSpace: Task space not selected/
     );
   });
 });
@@ -375,6 +396,115 @@ test("completeTaskSpace selects by numeric id before completing", async () => {
     ["listTaskSpaces"],
     ["useTaskSpace", 7],
     ["completeTaskSpace"]
+  ]);
+});
+
+test("completeTaskSpace waits for async useTaskSpace before completing", async () => {
+  const calls = [];
+  await withEgo({
+    async listTaskSpaces() {
+      calls.push(["listTaskSpaces"]);
+      return {
+        taskSpaces: [
+          { taskId: "checkout-flow", id: 7, name: "checkout-flow", ownership: "agent" }
+        ]
+      };
+    },
+    async useTaskSpace(id) {
+      calls.push(["useTaskSpace:start", id]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      calls.push(["useTaskSpace:end", id]);
+    },
+    async completeTaskSpace() {
+      calls.push(["completeTaskSpace"]);
+      return "7 task space completed.";
+    }
+  }, async () => {
+    await completeTaskSpace("checkout-flow", { keep: true });
+  });
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["useTaskSpace:start", 7],
+    ["useTaskSpace:end", 7],
+    ["completeTaskSpace"]
+  ]);
+});
+
+test("completeTaskSpace claims user-owned spaces before closing", async () => {
+  const calls = [];
+  await withEgo({
+    async listTaskSpaces() {
+      calls.push(["listTaskSpaces"]);
+      return {
+        taskSpaces: [
+          { taskId: "checkout-flow", id: 7, name: "checkout-flow", ownership: "user" }
+        ]
+      };
+    },
+    async claimTaskSpace(id, name) {
+      calls.push(["claimTaskSpace", id, name]);
+      return { taskId: name, id, name, ownership: "agent" };
+    },
+    async useTaskSpace(id) {
+      calls.push(["useTaskSpace", id]);
+      return id;
+    },
+    async closeTaskSpace() {
+      calls.push(["closeTaskSpace"]);
+      return "7 task space closed.";
+    }
+  }, async () => {
+    await completeTaskSpace("checkout-flow", { keep: false });
+  });
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["claimTaskSpace", 7, "checkout-flow"],
+    ["useTaskSpace", 7],
+    ["closeTaskSpace"]
+  ]);
+});
+
+test("completeTaskSpace keep true is a no-op for user-owned spaces", async () => {
+  const calls = [];
+  await withEgo({
+    async listTaskSpaces() {
+      calls.push(["listTaskSpaces"]);
+      return {
+        taskSpaces: [
+          { taskId: "checkout-flow", id: 7, name: "checkout-flow", ownership: "user" }
+        ]
+      };
+    },
+    async completeTaskSpace() {
+      calls.push(["completeTaskSpace"]);
+    }
+  }, async () => {
+    await completeTaskSpace("checkout-flow", { keep: true });
+  });
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"]
+  ]);
+});
+
+test("handOffTaskSpace is a no-op for user-owned spaces", async () => {
+  const calls = [];
+  await withEgo({
+    async listTaskSpaces() {
+      calls.push(["listTaskSpaces"]);
+      return {
+        taskSpaces: [
+          { taskId: "checkout-flow", id: 7, name: "checkout-flow", ownership: "user" }
+        ]
+      };
+    },
+    async handOffTaskSpace() {
+      calls.push(["handOffTaskSpace"]);
+    }
+  }, async () => {
+    await handOffTaskSpace("checkout-flow");
+  });
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"]
   ]);
 });
 

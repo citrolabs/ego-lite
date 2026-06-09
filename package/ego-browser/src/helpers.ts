@@ -106,37 +106,37 @@ export async function useOrCreateTaskSpace(nameOrId) {
     return selectTaskSpace(globalThis.ego, existing, "useOrCreateTaskSpace");
   }
   if (existing.ownership === "user") {
-    return claimTaskSpace(existing);
+    return claimTaskSpace(existing, "useOrCreateTaskSpace");
   }
   throw new Error(`useOrCreateTaskSpace cannot use task space ${JSON.stringify(nameOrId)} with ownership ${JSON.stringify(existing.ownership)}`);
 }
 
-async function claimTaskSpace(space) {
+async function claimTaskSpace(space, op = "claimTaskSpace") {
   const ego = globalThis.ego;
   if (!ego || typeof ego.claimTaskSpace !== "function") {
-    throw new Error("useOrCreateTaskSpace requires ego.claimTaskSpace");
+    throw new Error(`${op} requires ego.claimTaskSpace`);
   }
-  const id = taskSpaceNumericId(space, "claimTaskSpace");
-  const claimed = normalizeTaskSpace(assertNoEgoError(await ego.claimTaskSpace(id, space.name), "claimTaskSpace"));
+  const id = taskSpaceNumericId(space, op);
+  const claimed = normalizeTaskSpace(assertNoEgoError(await ego.claimTaskSpace(id, space.name), op));
   if (!claimed) {
-    throw new Error("claimTaskSpace returned an invalid task space");
+    throw new Error(`${op} returned an invalid task space`);
   }
-  taskSpaceNumericId(claimed, "claimTaskSpace");
-  return selectTaskSpace(ego, claimed, "claimTaskSpace");
+  taskSpaceNumericId(claimed, op);
+  return selectTaskSpace(ego, claimed, op);
 }
 
-function selectTaskSpace(ego, space, op: string) {
+async function selectTaskSpace(ego, space, op: string) {
   if (!ego || typeof ego.useTaskSpace !== "function") {
     throw new Error(`${op} requires ego.useTaskSpace`);
   }
-  ego.useTaskSpace(taskSpaceNumericId(space, op));
+  assertNoEgoError(await ego.useTaskSpace(taskSpaceNumericId(space, op)), op);
   return space;
 }
 
 async function selectTaskSpaceIfProvided(ego, nameOrId?: string | number, op = "taskSpace") {
   if (nameOrId === undefined) return;
   const match = await findTaskSpace(nameOrId);
-  ego.useTaskSpace(taskSpaceNumericId(match, op));
+  await selectTaskSpace(ego, match, op);
 }
 
 /**
@@ -163,13 +163,19 @@ export async function completeTaskSpace(nameOrId: string | number, options: { ke
   if (!match) {
     throw new Error(`task space not found: ${nameOrId}`);
   }
-  ego.useTaskSpace(taskSpaceNumericId(match, "completeTaskSpace"));
   if (options.keep) {
+    if (match.ownership === "user") return;
+    await selectTaskSpace(ego, match, "completeTaskSpace");
     if (typeof ego.completeTaskSpace !== "function") {
       throw new Error("completeTaskSpace requires ego.completeTaskSpace");
     }
     assertNoEgoError(await ego.completeTaskSpace(), "completeTaskSpace");
   } else {
+    if (match.ownership === "user") {
+      await claimTaskSpace(match, "completeTaskSpace");
+    } else {
+      await selectTaskSpace(ego, match, "completeTaskSpace");
+    }
     if (typeof ego.closeTaskSpace !== "function") {
       throw new Error("completeTaskSpace requires ego.closeTaskSpace");
     }
@@ -187,7 +193,11 @@ export async function handOffTaskSpace(nameOrId?: string | number) {
   if (!ego || typeof ego.handOffTaskSpace !== "function") {
     throw new Error("handOffTaskSpace requires ego.handOffTaskSpace");
   }
-  await selectTaskSpaceIfProvided(ego, nameOrId, "handOffTaskSpace");
+  if (nameOrId !== undefined) {
+    const match = await findTaskSpace(nameOrId);
+    if (match.ownership === "user") return;
+    await selectTaskSpace(ego, match, "handOffTaskSpace");
+  }
   assertNoEgoError(await ego.handOffTaskSpace(), "handOffTaskSpace");
 }
 
