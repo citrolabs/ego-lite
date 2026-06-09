@@ -53,16 +53,22 @@ Notes:
 
 A task space is an **isolated browsing context** that ego-browser provides for AI Agents. Each task space has its own set of tabs but **inherits the current user's login state** by default, so Agents can operate on authenticated sites without competing with or disturbing the user's normal browser windows.
 
-A task often takes multiple heredoc rounds to complete. Because the Node.js runtime exits after each heredoc and retains no state, every heredoc you emit should start with an explicit call to `useOrCreateTaskSpace(name)` to reuse the same space — this lets you operate continuously and reuse tabs across rounds.
+A task often takes multiple heredoc rounds to complete. Because the Node.js runtime exits after each heredoc and retains no state, every heredoc you emit should start with an explicit call to `useOrCreateTaskSpace(nameOrId)` to reuse the same space — this lets you operate continuously and reuse tabs across rounds.
 
-**`completeTaskSpace(name, { keep })` must occupy its own dedicated final heredoc, and run only after a prior heredoc's output has confirmed the task is genuinely done.** `keep` is required: pass `false` to close the space, or `true` to leave the page visible to the user:
+**`completeTaskSpace(nameOrId, { keep })` must occupy its own dedicated final heredoc, and run only after a prior heredoc's output has confirmed the task is genuinely done.** `keep` is required: pass `false` to close the space, or `true` to leave the page visible to the user.
+
+`nameOrId` can be a task space name, numeric id, or numeric id string. For string values, matching prefers `name`/`taskId` first, then falls back to numeric id. For numeric values, matching is by numeric id only.
+
+Prefer using the numeric `id` returned by `useOrCreateTaskSpace` (for example, `task.id`) to resume a known task in later rounds and avoid name collisions.
+
+**Only call `completeTaskSpace(nameOrId, { keep })` in the final heredoc round of the task** — do not call it in intermediate rounds. `keep` is required: pass `false` to close the space, or `true` to leave the page visible to the user:
 
 ```js
-await completeTaskSpace(name, { keep: false })  // close the space
-await completeTaskSpace(name, { keep: true })   // keep the page for the user
+await completeTaskSpace(nameOrId, { keep: false })  // close the space
+await completeTaskSpace(nameOrId, { keep: true })   // keep the page for the user
 ```
 
-`name` should reflect the task's intent (e.g. `'search github issues'`); don't use literal placeholders.
+`nameOrId` should still reflect the task's intent (e.g. `'search github issues'`) when a new space name is used.
 
 Keep loose awareness of how many tabs are open — a quick `(await listTabs()).length` is enough; there's no need to spend a dedicated round just to check. When scratch tabs (search-result pages, cross-check pages, and other one-off pages) pile up, close them as you go rather than letting them all accumulate for the end. When finishing with `{ keep: true }` to leave pages for the user, clear out the remaining scratch tabs so only the pages worth showing stay open. Close a single tab with `await cdp('Target.closeTarget', { targetId })` (`targetId` comes from `listTabs()` or an `openOrReuseTab` return value).
 
@@ -71,21 +77,21 @@ Keep loose awareness of how many tabs are open — a quick `(await listTabs()).l
 
 Only one side — agent or user — holds control of a task space at any time.
 
-**Handing off**: When the task requires user intervention (e.g. login, captcha, manual confirmation), call `handOffTaskSpace(name)` to give control to the user. After handoff, any browser operation by the agent will fail with a "user is controlling" message.
+**Handing off**: When the task requires user intervention (e.g. login, captcha, manual confirmation), call `handOffTaskSpace(nameOrId)` to give control to the user. After handoff, any browser operation by the agent will fail with a "user is controlling" message.
 
 **Regaining control** — two paths:
 
-1. **User says "continue" in chat** → call `takeOverTaskSpace(name)` to take back control, then continue. `takeOverTaskSpace` is idempotent — safe to call even if the user already returned control via GUI.
-2. **User returns via browser GUI** (without chatting) → the agent receives no notification. Use `waitForAgentControl(name)` to block until control comes back; once it returns, you can operate directly without calling `takeOverTaskSpace`.
+1. **User says "continue" in chat** → call `takeOverTaskSpace(nameOrId)` to take back control, then continue. `takeOverTaskSpace` is idempotent — safe to call even if the user already returned control via GUI.
+2. **User returns via browser GUI** (without chatting) → the agent receives no notification. Use `waitForAgentControl(nameOrId)` to block until control comes back; once it returns, you can operate directly without calling `takeOverTaskSpace`.
 
 **Waiting for control handback example**:
 
 ```js
-await handOffTaskSpace(name)
+await handOffTaskSpace(nameOrId)
 cliLog('Please complete the login')
 
-await waitForAgentControl(name)              // polls every 20s by default, 10-minute timeout
-// await waitForAgentControl(name, { interval: 10, timeout: 300 })
+await waitForAgentControl(nameOrId)              // polls every 20s by default, 10-minute timeout
+// await waitForAgentControl(nameOrId, { interval: 10, timeout: 300 })
 // continue working...
 ```
 
