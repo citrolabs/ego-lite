@@ -55,13 +55,11 @@ A task space is an **isolated browsing context** that ego-browser provides for A
 
 A task often takes multiple heredoc rounds to complete. Because the Node.js runtime exits after each heredoc and retains no state, every heredoc you emit should start with an explicit call to `useOrCreateTaskSpace(nameOrId)` to reuse the same space — this lets you operate continuously and reuse tabs across rounds.
 
-**`completeTaskSpace(nameOrId, { keep })` must occupy its own dedicated final heredoc, and run only after a prior heredoc's output has confirmed the task is genuinely done.** `keep` is required: pass `false` to close the space, or `true` to leave the page visible to the user.
-
 `nameOrId` can be a task space name, numeric id, or numeric id string. For string values, matching prefers `name`/`taskId` first, then falls back to numeric id. For numeric values, matching is by numeric id only.
 
 Prefer using the numeric `id` returned by `useOrCreateTaskSpace` (for example, `task.id`) to resume a known task in later rounds and avoid name collisions.
 
-**Only call `completeTaskSpace(nameOrId, { keep })` in the final heredoc round of the task** — do not call it in intermediate rounds. `keep` is required: pass `false` to close the space, or `true` to leave the page visible to the user:
+**`completeTaskSpace(nameOrId, { keep })` must occupy its own dedicated final heredoc, and run only after a prior heredoc's output has confirmed the task is genuinely done.** Do not call it in intermediate rounds. `keep` is required: pass `false` to close the space, or `true` to leave the page visible to the user:
 
 ```js
 await completeTaskSpace(nameOrId, { keep: false })  // close the space
