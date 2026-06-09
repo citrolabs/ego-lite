@@ -298,6 +298,9 @@ A PR description should include at minimum:
 3. **How to verify** — repro / verification steps; attach screenshots or heredoc examples for UI behavior
 4. Impact callout (does it touch the helper surface? does the agent side need updates?)
 
+Add at least one release-note label so generated releases are grouped correctly:
+`feat` / `fix` / `docs` / `chore` / `ci` / `refactor`.
+
 ### Review Checklist
 
 - [ ] `npm test` is green
@@ -313,8 +316,11 @@ A PR description should include at minimum:
 
 - CI config: `.github/workflows/ci.yml`
   - Every push / PR: on Node 22 + ubuntu-latest, runs `npm ci` → `npm test` → `npm run validate:site-skills`
-  - After push to `main`: the `release` job rebuilds `artifacts/ego-browser/index.js` and **force-updates** the GitHub Release tagged `latest`
-- So "releasing" = merging to `main`. Release through PRs — do not hand-push tags.
+  - After push to `dev`: the `release` job builds a `nightly-YYYYMMDD-SHA` prerelease
+  - Tags matching `vX.Y.Z-beta.N`: build a beta prerelease
+  - Tags matching `vX.Y.Z`: build a stable release and mark it as latest
+- Release notes are generated automatically from merged PRs and grouped by `.github/release.yml` labels: Features, Fixes, Documentation, Maintenance, and Other Changes.
+- Normal flow: merge features into `dev` for nightly, cut beta tags from `dev`, then merge `dev` to `main` and cut stable `vX.Y.Z` tags from `main`.
 - The build script `scripts/build.mjs` uses `.build.lock` to prevent concurrent builds.
 
 ---

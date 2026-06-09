@@ -3,11 +3,10 @@ name: CI
 on:
   push:
     branches:
+      - dev
       - main
     tags:
-      - "*"
-      - "!last"
-      - "!latest"
+      - "v*.*.*"
   pull_request:
 
 jobs:
@@ -28,13 +27,14 @@ jobs:
       - run: npm run validate:site-skills
 
   release:
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.ref_name != 'last' && github.ref_name != 'latest'
+    if: github.event_name == 'push' && (github.ref_name == 'dev' || startsWith(github.ref, 'refs/tags/v'))
     needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: write
     defaults:
       run:
+        shell: bash
         working-directory: package/ego-browser
     steps:
       - uses: actions/checkout@v4
@@ -47,34 +47,113 @@ jobs:
           cache-dependency-path: package/ego-browser/package-lock.json
       - run: npm ci
       - run: npm run build
-      - name: Package release payload
+      - name: Resolve release channel
+        id: release
         run: |
-          version_tag="${GITHUB_REF_NAME}"
+          ref_name="${GITHUB_REF_NAME}"
+          short_sha="$(git rev-parse --short HEAD)"
+          supported="true"
+          previous_tag=""
+
+          if [ "$ref_name" = "dev" ]; then
+            version_tag="nightly-$(date -u +%Y%m%d)-$short_sha"
+            release_tag="$version_tag"
+            title="Nightly $version_tag"
+            prerelease="true"
+            latest="false"
+            previous_tag="$(git tag --merged HEAD --sort=-creatordate --list 'nightly-*' | grep -v "^$release_tag$" | head -1 || true)"
+          elif [[ "$ref_name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
+            release_tag="$ref_name"
+            version_tag="$ref_name"
+            title="Beta $ref_name"
+            prerelease="true"
+            latest="false"
+            previous_tag="$(git tag --merged HEAD --sort=-creatordate --list 'v*.*.*-beta.*' | grep -v "^$release_tag$" | head -1 || true)"
+          elif [[ "$ref_name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            release_tag="$ref_name"
+            version_tag="$ref_name"
+            title="ego lite $ref_name"
+            prerelease="false"
+            latest="true"
+            previous_tag="$(git tag --merged HEAD --sort=-creatordate --list 'v*.*.*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v "^$release_tag$" | head -1 || true)"
+          else
+            echo "Unsupported release ref: $ref_name"
+            supported="false"
+          fi
+
+          {
+            echo "supported=$supported"
+            echo "release_tag=$release_tag"
+            echo "version_tag=$version_tag"
+            echo "title=$title"
+            echo "prerelease=$prerelease"
+            echo "latest=$latest"
+            echo "previous_tag=$previous_tag"
+          } >> "$GITHUB_OUTPUT"
+      - name: Package release payload
+        if: steps.release.outputs.supported == 'true'
+        run: |
+          version_tag="${{ steps.release.outputs.version_tag }}"
           cd dist/out
           zip -r "../ego-browser-${version_tag}.zip" .
-      - name: Create tag release
+      - name: Create release
+        if: steps.release.outputs.supported == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd "$GITHUB_WORKSPACE"
 
-          version_tag="${GITHUB_REF_NAME}"
+          release_tag="${{ steps.release.outputs.release_tag }}"
+          version_tag="${{ steps.release.outputs.version_tag }}"
+          title="${{ steps.release.outputs.title }}"
+          prerelease="${{ steps.release.outputs.prerelease }}"
+          latest="${{ steps.release.outputs.latest }}"
+          previous_tag="${{ steps.release.outputs.previous_tag }}"
           commit_sha="$(git rev-parse HEAD)"
-          short_sha="$(git rev-parse --short HEAD)"
           artifact="package/ego-browser/dist/ego-browser-${version_tag}.zip"
+          notes_file="$(mktemp)"
+          release_args=()
+          notes_args=()
 
-          if ! git merge-base --is-ancestor "$commit_sha" origin/main; then
-            echo "Release tags must point to commits reachable from main."
+          if [[ "$release_tag" == nightly-* ]]; then
+            git tag -f "$release_tag" "$commit_sha"
+            git push -f origin "refs/tags/$release_tag"
+          elif [ "$prerelease" = "false" ] && ! git merge-base --is-ancestor "$commit_sha" origin/main; then
+            echo "Stable release tags must point to commits reachable from main."
             exit 1
           fi
 
-          if gh release view "$version_tag" >/dev/null 2>&1; then
-            echo "Release $version_tag already exists; leaving it unchanged."
+          if [ "$prerelease" = "true" ]; then
+            release_args+=(--prerelease)
+          fi
+
+          if [ "$latest" = "true" ]; then
+            release_args+=(--latest)
           else
-            gh release create "$version_tag" \
-              --title "$version_tag" \
-              --notes "Auto-built from $version_tag ($short_sha)" \
+            release_args+=(--latest=false)
+          fi
+
+          if [ -n "$previous_tag" ]; then
+            notes_args+=(-f "previous_tag_name=$previous_tag")
+          fi
+
+          gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$release_tag" \
+            -f target_commitish="$commit_sha" \
+            "${notes_args[@]}" \
+            --jq .body > "$notes_file"
+
+          if gh release view "$release_tag" >/dev/null 2>&1; then
+            gh release edit "$release_tag" \
+              --title "$title" \
+              --notes-file "$notes_file" \
+              "${release_args[@]}"
+            gh release upload "$release_tag" "$artifact" --clobber
+          else
+            gh release create "$release_tag" \
+              --title "$title" \
+              --notes-file "$notes_file" \
               --verify-tag \
-              --latest=false \
+              "${release_args[@]}" \
               "$artifact"
           fi
