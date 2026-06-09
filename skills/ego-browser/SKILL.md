@@ -53,16 +53,22 @@ Notes:
 
 A task space is an **isolated browsing context** that ego-browser provides for AI Agents. Each task space has its own set of tabs but **inherits the current user's login state** by default, so Agents can operate on authenticated sites without competing with or disturbing the user's normal browser windows.
 
-A task often takes multiple heredoc rounds to complete. Because the Node.js runtime exits after each heredoc and retains no state, every heredoc you emit should start with an explicit call to `useOrCreateTaskSpace(name)` to reuse the same space — this lets you operate continuously and reuse tabs across rounds.
+A task often takes multiple heredoc rounds to complete. Because the Node.js runtime exits after each heredoc and retains no state, normal working heredocs should start with an explicit call to `useOrCreateTaskSpace(nameOrId)` to reuse the same space — this lets you operate continuously and reuse tabs across rounds. The exception is resuming after a user handoff: when the user says "continue" in chat, start the next heredoc with `takeOverTaskSpace(nameOrId)` instead.
 
-**`completeTaskSpace(name, { keep })` must occupy its own dedicated final heredoc, and run only after a prior heredoc's output has confirmed the task is genuinely done.** `keep` is required: pass `false` to close the space, or `true` to leave the page visible to the user:
+`nameOrId` can be a task space name, numeric id, or digit-only numeric id string. String values match `name`/`taskId` first, then digit-only strings fall back to numeric id. Number values match existing numeric ids only; if no matching id exists, `useOrCreateTaskSpace` fails instead of creating a new space.
+
+Use a descriptive string name for a new task space. Prefer using the numeric `id` returned by `useOrCreateTaskSpace` (for example, `task.id`) to resume a known task in later rounds and avoid name collisions.
+
+To continue work from an existing user-owned task space, use `listTaskSpaces()` to find the space, call `useOrCreateTaskSpace(id)` to claim it, then use `listTabs()` and `switchTab(targetId)` to select the exact tab before acting. This is different from resuming a handoff from your own prior task space, which starts with `takeOverTaskSpace(nameOrId)`.
+
+**`completeTaskSpace(nameOrId, { keep })` must occupy its own dedicated final heredoc, and run only after a prior heredoc's output has confirmed the task is genuinely done.** `keep` is required: pass `false` to close the space, or `true` to complete the space and leave the page visible to the user:
 
 ```js
-await completeTaskSpace(name, { keep: false })  // close the space
-await completeTaskSpace(name, { keep: true })   // keep the page for the user
+await completeTaskSpace(nameOrId, { keep: false })  // close the space
+await completeTaskSpace(nameOrId, { keep: true })   // keep the page for the user
 ```
 
-`name` should reflect the task's intent (e.g. `'search github issues'`); don't use literal placeholders.
+When passing a string that may create a new task space, the string should reflect the task's intent (e.g. `'search github issues'`); don't use literal placeholders.
 
 Keep loose awareness of how many tabs are open — a quick `(await listTabs()).length` is enough; there's no need to spend a dedicated round just to check. When scratch tabs (search-result pages, cross-check pages, and other one-off pages) pile up, close them as you go rather than letting them all accumulate for the end. When finishing with `{ keep: true }` to leave pages for the user, clear out the remaining scratch tabs so only the pages worth showing stay open. Close a single tab with `await cdp('Target.closeTarget', { targetId })` (`targetId` comes from `listTabs()` or an `openOrReuseTab` return value).
 
@@ -71,21 +77,21 @@ Keep loose awareness of how many tabs are open — a quick `(await listTabs()).l
 
 Only one side — agent or user — holds control of a task space at any time.
 
-**Handing off**: When the task requires user intervention (e.g. login, captcha, manual confirmation), call `handOffTaskSpace(name)` to give control to the user. After handoff, any browser operation by the agent will fail with a "user is controlling" message.
+**Handing off**: When the task requires user intervention (e.g. login, captcha, manual confirmation), call `handOffTaskSpace([nameOrId])` to give control to the user. Omitting `nameOrId` uses the currently selected task space; pass `task.id` across heredoc rounds to avoid ambiguity. After handoff, any browser operation by the agent will fail with a "user is controlling" message.
 
 **Regaining control** — two paths:
 
-1. **User says "continue" in chat** → call `takeOverTaskSpace(name)` to take back control, then continue. `takeOverTaskSpace` is idempotent — safe to call even if the user already returned control via GUI.
-2. **User returns via browser GUI** (without chatting) → the agent receives no notification. Use `waitForAgentControl(name)` to block until control comes back; once it returns, you can operate directly without calling `takeOverTaskSpace`.
+1. **User says "continue" in chat** → call `takeOverTaskSpace([nameOrId])` to take back control, then continue. Omitting `nameOrId` uses the currently selected task space. `takeOverTaskSpace` is idempotent — safe to call even if the user already returned control via GUI.
+2. **User returns via browser GUI** (without chatting) → the agent receives no notification. Use `waitForAgentControl(nameOrId)` to block until control comes back; once it returns, you can operate directly without calling `takeOverTaskSpace`.
 
 **Waiting for control handback example**:
 
 ```js
-await handOffTaskSpace(name)
+await handOffTaskSpace(nameOrId)
 cliLog('Please complete the login')
 
-await waitForAgentControl(name)              // polls every 20s by default, 10-minute timeout
-// await waitForAgentControl(name, { interval: 10, timeout: 300 })
+await waitForAgentControl(nameOrId)              // polls every 20s by default, 10-minute timeout
+// await waitForAgentControl(nameOrId, { interval: 10, timeout: 300 })
 // continue working...
 ```
 
