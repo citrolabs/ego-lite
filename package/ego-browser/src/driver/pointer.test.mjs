@@ -44,6 +44,29 @@ test("click resolves selector offsets without the public elementEval helper", as
   ]);
 });
 
+test("scroll defaults to scrolling down (positive deltaY, DOM wheel convention)", async () => {
+  // Regression: the default used to be deltaY -300, which scrolls UP — CDP
+  // negates wheel deltas internally, so the DOM convention (positive = down)
+  // applies end to end. SKILL.md documents scroll({ dy: 900 }) as a downward
+  // scroll, matching scrollBy / scrollToBottomUntil.
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      calls.push({ method, params });
+      return {};
+    }
+  });
+  try {
+    await scroll();
+  } finally {
+    restore();
+  }
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "Input.dispatchMouseEvent");
+  assert.equal(calls[0].params.deltaY, 300);
+  assert.equal(calls[0].params.deltaX, 0);
+});
+
 test("scroll falls back to DOM scrolling when mouseWheel dispatch fails", async () => {
   const calls = [];
   const restore = setOverrides({

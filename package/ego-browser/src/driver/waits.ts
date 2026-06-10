@@ -76,6 +76,12 @@ export async function waitForElement(selector: string, options: WaitForElementOp
 
 /**
  * Wait until network events are idle.
+ * Enables the CDP Network domain for the duration of the wait so that network
+ * events are actually delivered (previously nothing enabled the domain, so this
+ * could report "idle" without ever observing traffic). If the caller had
+ * already enabled the domain, it is left enabled on return. Best-effort: if
+ * the runtime does not deliver Network events, an idle window of idleMs still
+ * resolves true.
  * @param {{timeout?: number, idleMs?: number}} [options]
  * @returns {Promise<boolean>} True when idle before timeout.
  */
@@ -85,24 +91,36 @@ export async function waitForNetworkIdle(options: WaitForNetworkIdleOptions = {}
   const deadline = state.now() + timeout * 1000;
   let lastActivity = state.now();
   const inflight = new Set();
-  while (state.now() < deadline) {
-    for (const event of await drainEvents()) {
-      const method = event.method || "";
-      const params = event.params || {};
-      if (method === "Network.requestWillBeSent") {
-        inflight.add(params.requestId);
-        lastActivity = state.now();
-      } else if (method === "Network.loadingFinished" || method === "Network.loadingFailed") {
-        inflight.delete(params.requestId);
-        lastActivity = state.now();
-      } else if (method.startsWith("Network.")) {
-        lastActivity = state.now();
+  const ownsNetworkDomain = !state.networkDomainEnabled;
+  await cdp("Network.enable").catch(() => {
+    // Domain may be unsupported by the bridge; fall back to passive observation.
+  });
+  try {
+    while (state.now() < deadline) {
+      for (const event of await drainEvents()) {
+        const method = event.method || "";
+        const params = event.params || {};
+        if (method === "Network.requestWillBeSent") {
+          inflight.add(params.requestId);
+          lastActivity = state.now();
+        } else if (method === "Network.loadingFinished" || method === "Network.loadingFailed") {
+          inflight.delete(params.requestId);
+          lastActivity = state.now();
+        } else if (method.startsWith("Network.")) {
+          lastActivity = state.now();
+        }
       }
+      if (inflight.size === 0 && state.now() - lastActivity >= idleMs) {
+        return true;
+      }
+      await state.sleep(100);
     }
-    if (inflight.size === 0 && state.now() - lastActivity >= idleMs) {
-      return true;
+    return false;
+  } finally {
+    if (ownsNetworkDomain) {
+      await cdp("Network.disable").catch(() => {
+        // Best-effort cleanup; keeps the event buffer from accumulating after the wait.
+      });
     }
-    await state.sleep(100);
   }
-  return false;
 }

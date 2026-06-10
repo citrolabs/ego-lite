@@ -32,7 +32,13 @@ export async function resolveElementCenter(cdp, sessionId, refMap, selectorOrRef
       try {
         const result = await send(cdp, "DOM.getBoxModel", { backendNodeId: entry.backendNodeId }, effectiveSessionId);
         return { ...boxModelCenter(result.model), sessionId: effectiveSessionId };
-      } catch {
+      } catch (error) {
+        if (error instanceof ElementResolutionError) {
+          // The node resolved but has no usable box model (not rendered yet).
+          // Propagate the retryable state instead of falling back to role/name,
+          // which could silently target a different node with the same label.
+          throw error;
+        }
         // The backend node can become stale after DOM updates; fall back to role/name lookup below.
       }
     }
@@ -344,7 +350,10 @@ function parseLocatorName(raw) {
 function boxModelCenter(model: any = {}) {
   const content = model.content || [];
   if (content.length < 8) {
-    return { x: 0, y: 0 };
+    // Returning a fake (0,0) here would silently click the viewport corner.
+    // Treat a missing/degenerate box model as "element not ready" so callers
+    // with retry semantics (waitForElement, ref fallback) can poll.
+    throw new ElementResolutionError("Element has no box model (not rendered or zero-sized)", "transient");
   }
   return {
     x: (content[0] + content[2] + content[4] + content[6]) / 4,

@@ -1,10 +1,8 @@
 export class RefMap {
   map: Map<string, any>;
-  nextRef: number;
 
   constructor() {
     this.map = new Map();
-    this.nextRef = 1;
   }
 
   add(refId, backendNodeId, role, name, nth = undefined) {
@@ -22,23 +20,8 @@ export class RefMap {
     });
   }
 
-  addSelector(refId, selector, role, name, nth = undefined) {
-    this.map.set(refId, {
-      backendNodeId: undefined,
-      role,
-      name,
-      nth,
-      selector,
-      frameId: undefined
-    });
-  }
-
   get(refId) {
     return this.map.get(refId);
-  }
-
-  entriesSorted() {
-    return [...this.map.entries()].sort(([left], [right]) => refSortKey(left) - refSortKey(right));
   }
 
   remove(refId) {
@@ -47,15 +30,6 @@ export class RefMap {
 
   clear() {
     this.map.clear();
-    this.nextRef = 1;
-  }
-
-  nextRefNum() {
-    return this.nextRef;
-  }
-
-  setNextRefNum(value) {
-    this.nextRef = value;
   }
 }
 
@@ -71,9 +45,4 @@ export function parseRef(input) {
     }
   }
   return null;
-}
-
-function refSortKey(refId) {
-  const match = /^(\d+)$/.exec(refId);
-  return match ? Number(match[1]) : Number.MAX_SAFE_INTEGER;
 }

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { setOverrides, state } from "./state.js";
+import { assertNoEgoError } from "./ego-errors.js";
 import { help as helpRuntime, formatHelp } from "./help-runtime.js";
 import { cdp, decodeUnserializableJsValue, js } from "./cdp-eval.js";
 import * as pointer from "./driver/pointer.js";
@@ -36,7 +37,7 @@ export {
   ensureRealTab,
   iframeTarget
 } from "./driver/nav.js";
-export { snapshot, snapshotRaw, snapshotText, captureScreenshot, elementCenter, drainEvents } from "./driver/observe.js";
+export { snapshot, snapshotRaw, snapshotText, captureScreenshot, elementCenter, fillElement, drainEvents } from "./driver/observe.js";
 export { wait, waitForLoad, waitForElement, waitForNetworkIdle } from "./driver/waits.js";
 export { uploadFile } from "./driver/files.js";
 export { browserFetch, serverFetch } from "./http.js";
@@ -213,28 +214,6 @@ export async function takeOverTaskSpace(nameOrId?: string | number) {
   }
   await selectTaskSpaceIfProvided(ego, nameOrId, "takeOverTaskSpace");
   assertNoEgoError(await ego.takeOverTaskSpace(), "takeOverTaskSpace");
-}
-
-function assertNoEgoError(result, op: string) {
-  if (result && typeof result === "object" && "error" in result && result.error != null) {
-    throw new Error(`${op}: ${formatEgoError(result.error)}`);
-  }
-  return result;
-}
-
-function formatEgoError(err: unknown): string {
-  if (err == null) return String(err);
-  if (typeof err === "string") return err;
-  if (typeof err === "object") {
-    const obj = err as Record<string, unknown>;
-    if (typeof obj.message === "string") return obj.message;
-    try {
-      return JSON.stringify(err);
-    } catch {
-      return String(err);
-    }
-  }
-  return String(err);
 }
 
 function isUserControlError(err: unknown) {

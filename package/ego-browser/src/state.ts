@@ -27,7 +27,9 @@ export const state = {
   sessionTargetId: null,
   sessionAt: 0,
   sessionInflight: null,
-  preferredTargetId: null
+  preferredTargetId: null,
+  // Last observed Network domain state on the default session (tracked in cdp()).
+  networkDomainEnabled: false
 };
 
 export async function send(req) {

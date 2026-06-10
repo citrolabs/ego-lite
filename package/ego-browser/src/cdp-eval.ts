@@ -12,11 +12,16 @@ let hasWarnedAboutFunctionJs = false;
  * @returns {Promise<object>} CDP result object.
  */
 export async function cdp(method, params: any = {}, sessionId = undefined) {
-  if (state.cdpOverride) {
-    return state.cdpOverride(method, params, sessionId);
+  const result = state.cdpOverride
+    ? await state.cdpOverride(method, params, sessionId)
+    : (await send({ method, params, session_id: sessionId })).result || {};
+  if (!sessionId && (method === "Network.enable" || method === "Network.disable")) {
+    // Mirror the default session's Network domain state so helpers like
+    // waitForNetworkIdle can restore it instead of tearing down a domain
+    // the caller still relies on for drainEvents().
+    state.networkDomainEnabled = method === "Network.enable";
   }
-  const response = await send({ method, params, session_id: sessionId });
-  return response.result || {};
+  return result;
 }
 
 /**

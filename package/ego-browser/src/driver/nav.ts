@@ -1,5 +1,6 @@
 import { browserEgo, clearPreferredTarget, ensureSession, invalidateSession, isBrowserRuntime, pendingDialog, setPreferredTarget } from "../browser-runtime.js";
 import { cdp, js } from "../cdp-eval.js";
+import { assertNoEgoError } from "../ego-errors.js";
 import { state } from "../state.js";
 import { waitForDocumentLoad } from "./load.js";
 
@@ -233,26 +234,4 @@ function tabMatchesUrl(tabUrl: string, wantedUrl: string, match: UrlMatchMode) {
 
 function trimSlash(pathname: string) {
   return pathname.replace(/\/+$/, "") || "/";
-}
-
-function assertNoEgoError(result, op: string) {
-  if (result && typeof result === "object" && "error" in result && result.error != null) {
-    throw new Error(`${op}: ${formatEgoError(result.error)}`);
-  }
-  return result;
-}
-
-function formatEgoError(err: unknown): string {
-  if (err == null) return String(err);
-  if (typeof err === "string") return err;
-  if (typeof err === "object") {
-    const obj = err as Record<string, unknown>;
-    if (typeof obj.message === "string") return obj.message;
-    try {
-      return JSON.stringify(err);
-    } catch {
-      return String(err);
-    }
-  }
-  return String(err);
 }

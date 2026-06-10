@@ -2,6 +2,9 @@ import { state } from "./state.js";
 
 const RESPONSE_TIMEOUT_MS = 15000;
 const SESSION_TTL_MS = 2000;
+// Upper bound for buffered CDP events. The runtime can be long-lived (installEgoSdk
+// inside the browser); without a cap, undrained events grow without bound.
+const MAX_BUFFERED_EVENTS = 10000;
 const SESSION_LOST = /Session (?:with given id )?not found|Target closed|No session/i;
 const BROWSER_LEVEL = (method) => method.startsWith("Target.") || method.startsWith("Browser.");
 let nextMessageId = 1;
@@ -196,6 +199,9 @@ function handleMessage(message) {
     }
   }
   events.push(data);
+  if (events.length > MAX_BUFFERED_EVENTS) {
+    events.splice(0, events.length - MAX_BUFFERED_EVENTS);
+  }
 }
 
 export function browserSnapshotRefsToRefMap(refMap, refs = []) {

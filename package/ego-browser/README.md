@@ -10,11 +10,11 @@ ego-browser (Chromium) → globalThis.ego → helper functions → agent heredoc
 
 ```bash
 npm ci
-npm run build     # bundle to artifacts/ego-browser/index.js
+npm run build     # bundle to dist/out/index.js
 npm test          # build + tsc --noEmit + node --test
 ```
 
-The build emits a single ESM file `artifacts/ego-browser/index.js`. The ego-browser browser dispatches `ego-browser nodejs <<'EOF' ... EOF` heredocs to that bundle. Inside the heredoc, all helpers (`snapshotText`, `click`, `useOrCreateTaskSpace`, ...) are pre-imported in camelCase.
+The build emits a single ESM file `dist/out/index.js`. The ego-browser browser dispatches `ego-browser nodejs <<'EOF' ... EOF` heredocs to that bundle. Inside the heredoc, all helpers (`snapshotText`, `click`, `useOrCreateTaskSpace`, ...) are pre-imported in camelCase.
 
 ```bash
 ego-browser nodejs <<'EOF'
@@ -27,7 +27,7 @@ EOF
 Local invocation without the browser (for debugging the helper bundle itself) reads stdin:
 
 ```bash
-node artifacts/ego-browser/index.js <<'JS'
+node dist/out/index.js <<'JS'
 cliLog(await pageInfo())
 JS
 ```

@@ -24,6 +24,9 @@ export * from "./helpers.js";
 export { runMain } from "./run.js";
 
 const SYNC_HELPERS = new Set(["help"]);
+// Marks an ego runtime whose mutating methods have already been wrapped, so a
+// second installEgoSdk call cannot double-wrap createTab / task-space methods.
+const EGO_WRAPPED = Symbol.for("egoBrowser.sdkWrapped");
 
 export function installEgoSdk(target: InstallTarget = globalThis, options: InstallEgoSdkOptions = {}) {
   if (!target || typeof target !== "object") {
@@ -56,8 +59,11 @@ export function installEgoSdk(target: InstallTarget = globalThis, options: Insta
   if (target.ego && typeof target.ego === "object") {
     target.ego.helpers = installed;
     target.ego.learnings = {};
-    wrapCreateTab(target.ego);
-    wrapInvalidating(target.ego, ["useTaskSpace", "closeTaskSpace", "createTaskSpace", "claimTaskSpace"]);
+    if (!(target.ego as Record<symbol, unknown>)[EGO_WRAPPED]) {
+      wrapCreateTab(target.ego);
+      wrapInvalidating(target.ego, ["useTaskSpace", "closeTaskSpace", "createTaskSpace", "claimTaskSpace"]);
+      Object.defineProperty(target.ego, EGO_WRAPPED, { value: true, enumerable: false });
+    }
     exposeEgoMethods(target, target.ego);
   }
   return target;

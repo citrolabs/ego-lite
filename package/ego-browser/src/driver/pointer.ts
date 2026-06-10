@@ -165,10 +165,14 @@ export async function dragMouse(points: MouseTarget[], options: DragMouseOptions
 }
 
 /**
- * Scroll by wheel coordinates.
+ * Scroll by dispatching a CDP mouse wheel event.
+ * Sign convention follows DOM WheelEvent: positive dy scrolls down, negative dy scrolls up
+ * (CDP negates deltas internally when building the Blink wheel event, so the DOM convention
+ * applies end to end). Defaults to scrolling down by 300 CSS pixels, matching the downward
+ * defaults of scrollBy and scrollToBottomUntil.
  * @param {number|{x?:number,y?:number,dx?:number,dy?:number}} [x=0] Viewport x, or scroll options.
  * @param {number|{dx?: number, dy?: number}} [y=0] Viewport y, or scroll delta options.
- * @param {{dx?: number, dy?: number}} [options]
+ * @param {{dx?: number, dy?: number}} [options] Deltas in CSS pixels; positive dy scrolls down.
  * @returns {Promise<void>}
  */
 export async function scroll(x: number | ScrollOptions = 0, y: number | ScrollOptions = 0, options: ScrollOptions = {}) {
@@ -185,7 +189,7 @@ export async function scroll(x: number | ScrollOptions = 0, y: number | ScrollOp
     x: Number(x) || 0,
     y: Number(y) || 0,
     deltaX: options.dx ?? 0,
-    deltaY: options.dy ?? -300
+    deltaY: options.dy ?? 300
   };
   try {
     await browserCdp("Input.dispatchMouseEvent", params, undefined, 1000);
@@ -195,8 +199,9 @@ export async function scroll(x: number | ScrollOptions = 0, y: number | ScrollOp
 }
 
 /**
- * Scroll the window with DOM APIs.
- * @param {number|{dx?:number,dy?:number,left?:number,top?:number,behavior?: ScrollBehavior}} [amount=900] Vertical pixels, or scroll options.
+ * Scroll the window with DOM APIs. Positive dy scrolls down, negative dy scrolls up
+ * (same sign convention as scroll()).
+ * @param {number|{dx?:number,dy?:number,left?:number,top?:number,behavior?: ScrollBehavior}} [amount=900] Vertical pixels (positive scrolls down), or scroll options.
  * @param {{dx?:number,dy?:number,left?:number,top?:number,behavior?: ScrollBehavior}} [options]
  * @returns {Promise<{x:number,y:number}>} New window scroll position.
  */

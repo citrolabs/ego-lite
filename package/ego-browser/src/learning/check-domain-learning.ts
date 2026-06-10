@@ -164,7 +164,7 @@ export async function pathExists(path: string) {
   }
 }
 
-function urlHostname(url) {
+export function urlHostname(url) {
   try {
     const parsed = String(url).includes("://")
       ? new URL(String(url))

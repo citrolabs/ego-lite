@@ -9,6 +9,7 @@ import {
   loadLearningManifest,
   siteSkillsForUrl,
   siteSkillsRoot,
+  urlHostname,
   LearningEntry,
   LearningManifest,
   LearnedContext,
@@ -109,17 +110,6 @@ export async function loadLearnedContext(url: string, options: any = {}): Promis
     knowledge: knowledgeNotes,
     tools: toolSignatures,
   };
-}
-
-function urlHostname(url) {
-  try {
-    const parsed = String(url).includes("://")
-      ? new URL(String(url))
-      : new URL(`https://${url}`);
-    return (parsed.hostname || "").toLowerCase().replace(/\.$/, "");
-  } catch {
-    return "";
-  }
 }
 
 function isLearningNotePath(siteDir: string, notePath: string) {
