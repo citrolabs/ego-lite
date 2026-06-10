@@ -59,6 +59,36 @@ test("degenerate box model throws transient instead of returning (0,0)", async (
       return true;
     }
   );
+  assert.ok(
+    !cdp.calls.some(([method]) => method === "Accessibility.getFullAXTree"),
+    "must not fall back to role/name lookup — it could match a different node with the same label"
+  );
+});
+
+test("stale backend node still falls back to role/name lookup", async () => {
+  const refMap = new RefMap();
+  refMap.add("5", 100, "button", "ok");
+  let boxModelCalls = 0;
+  const cdp = new FakeCDP(async (method) => {
+    if (method === "DOM.getBoxModel") {
+      boxModelCalls += 1;
+      if (boxModelCalls === 1) {
+        throw new Error("No node with given id found");
+      }
+      return { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } };
+    }
+    if (method === "Accessibility.getFullAXTree") {
+      return AX_TREE;
+    }
+    return {};
+  });
+  const point = await resolveElementCenter(cdp, undefined, refMap, "@5");
+  assert.equal(point.x, 5);
+  assert.equal(point.y, 5);
+  assert.ok(
+    cdp.calls.some(([method]) => method === "Accessibility.getFullAXTree"),
+    "a stale node must trigger the role/name fallback"
+  );
 });
 
 test("role locator with degenerate box model throws transient", async () => {

@@ -32,7 +32,13 @@ export async function resolveElementCenter(cdp, sessionId, refMap, selectorOrRef
       try {
         const result = await send(cdp, "DOM.getBoxModel", { backendNodeId: entry.backendNodeId }, effectiveSessionId);
         return { ...boxModelCenter(result.model), sessionId: effectiveSessionId };
-      } catch {
+      } catch (error) {
+        if (error instanceof ElementResolutionError) {
+          // The node resolved but has no usable box model (not rendered yet).
+          // Propagate the retryable state instead of falling back to role/name,
+          // which could silently target a different node with the same label.
+          throw error;
+        }
         // The backend node can become stale after DOM updates; fall back to role/name lookup below.
       }
     }
