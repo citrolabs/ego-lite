@@ -2,7 +2,47 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { setOverrides } from "../../dist/src/state.js";
-import { scroll } from "../../dist/src/driver/pointer.js";
+import { click, scroll } from "../../dist/src/driver/pointer.js";
+
+test("click resolves selector offsets without the public elementEval helper", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride(method, params, sessionId) {
+      calls.push({ method, params, sessionId });
+      if (method === "Runtime.evaluate" && params.objectGroup === "ego-browser") {
+        return { result: { objectId: "object-1" } };
+      }
+      if (method === "Runtime.evaluate") {
+        return { result: { value: { x: 125, y: 225 } } };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        return { result: { value: { x: 100, y: 200 } } };
+      }
+      return {};
+    }
+  });
+  try {
+    await click({ selector: "#target", x: 12, y: 8 });
+  } finally {
+    restore();
+  }
+
+  const callFunction = calls.find((call) => call.method === "Runtime.callFunctionOn");
+  assert.equal(callFunction.params.objectId, "object-1");
+  assert.match(callFunction.params.functionDeclaration, /getBoundingClientRect/);
+
+  assert.ok(calls.some((call) => call.method === "Runtime.releaseObject" && call.params.objectId === "object-1"));
+
+  const mouseEvents = calls.filter((call) => call.method === "Input.dispatchMouseEvent");
+  assert.deepEqual(mouseEvents.map((call) => ({
+    type: call.params.type,
+    x: call.params.x,
+    y: call.params.y
+  })), [
+    { type: "mousePressed", x: 112, y: 208 },
+    { type: "mouseReleased", x: 112, y: 208 }
+  ]);
+});
 
 test("scroll defaults to scrolling down (positive deltaY, DOM wheel convention)", async () => {
   // Regression: the default used to be deltaY -300, which scrolls UP — CDP

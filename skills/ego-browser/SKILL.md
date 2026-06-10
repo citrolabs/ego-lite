@@ -29,20 +29,22 @@ The heredoc body runs in a Node.js process with direct access to all ego-browser
 ## Common helpers
 
 - Task spaces: `listTaskSpaces`, `useOrCreateTaskSpace`, `handOffTaskSpace`, `takeOverTaskSpace`, `waitForAgentControl`, `completeTaskSpace`
-- Navigation / state: `listTabs`, `openOrReuseTab`, `gotoAndWait`, `currentTab`, `switchTab`, `newTab`, `gotoUrl`, `pageInfo`, `ensureRealTab`
+- Navigation / state: `listTabs`, `openOrReuseTab`, `closeTab`, `gotoAndWait`, `currentTab`, `switchTab`, `gotoUrl`, `pageInfo`, `ensureRealTab`
 - Observation: `snapshotText`, `captureScreenshot`, `drainEvents`
 - Scroll / mouse: `scrollBy`, `scrollToBottomUntil`, `scroll`, `click`, `doubleClick`, `hover`, `dragMouse`
 - Keyboard & input: `typeText`, `fillInput`, `pressKey`, `dispatchKey`
 - File: `uploadFile`
 - Wait: `wait`, `waitForLoad`, `waitForElement`, `waitForNetworkIdle`
 - Fetch: `serverFetch`, `browserFetch`
-- CDP / evaluate: `js`, `elementEval`, `cdp`
+- CDP / evaluate: `js`, `cdp`
 - Output: `cliLog`, `help`
 
 Notes:
 - `cliLog(value)` — prints to the terminal; it is the only output mechanism inside a heredoc, and all final results must go through it.
-- `pageInfo()` — returns the current tab's `url`, `title`, and other basic metadata.
-- `ensureRealTab()` — ensures a real tab exists (a freshly created task space may have none).
+- `pageInfo()` — normally returns `{ url, title, w, h, sx, sy, pw, ph }`; if a native browser dialog is open, returns `{ dialog: ... }` instead because page JavaScript is blocked.
+- If `pageInfo()` returns `{ dialog: ... }`, handle it with `cdp('Page.handleJavaScriptDialog', { accept: true })` or `accept: false` before running page JavaScript.
+- `ensureRealTab()` — switches to an existing non-internal page tab if needed and returns it; returns `null` when none exists. It does not create a tab — use `openOrReuseTab(...)` for that.
+- `closeTab(target?)` — closes the given target id / tab object, or the current tab when omitted.
 - `drainEvents()` — consumes and returns the async event queue produced by the page (navigation events, network events, etc.).
 - `serverFetch(url, options)` — issues a request from Node and returns the response body.
 - `browserFetch(url, options)` — issues a request from the current browser page context and returns the response body.
@@ -70,7 +72,7 @@ await completeTaskSpace(nameOrId, { keep: true })   // keep the page for the use
 
 When passing a string that may create a new task space, the string should reflect the task's intent (e.g. `'search github issues'`); don't use literal placeholders.
 
-Keep loose awareness of how many tabs are open — a quick `(await listTabs()).length` is enough; there's no need to spend a dedicated round just to check. When scratch tabs (search-result pages, cross-check pages, and other one-off pages) pile up, close them as you go rather than letting them all accumulate for the end. When finishing with `{ keep: true }` to leave pages for the user, clear out the remaining scratch tabs so only the pages worth showing stay open. Close a single tab with `await cdp('Target.closeTarget', { targetId })` (`targetId` comes from `listTabs()` or an `openOrReuseTab` return value).
+Keep loose awareness of how many tabs are open — a quick `(await listTabs()).length` is enough; there's no need to spend a dedicated round just to check. When scratch tabs (search-result pages, cross-check pages, and other one-off pages) pile up, close them as you go rather than letting them all accumulate for the end. When finishing with `{ keep: true }` to leave pages for the user, clear out the remaining scratch tabs so only the pages worth showing stay open. Close a single tab with `await closeTab(targetId)` (`targetId` comes from `listTabs()` or an `openOrReuseTab` return value).
 
 
 ### Control handoff
@@ -114,11 +116,13 @@ await scrollToBottomUntil(
 await scroll({ dy: 900 })
 ```
 
-`click`, `doubleClick`, `hover`, and `dragMouse` all accept the same target format. Coordinates are in CSS pixels:
+Element-target helpers such as `click`, `doubleClick`, `hover`, `dragMouse`, `fillInput`, `uploadFile`, and `waitForElement` accept the same selector/ref surface: raw CSS, `xpath=...`, `@N` / `ref=N`, and `loc=...` values from `snapshotText()` (`loc=css:...`, `loc=role:...`, `loc=href:...`). `@N` refs are for ego-browser helpers only; they are not valid selectors inside `document.querySelector(...)`.
 
-- `string` — CSS selector or `@ref`; clicks the element's center.
+`click`, `doubleClick`, `hover`, and `dragMouse` share these target formats. Coordinates are in CSS pixels:
+
+- `string` — CSS selector, `xpath=...`, `@N` / `ref=N`, or `loc=...`; clicks the element's center.
 - `[x, y]` or `{x, y}` — viewport coordinates.
-- `{selector}` — CSS selector or `@ref`; clicks the element's center.
+- `{selector}` — CSS selector, `xpath=...`, `@N` / `ref=N`, or `loc=...`; clicks the element's center.
 - `{selector, x, y}` — offset from the element's top-left corner by `x`/`y`.
 - `options.label` (optional) — a 3-6 word action description; triggers a visual highlight animation.
 
@@ -128,7 +132,7 @@ await click('button.primary', { label: 'click submit button' })
 await click([420, 260])
 await click({ x: 420, y: 260 })
 await click({ selector: 'canvas#stage', x: 12, y: 8 })
-await hover('@e5', { label: 'hover to reveal menu' })
+await hover('@5', { label: 'hover to reveal menu' })
 await dragMouse([from, to], { label: 'drag card' })
 ```
 
@@ -161,14 +165,15 @@ Start with snapshotText + ref/loc when possible — it preserves semantic struct
 
 1. Reuse or create a task space: `const task = await useOrCreateTaskSpace(name)`.
 2. Open or switch pages: prefer `openOrReuseTab(url, { wait: true })`; use `gotoAndWait(url, { timeout, settle })` to navigate within the current tab.
-3. Observe the page: call `snapshotText()` to get a full-page semantic tree annotated with `[ref=N, loc=..., url=...]`. Refs are auto-registered in refMap, so you can immediately do `click('@N')` / `fillInput('@N', ...)` / `elementEval('@N', ...)`.
+3. Observe the page: call `snapshotText()` to get a full-page semantic tree annotated with `[ref=N, loc=..., url=...]`. Refs are auto-registered in refMap, so you can immediately do `click('@N')` / `fillInput('@N', ...)`, or use the `loc=...` value in direct DOM logic.
 4. Act or extract data: if the logic can be done in the DOM in one shot, wrap it in a browser-side closure and return once.
-5. Output the final result: use `cliLog(...)`.
+5. After a meaningful click, input, or navigation, observe again with `snapshotText()`, `pageInfo()`, or `captureScreenshot()` before assuming the action succeeded.
+6. Output the final result: use `cliLog(...)`.
 
 Switch to a different path when it fits better; paths can be combined:
 - **snapshotText + ref/loc** — default when semantic structure, labels, links, and form controls are clear.
 - **captureScreenshot + click([x, y])** — for visual layouts, canvas-like UIs, virtual lists, or pages with incomplete accessibility info.
-- **js / elementEval / cdp** — for direct DOM extraction, inspecting browser state, or when the observation helpers aren't direct enough.
+- **js / cdp** — for direct DOM extraction, inspecting browser state, or when the observation helpers aren't direct enough.
 
 Aim to write one complete `ego-browser nodejs` script that handles navigation, observation, scrolling, extraction, filtering, aggregation, and output in a single pass. Don't use a second local `node` script to post-process the same data.
 

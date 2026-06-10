@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import * as helperExports from "../dist/src/helpers.js";
 import {
   completeTaskSpace,
   handOffTaskSpace,
@@ -88,6 +89,14 @@ test("taskspace helper surface exposes public helpers without claimTaskSpace", (
   assert.equal(typeof context.newTaskSpace, "function");
   assert.equal(typeof context.useOrCreateTaskSpace, "function");
   assert.equal(context.claimTaskSpace, undefined);
+  assert.equal(typeof helperExports.openOrReuseTab, "function");
+  assert.equal(typeof context.openOrReuseTab, "function");
+  assert.equal(typeof helperExports.closeTab, "function");
+  assert.equal(typeof context.closeTab, "function");
+  assert.equal("newTab" in helperExports, false);
+  assert.equal("newTab" in context, false);
+  assert.equal("elementEval" in helperExports, false);
+  assert.equal("elementEval" in context, false);
 });
 
 test("switchTaskSpace selects a matching task space", async () => {

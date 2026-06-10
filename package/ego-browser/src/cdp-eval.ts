@@ -38,8 +38,7 @@ export async function js(expression, targetId = undefined) {
         `  not a Puppeteer/Playwright-style callable. Auto-wrap does NOT capture closure\n` +
         `  variables and has NO args channel.\n` +
         `  Prefer:\n` +
-        `    js(\`<expression>\`)                        // pure expression\n` +
-        `    elementEval(target, (el, ...args) => ...)  // element-bound fn via Runtime.callFunctionOn\n`
+        `    js(\`<expression>\`)  // pure expression or explicit IIFE\n`
       );
     }
     expression = `(${source})()`;

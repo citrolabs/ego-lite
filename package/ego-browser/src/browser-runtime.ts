@@ -10,6 +10,8 @@ const BROWSER_LEVEL = (method) => method.startsWith("Target.") || method.startsW
 let nextMessageId = 1;
 const pending = new Map();
 const events = [];
+const pageEnabledSessions = new Set();
+const pendingDialogs = new Map();
 export function isBrowserRuntime() {
   return Boolean(globalThis.ego && typeof globalThis.ego.sendCDPMessage === "function");
 }
@@ -101,6 +103,7 @@ export async function ensureSession() {
         state.sessionId = attached.result?.sessionId || attached.sessionId;
         state.sessionTargetId = targetId;
       }
+      await enablePageEvents(state.sessionId);
       state.sessionAt = Date.now();
       return state.sessionId;
     } finally {
@@ -111,6 +114,10 @@ export async function ensureSession() {
 }
 
 export function invalidateSession() {
+  if (state.sessionId) {
+    pageEnabledSessions.delete(state.sessionId);
+    pendingDialogs.delete(state.sessionId);
+  }
   state.sessionId = null;
   state.sessionTargetId = null;
   state.sessionAt = 0;
@@ -127,6 +134,26 @@ export function clearPreferredTarget() {
 export function drainBrowserEvents() {
   const out = events.splice(0, events.length);
   return out;
+}
+
+export function pendingDialog(sessionId = state.sessionId) {
+  if (sessionId && pendingDialogs.has(sessionId)) {
+    return { ...pendingDialogs.get(sessionId) };
+  }
+  return null;
+}
+
+async function enablePageEvents(sessionId) {
+  if (!sessionId || pageEnabledSessions.has(sessionId)) {
+    return;
+  }
+  try {
+    await rawCdp("Page.enable", {}, sessionId);
+    pageEnabledSessions.add(sessionId);
+  } catch {
+    // Dialog tracking is best-effort. Do not make all helpers fail on targets
+    // that reject Page.enable, such as unusual internal pages.
+  }
 }
 
 function handleMessage(message) {
@@ -150,9 +177,25 @@ function handleMessage(message) {
     return;
   }
   if (data.method === "Target.detachedFromTarget" || data.method === "Target.targetDestroyed") {
+    const sessionId = data.params?.sessionId || data.sessionId;
+    if (sessionId) {
+      pageEnabledSessions.delete(sessionId);
+      pendingDialogs.delete(sessionId);
+    }
     const targetId = data.params?.targetId || data.params?.targetInfo?.targetId;
     if (targetId && targetId === state.sessionTargetId) {
       invalidateSession();
+    }
+  }
+  if (data.method === "Page.javascriptDialogOpening") {
+    const sessionId = data.sessionId || state.sessionId;
+    if (sessionId) {
+      pendingDialogs.set(sessionId, data.params || {});
+    }
+  } else if (data.method === "Page.javascriptDialogClosed") {
+    const sessionId = data.sessionId || state.sessionId;
+    if (sessionId) {
+      pendingDialogs.delete(sessionId);
     }
   }
   events.push(data);

@@ -1,4 +1,4 @@
-import { browserEgo, invalidateSession, setPreferredTarget } from "../browser-runtime.js";
+import { browserEgo, clearPreferredTarget, ensureSession, invalidateSession, isBrowserRuntime, pendingDialog, setPreferredTarget } from "../browser-runtime.js";
 import { cdp, js } from "../cdp-eval.js";
 import { assertNoEgoError } from "../ego-errors.js";
 import { state } from "../state.js";
@@ -33,6 +33,8 @@ type OpenOrReuseTabOptions = {
   settle?: number;
 };
 
+type TabTarget = string | { targetId: string };
+
 /**
  * Navigate the current tab to a URL using CDP Page.navigate.
  * @param {string} url Absolute or browser-supported URL to load.
@@ -60,9 +62,16 @@ export async function gotoAndWait(url: string, options: GotoAndWaitOptions = {})
 
 /**
  * Read basic state for the current page.
- * @returns {Promise<{url:string,title:string,w:number,h:number,sx:number,sy:number,pw:number,ph:number}>}
+ * @returns {Promise<{url:string,title:string,w:number,h:number,sx:number,sy:number,pw:number,ph:number}|{dialog:object}>}
  */
 export async function pageInfo() {
+  if (isBrowserRuntime()) {
+    await ensureSession();
+    const dialog = pendingDialog();
+    if (dialog) {
+      return { dialog };
+    }
+  }
   const expression = "JSON.stringify({url:location.href,title:document.title,w:innerWidth,h:innerHeight,sx:scrollX,sy:scrollY,pw:document.documentElement.scrollWidth,ph:document.documentElement.scrollHeight})";
   return JSON.parse(await js(expression));
 }
@@ -150,6 +159,26 @@ export async function openOrReuseTab(url: string, options: OpenOrReuseTabOptions
     await state.sleep(settle * 1000);
   }
   return { targetId, url, title: "", active: true, reused: false };
+}
+
+/**
+ * Close a browser tab by target id, tab object, or the current tab when omitted.
+ * @param {string|{targetId:string}} [target] Target id or tab-like object. Defaults to the current tab.
+ * @returns {Promise<string>} Closed target id.
+ */
+export async function closeTab(target: TabTarget | undefined = undefined) {
+  const targetId = target === undefined
+    ? (await currentTab()).targetId
+    : typeof target === "object" ? target.targetId : target;
+  if (!targetId) {
+    throw new Error("closeTab requires a targetId");
+  }
+  await cdp("Target.closeTarget", { targetId });
+  invalidateSession();
+  if (state.preferredTargetId === targetId) {
+    clearPreferredTarget();
+  }
+  return targetId;
 }
 
 /**
