@@ -1,0 +1,39 @@
+# lefthook.yml - git hooks for ego-lite
+#
+# Enable hooks:
+#   cd package/ego-browser && npm install
+#
+# lefthook is a package/ego-browser devDependency. npm install runs the
+# prepare script, which installs hooks into the repository's .git/hooks.
+#
+# The git root is the repository root, while the JS package lives in
+# package/ego-browser. Commands cd into that package when needed.
+
+pre-commit:
+  parallel: false
+  commands:
+    style-check:
+      run: |
+        files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^package/ego-browser/.*\.(ts|mjs|js|json|md)$' || true)
+        [ -z "$files" ] && exit 0
+        package/ego-browser/node_modules/.bin/prettier --check $files
+    vulnerability-audit:
+      run: |
+        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
+        cd package/ego-browser && npm audit --registry=https://registry.npmjs.org --audit-level=moderate
+    code-check:
+      run: |
+        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
+        cd package/ego-browser && npm run typecheck
+    smoke-test:
+      run: |
+        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
+        cd package/ego-browser && npm test
+    site-skill-validation:
+      run: |
+        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(package/ego-browser/|skills/ego-browser/learnings/)' || exit 0
+        cd package/ego-browser && npm run validate:site-skills
+    e2e-test:
+      run: |
+        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
+        cd package/ego-browser && npm run e2e

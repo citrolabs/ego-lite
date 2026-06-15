@@ -1,0 +1,78 @@
+name: Quality Gates
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/quality-gates.yml"
+      - "lefthook.yml"
+      - "package/ego-browser/**"
+      - "skills/ego-browser/learnings/**"
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - ".github/workflows/quality-gates.yml"
+      - "lefthook.yml"
+      - "package/ego-browser/**"
+      - "skills/ego-browser/learnings/**"
+
+jobs:
+  quality-gates:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package/ego-browser/package-lock.json
+
+      - name: Install dependencies
+        working-directory: package/ego-browser
+        run: npm ci
+
+      - name: Check changed file style
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+
+          if [ -z "$base" ] || [[ "$base" =~ ^0+$ ]]; then
+            base="$(git rev-list --max-parents=0 HEAD)"
+          fi
+
+          files="$(git diff --name-only --diff-filter=ACMR "$base" HEAD | grep -E '^package/ego-browser/.*\.(ts|mjs|js|json|md)$' || true)"
+          [ -z "$files" ] && exit 0
+          package/ego-browser/node_modules/.bin/prettier --check $files
+
+      - name: Analyze vulnerabilities
+        working-directory: package/ego-browser
+        run: npm audit --registry=https://registry.npmjs.org --audit-level=moderate
+
+      - name: Check code
+        working-directory: package/ego-browser
+        run: npm run typecheck
+
+      - name: Run smoke tests
+        working-directory: package/ego-browser
+        run: npm test
+
+      - name: Validate site skills
+        working-directory: package/ego-browser
+        run: npm run validate:site-skills
+
+      - name: Run e2e tests
+        working-directory: package/ego-browser
+        run: npm run e2e
