@@ -43,13 +43,13 @@ The heredoc body runs as a Node.js script that controls the selected ego-browser
 
 Notes:
 - `cliLog(value)` — prints to the terminal; it is the only output mechanism inside a heredoc, and all final results must go through it.
-- `pageInfo()` — normally returns `{ url, title, w, h, sx, sy, pw, ph }`; if a native browser dialog is open, returns `{ dialog: ... }` instead because page JavaScript is blocked.
-- If `pageInfo()` returns `{ dialog: ... }`, handle it with `cdp('Page.handleJavaScriptDialog', { accept: true })` or `accept: false` before running page JavaScript.
-- `ensureRealTab()` — switches to an existing non-internal page tab if needed and returns it; returns `null` when none exists. It does not create a tab — use `openOrReuseTab(...)` for that.
-- `closeTab(target?)` — closes the given target id / tab object, or the current tab when omitted.
-- `drainEvents()` — consumes and returns the async event queue produced by the page (navigation events, network events, etc.).
-- `serverFetch(url, options)` — issues a request from Node and returns the response body.
-- `browserFetch(url, options)` — issues a request from the current browser page context and returns the response body.
+- `await pageInfo()` — normally resolves to `{ url, title, w, h, sx, sy, pw, ph }`; if a native browser dialog is open, resolves to `{ dialog: ... }` instead because page JavaScript is blocked.
+- If `await pageInfo()` resolves to `{ dialog: ... }`, handle the dialog with `await cdp('Page.handleJavaScriptDialog', { accept: true })` or `accept: false` before running page JavaScript.
+- `await ensureRealTab()` — switches to an existing non-internal page tab if needed and resolves to it; resolves to `null` when none exists. It does not create a tab — use `await openOrReuseTab(...)` for that.
+- `await closeTab(target?)` — closes the given target id / tab object, or the current tab when omitted.
+- `await drainEvents()` — consumes and returns the async event queue produced by the page (navigation events, network events, etc.).
+- `await serverFetch(url, options)` — issues a request from Node and returns the response body.
+- `await browserFetch(url, options)` — issues a request from the current browser page context and returns the response body.
 - `help(name)` — prints usage for a given helper, e.g. `cliLog(help('click'))`.
 
 
@@ -63,7 +63,7 @@ A task often takes multiple heredoc rounds to complete. Because the Node.js runt
 
 Use a short name for the current user goal when creating a new task space. Reuse the same name while the user is continuing that goal; choose a new name only when the user starts a separate goal. Prefer using the numeric `id` returned by `useOrCreateTaskSpace` (for example, `task.id`) to resume a known task in later rounds and avoid name collisions.
 
-To continue work from an existing user-owned task space, use `listTaskSpaces()` to find the space, call `useOrCreateTaskSpace(id)` to claim it, then use `listTabs()` and `switchTab(targetId)` to select the exact tab before acting. This is different from resuming a handoff from your own prior task space, which starts with `takeOverTaskSpace(nameOrId)`.
+To continue work from an existing user-owned task space, use `await listTaskSpaces()` to find the space, call `await useOrCreateTaskSpace(id)` to claim it, then use `await listTabs()` and `await switchTab(targetId)` to select the exact tab before acting. This is different from resuming a handoff from your own prior task space, which starts with `await takeOverTaskSpace(nameOrId)`.
 
 **Ownership policy** — every task space has `ownership: 'agent' | 'user'`; the helpers treat user-owned spaces differently:
 
@@ -89,12 +89,12 @@ Keep loose awareness of how many tabs are open — a quick `(await listTabs()).l
 
 Only one side — agent or user — holds control of a task space at any time.
 
-**Handing off**: When the task requires user intervention (e.g. login, captcha, manual confirmation), call `handOffTaskSpace([nameOrId])` to give control to the user. Omitting `nameOrId` uses the currently selected task space; pass `task.id` across heredoc rounds to avoid ambiguity. After handoff, any browser operation by the agent will fail with a "user is controlling" message.
+**Handing off**: When the task requires user intervention (e.g. login, captcha, manual confirmation), call `await handOffTaskSpace([nameOrId])` to give control to the user. Omitting `nameOrId` uses the currently selected task space; pass `task.id` across heredoc rounds to avoid ambiguity. After handoff, any browser operation by the agent will fail with a "user is controlling" message.
 
 **Regaining control** — two paths:
 
-1. **User says "continue" in chat** → call `takeOverTaskSpace([nameOrId])` to take back control, then continue. Omitting `nameOrId` uses the currently selected task space. `takeOverTaskSpace` is idempotent — safe to call even if the user already returned control via GUI.
-2. **User returns via browser GUI** (without chatting) → the agent receives no notification. Use `waitForAgentControl(nameOrId)` to block until control comes back; once it returns, you can operate directly without calling `takeOverTaskSpace`.
+1. **User says "continue" in chat** → call `await takeOverTaskSpace([nameOrId])` to take back control, then continue. Omitting `nameOrId` uses the currently selected task space. `await takeOverTaskSpace(...)` is idempotent — safe to call even if the user already returned control via GUI.
+2. **User returns via browser GUI** (without chatting) → the agent receives no notification. Use `await waitForAgentControl(nameOrId)` to block until control comes back; once it returns, you can operate directly without calling `await takeOverTaskSpace(...)`.
 
 **Waiting for control handback example**:
 
@@ -107,7 +107,7 @@ await waitForAgentControl(nameOrId)              // polls every 20s by default, 
 // continue working...
 ```
 
-If the user action may take a while, exit the heredoc to keep the chat channel open. When the user says "continue" in chat, start a new heredoc with `takeOverTaskSpace` to resume.
+If the user action may take a while, exit the heredoc to keep the chat channel open. When the user says "continue" in chat, start a new heredoc with `await takeOverTaskSpace(...)` to resume.
 
 **Unexpected takeover**: The user can take over the task space at any time via the browser GUI — the effect is the same as the agent calling `handOffTaskSpace`. The agent's operations will fail with a "user is controlling" message. Do not retry — inform the user and wait for control to be returned.
 
@@ -175,18 +175,18 @@ ego-browser has three main workflows. Pick the workflow that fits the page and t
 
 1. **Semantic workflow: `snapshotText()` + refs / locators** — default for most pages with normal text, links, buttons, forms, tables, and lists.
    - Reuse or create a task space: `const task = await useOrCreateTaskSpace(name)`.
-   - Open or switch pages with `openOrReuseTab(url, { wait: true })`; use `gotoAndWait(url, { timeout, settle })` only when navigating inside the current tab.
-   - Observe with `snapshotText()` to get a full-page semantic tree annotated with `[ref=N, loc=..., url=...]`.
-   - Act with `click('@N')`, `fillInput('@N', ...)`, or stable `loc=...` values. Use direct DOM logic only when it is simpler than helper calls.
-   - After meaningful clicks, input, or navigation, observe again with `snapshotText()`, `pageInfo()`, or `captureScreenshot()` before assuming success.
+   - Open or switch pages with `await openOrReuseTab(url, { wait: true })`; use `await gotoAndWait(url, { timeout, settle })` only when navigating inside the current tab.
+   - Observe with `await snapshotText()` to get a full-page semantic tree annotated with `[ref=N, loc=..., url=...]`.
+   - Act with `await click('@N')`, `await fillInput('@N', ...)`, or stable `loc=...` values. Use direct DOM logic only when it is simpler than helper calls.
+   - After meaningful clicks, input, or navigation, observe again with `await snapshotText()`, `await pageInfo()`, or `await captureScreenshot()` before assuming success.
 
-2. **Visual workflow: `captureScreenshot()` + coordinate actions** — use when the page is primarily visual, canvas-like, heavily virtualized, or when accessibility / semantic structure is incomplete.
-   - Inspect the screenshot, act with viewport coordinates such as `click([x, y])`, then verify with another screenshot or semantic observation.
+2. **Visual workflow: `await captureScreenshot()` + coordinate actions** — use when the page is primarily visual, canvas-like, heavily virtualized, or when accessibility / semantic structure is incomplete.
+   - Inspect the screenshot, act with viewport coordinates such as `await click([x, y])`, then verify with another screenshot or semantic observation.
    - Prefer this path for visual menus, map/canvas UIs, drag interactions, and targets that are obvious visually but poor in the DOM/AX tree.
 
-3. **Direct DOM / CDP workflow: `js()` / `cdp()`** — use when you need browser state, compact data extraction, custom DOM traversal, or raw browser capabilities.
+3. **Direct DOM / CDP workflow: `await js(...)` / `await cdp(...)`** — use when you need browser state, compact data extraction, custom DOM traversal, or raw browser capabilities.
    - Keep browser-side logic in one explicit IIFE and return once.
-   - Use `cdp()` for browser protocol operations that helpers do not cover.
+   - Use `await cdp(...)` for browser protocol operations that helpers do not cover.
 
 These workflows can be combined. A task may take multiple heredoc rounds when the next step depends on fresh page state or user handoff. In each round, write a coherent script that advances the task: observe, act or extract, verify, and report with `cliLog(...)`. Avoid tiny probe scripts, but don't force the whole task into one oversized script.
 
