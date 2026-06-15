@@ -16,7 +16,8 @@ Use the `Bash` tool to run all browser operations via `ego-browser nodejs <<'EOF
 
 ```bash
 ego-browser nodejs <<'EOF'
-const task = await useOrCreateTaskSpace('describe your task')
+const taskSpaceName = 'current user goal'
+const task = await useOrCreateTaskSpace(taskSpaceName)
 
 await openOrReuseTab('https://example.com', { wait: true, timeout: 20 })
 
@@ -59,7 +60,7 @@ A task often takes multiple heredoc rounds to complete. Because the Node.js runt
 
 `nameOrId` can be a task space name, numeric id, or digit-only numeric id string. String values match `name`/`taskId` first, then digit-only strings fall back to numeric id. Number values match existing numeric ids only; if no matching id exists, `useOrCreateTaskSpace` fails instead of creating a new space.
 
-Use a descriptive string name for a new task space. Prefer using the numeric `id` returned by `useOrCreateTaskSpace` (for example, `task.id`) to resume a known task in later rounds and avoid name collisions.
+Use a short name for the current user goal when creating a new task space. Reuse the same name while the user is continuing that goal; choose a new name only when the user starts a separate goal. Prefer using the numeric `id` returned by `useOrCreateTaskSpace` (for example, `task.id`) to resume a known task in later rounds and avoid name collisions.
 
 To continue work from an existing user-owned task space, use `listTaskSpaces()` to find the space, call `useOrCreateTaskSpace(id)` to claim it, then use `listTabs()` and `switchTab(targetId)` to select the exact tab before acting. This is different from resuming a handoff from your own prior task space, which starts with `takeOverTaskSpace(nameOrId)`.
 
