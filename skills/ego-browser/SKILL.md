@@ -5,7 +5,7 @@ description: ego-browser (ego-lite) is a Chromium-based browser designed from th
 
 # ego-browser
 
-ego-browser provides AI Agents with a Node.js runtime accessible via CLI. It ships built-in helpers — `snapshotText`, CDP, and more — that Agents call directly inside JS scripts to drive a real browser for any web automation task.
+ego-browser gives AI agents a CLI-accessible Node.js runtime, with built-in helpers — snapshotText, click, js, cdp, and more — that agents call directly inside JS scripts to observe pages, interact with UI, evaluate browser-side JavaScript, and drive a real browser for any web automation task.
 
 For setup, install, or connection problems, read `references/install.md`.
 
