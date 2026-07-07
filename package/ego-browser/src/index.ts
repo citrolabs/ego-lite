@@ -9,8 +9,13 @@ import {
 } from "./browser-runtime.js";
 import { formatCliLogValue } from "./format.js";
 import {
+  beginOutputBoundary,
   bufferOutput,
+  finishOutputBoundary,
   installLifecycleFlush,
+  isInsideOutputBoundary,
+  outputCaptureFromTarget,
+  flushSink,
   resetSink,
   setNoticeTrailer,
 } from "./output-sink.js";
@@ -40,6 +45,7 @@ const SYNC_HELPERS = new Set(["help"]);
 // Marks an ego runtime whose mutating methods have already been wrapped, so a
 // second installEgoSdk call cannot double-wrap createTab / task-space methods.
 const EGO_WRAPPED = Symbol.for("egoBrowser.sdkWrapped");
+const OUTPUT_BOUNDARY_WRAPPED = Symbol.for("egoBrowser.outputBoundaryWrapped");
 
 export function installEgoSdk(
   target: InstallTarget = globalThis,
@@ -77,17 +83,19 @@ export function installEgoSdk(
     installed[name] = exposed as HelperFunction;
   }
   const usingDefaultLog = !options.cliLog;
-  // The agent's primary output channel is console.log. Route it through the host's
-  // sink (options.cliLog) when provided, otherwise the buffered default. There is no
-  // dedicated cliLog global anymore; console.error/warn are left untouched. Each
-  // heredoc runs in its own short-lived process, so overriding the global is per-run.
-  console.log = options.cliLog || createBufferedLog();
-  if (usingDefaultLog) {
-    // SDK path: the host runs each heredoc in a fresh short-lived process and never
-    // calls execute(), so reset the per-run sink and flush it on process teardown.
-    resetSink();
-    installLifecycleFlush(process.stdout);
+  if (options.cliLog) {
+    console.log = options.cliLog;
+  } else {
+    // Buffer console.log so a hard stop can collapse noisy business output into one
+    // owned message. In app REPL mode, __egoCompleteReplEvaluation flushes this once
+    // per cell; in short-lived SDK hosts, lifecycle hooks are the fallback.
+    console.log = createBufferedLog();
   }
+  resetSink();
+  installLifecycleFlush(process.stdout);
+  wrapEvaluationBoundary(target, "__egoEvaluateScript");
+  wrapReplEvaluationBoundary(target);
+  wrapReplCompleteBoundary(target);
   if (target.ego && typeof target.ego === "object") {
     // Fire-and-forget update hint. Route the resolved line to the same channel the
     // command's own output uses: the buffered-sink path registers it as a trailer the
@@ -134,6 +142,120 @@ function createBufferedLog() {
     // discard everything logged so far. The buffer is flushed on process teardown.
     bufferOutput(`${args.map(formatCliLogValue).join(" ")}\n`);
   };
+}
+
+function wrapEvaluationBoundary(target: InstallTarget, name: string) {
+  const original = target[name];
+  if (typeof original !== "function") return;
+  if (
+    (original as unknown as Record<symbol, unknown>)[OUTPUT_BOUNDARY_WRAPPED]
+  ) {
+    return;
+  }
+  const wrapped = function (this: unknown, ...args: unknown[]) {
+    beginOutputBoundary(outputCaptureFromTarget(target));
+    try {
+      const result = (original as HelperFunction).apply(this, args);
+      if (result && typeof (result as Promise<unknown>).then === "function") {
+        return (result as Promise<unknown>).then(
+          (value) => {
+            finishOutputBoundary(process.stdout, false);
+            return value;
+          },
+          (error) => {
+            finishOutputBoundary(process.stdout, true);
+            throw error;
+          },
+        );
+      }
+      finishOutputBoundary(process.stdout, false);
+      return result;
+    } catch (error) {
+      finishOutputBoundary(process.stdout, true);
+      throw error;
+    }
+  };
+  Object.defineProperty(wrapped, OUTPUT_BOUNDARY_WRAPPED, {
+    value: true,
+    enumerable: false,
+  });
+  Object.defineProperty(target, name, {
+    value: wrapped,
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
+}
+
+function wrapReplEvaluationBoundary(target: InstallTarget) {
+  const original = target.__egoEvaluateReplScript;
+  if (typeof original !== "function") return;
+  if (
+    (original as unknown as Record<symbol, unknown>)[OUTPUT_BOUNDARY_WRAPPED]
+  ) {
+    return;
+  }
+  const wrapped = function (this: unknown, ...args: unknown[]) {
+    beginOutputBoundary(outputCaptureFromTarget(target));
+    try {
+      const result = (original as HelperFunction).apply(this, args);
+      if (result && typeof (result as Promise<unknown>).then === "function") {
+        return (result as Promise<unknown>).then(
+          (value) => value,
+          (error) => {
+            finishOutputBoundary(process.stdout, true);
+            throw error;
+          },
+        );
+      }
+      return result;
+    } catch (error) {
+      finishOutputBoundary(process.stdout, true);
+      throw error;
+    }
+  };
+  Object.defineProperty(wrapped, OUTPUT_BOUNDARY_WRAPPED, {
+    value: true,
+    enumerable: false,
+  });
+  Object.defineProperty(target, "__egoEvaluateReplScript", {
+    value: wrapped,
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
+}
+
+function wrapReplCompleteBoundary(target: InstallTarget) {
+  const original = target.__egoCompleteReplEvaluation;
+  if (typeof original !== "function") return;
+  if (
+    (original as unknown as Record<symbol, unknown>)[OUTPUT_BOUNDARY_WRAPPED]
+  ) {
+    return;
+  }
+  const wrapped = function (this: unknown, ...args: unknown[]) {
+    let flush = { hardStop: false, wrote: false };
+    if (!isInsideOutputBoundary()) {
+      flush = flushSink(process.stdout, false);
+    } else {
+      flush = finishOutputBoundary(process.stdout, false);
+    }
+    if (flush.hardStop) {
+      resetSink();
+    }
+    return (original as HelperFunction).apply(this, args);
+  };
+  Object.defineProperty(wrapped, OUTPUT_BOUNDARY_WRAPPED, {
+    value: true,
+    enumerable: false,
+  });
+  Object.defineProperty(target, "__egoCompleteReplEvaluation", {
+    value: wrapped,
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
 }
 
 function isDirectCli() {

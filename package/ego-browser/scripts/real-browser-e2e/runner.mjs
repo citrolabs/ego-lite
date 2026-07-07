@@ -35,6 +35,7 @@ export async function runRealBrowserE2e() {
   );
   const availableCaseNames = [
     "nodejs bridge smoke",
+    "nodejs repl cell smoke",
     ...e2eCases.map((testCase) => testCase.name),
   ];
   const unknownOnlyCases = [...onlyCases].filter(
@@ -118,6 +119,53 @@ export async function runRealBrowserE2e() {
 
   async function maybeRunNodeBridgeSmoke() {
     await runNodeBridgeSmoke();
+  }
+
+  async function runNodeReplCellSmoke(timeoutMs = 15000) {
+    const name = "nodejs repl cell smoke";
+    console.log(`-- ${name}`);
+    const startedAt = Date.now();
+    const marker = `EGO_NODEJS_REPL_CELL_SMOKE_${Date.now()}`;
+    const script = [
+      "set timeout 15",
+      `spawn ego-browser nodejs --sdk-path ${tclBrace(egoBrowserSdkPath)}`,
+      'expect "repl> "',
+      tclSend(".cell\r"),
+      tclSend(`console.log(${JSON.stringify(marker)})\r`),
+      tclSend("console.log(typeof snapshot)\r"),
+      tclSend("21 + 21\r"),
+      tclSend(".end\r"),
+      `expect ${tclBrace(marker)}`,
+      'expect "function"',
+      'expect "42"',
+      'expect "repl> "',
+      tclSend(".exit\r"),
+      "expect eof",
+    ].join("\n");
+    try {
+      await runCommand("expect", ["-c", script], {
+        cwd: packageDir,
+        egoBrowserSdkPath,
+        echo: verboseCaseOutput,
+        timeoutMs,
+      });
+      const durationMs = Date.now() - startedAt;
+      recordResult(name, "pass", durationMs, 3);
+      console.log(
+        `-- ${name} passed (${formatDuration(durationMs)}, 3 assertions)`,
+      );
+    } catch (error) {
+      const durationMs = Date.now() - startedAt;
+      const message = error?.message || String(error);
+      recordResult(name, "fail", durationMs, 0, message);
+      console.error(
+        `[FAIL] ${name} (${formatDuration(durationMs)}): ${message}`,
+      );
+    }
+  }
+
+  async function maybeRunNodeReplCellSmoke() {
+    await runNodeReplCellSmoke();
   }
 
   async function runEgoCase(name, body, timeoutMs = 45000, options = {}) {
@@ -244,9 +292,13 @@ export async function runRealBrowserE2e() {
     console.log(`sdk: ${egoBrowserSdkPath}`);
 
     await maybeRunNodeBridgeSmoke();
+    await maybeRunNodeReplCellSmoke();
     if (
       caseResults.some(
-        (r) => r.name === "nodejs bridge smoke" && r.status === "fail",
+        (r) =>
+          (r.name === "nodejs bridge smoke" ||
+            r.name === "nodejs repl cell smoke") &&
+          r.status === "fail",
       )
     ) {
       context.skipCleanup = true;
@@ -347,6 +399,14 @@ function parseNodeBridgeSmoke(stdout, marker) {
       `nodejs bridge smoke printed invalid runtime probe data: ${payload}`,
     );
   }
+}
+
+function tclBrace(value) {
+  return `{${String(value).replace(/[\\{}]/g, "\\$&")}}`;
+}
+
+function tclSend(value) {
+  return `send ${JSON.stringify(value)}`;
 }
 
 function caseResultPath(tempDir) {

@@ -12,24 +12,28 @@ ego-browser gives AI agents a CLI-accessible Node.js runtime, with built-in help
 
 For setup, install, or connection problems, read `references/install.md`.
 
-Use the `Bash` tool to run all browser operations via `ego-browser nodejs <<'EOF' ... EOF` heredoc. Do not write code to a `.js` file first.
+Use the `Bash` tool to start one interactive `ego-browser nodejs` session, then run browser operations as REPL cells with `.cell` and `.end`. Do not write code to a `.js` file first.
 
 
 ## Quick start
 
 ```bash
-ego-browser nodejs <<'EOF'
-// Name the task space for the whole user task, then reuse that space across heredoc rounds.
+ego-browser nodejs
+```
+
+```text
+repl> .cell
+// Name the task space for the whole user task, then reuse that space across cells.
 const task = await useOrCreateTaskSpace('inspect example page')
 console.log('task space id: ' + task.id)
 
 await openOrReuseTab('https://example.com', { wait: true, timeout: 20000 })
 
 console.log(await snapshot())
-EOF
+.end
 ```
 
-The heredoc body runs as a Node.js script that controls the selected ego-browser task space. All ego-browser helpers are preloaded into that script.
+Each REPL cell runs as JavaScript that controls the selected ego-browser task space. All ego-browser helpers are preloaded into the REPL. `.cell`, `.end`, `.cancel`, and `.exit` are REPL commands, not JavaScript syntax.
 
 ## Common helpers
 
@@ -45,7 +49,7 @@ The heredoc body runs as a Node.js script that controls the selected ego-browser
 - Output: `console.log`, `help`
 
 Notes:
-- `console.log(value)` — prints to the terminal; it is the only output mechanism inside a heredoc, and all final results must go through it.
+- `console.log(value)` — prints to the terminal; it is the primary output mechanism inside a cell, and all final results must go through it.
 - `await pageInfo()` — normally resolves to `{ url, title, w, h, sx, sy, pw, ph }`; if a native browser dialog is open, resolves to `{ dialog: ... }` instead because page JavaScript is blocked.
 - If `await pageInfo()` resolves to `{ dialog: ... }`, handle the dialog with `await cdp('Page.handleJavaScriptDialog', { accept: true })` or `accept: false` before running page JavaScript.
 - `await ensureRealTab()` — switches to an existing non-internal page tab if needed and resolves to it; resolves to `null` when none exists. It does not create a tab — use `await openOrReuseTab(...)` for that.
@@ -62,11 +66,11 @@ A task space is an **isolated browsing context** that ego-browser provides for A
 
 Closing all tabs in a task space is equivalent to closing that task space.
 
-A task often takes multiple heredoc rounds to complete. Because the Node.js runtime exits after each heredoc and retains no state, normal working heredocs should start with an explicit call to `useOrCreateTaskSpace(nameOrId)` to reuse the same space — this lets you operate continuously and reuse tabs across rounds. The exception is resuming after a handoff: once the user confirms "continue" (through an Ask or in chat), start the next heredoc with `takeOverTaskSpace(nameOrId)` instead.
+A task often takes multiple cells to complete. The REPL keeps JavaScript state between cells, but normal working cells should still start with or rely on an explicit `useOrCreateTaskSpace(nameOrId)` result for the active task — this lets you operate continuously and reuse tabs across cells. The exception is resuming after a handoff: once the user confirms "continue" (through an Ask or in chat), start the next cell with `takeOverTaskSpace(nameOrId)` instead.
 
 `nameOrId` can be a task space name, numeric id, or digit-only numeric id string. String values match `name`/`taskId` first, then digit-only strings fall back to numeric id. Number values match existing numeric ids only; if no matching id exists, `useOrCreateTaskSpace` fails instead of creating a new space.
 
-Use a short name for the active user goal when creating a new task space. Keep reusing that task space for follow-up questions, corrections, refinements, re-checks, and result validation, even if you previously thought the task was complete. Choose a new task space only when the user clearly starts a separate, unrelated goal. Prefer using the numeric `id` returned by `useOrCreateTaskSpace` (for example, `task.id`) to resume a known task in later rounds and avoid name collisions.
+Use a short name for the active user goal when creating a new task space. Keep reusing that task space for follow-up questions, corrections, refinements, re-checks, and result validation, even if you previously thought the task was complete. Choose a new task space only when the user clearly starts a separate, unrelated goal. Prefer using the numeric `id` returned by `useOrCreateTaskSpace` (for example, `task.id`) to resume a known task in later cells and avoid name collisions.
 
 For any follow-up on the same user goal — including continue, corrections, retries, validation, user-reported problems, or work after `completeTaskSpace(..., { keep: true })` — resume the original task space first if it still exists. Do not create a new task space for the same goal unless the user asks for a fresh space, starts an unrelated goal, or the original space is unavailable after checking. If a new space is necessary, state why.
 
@@ -85,7 +89,7 @@ After explicit user confirmation, to continue work from an existing user-owned, 
 
 `handOffTaskSpace` and `completeTaskSpace` resolve `{ done: true }` when the operation actually happened. Check `done` before telling the user the handoff/cleanup is finished — a `skipped` result usually means you targeted a space that was never yours.
 
-**`completeTaskSpace(nameOrId, { keep })` must occupy its own dedicated final heredoc, and run only after a prior heredoc's output has confirmed the task is genuinely done.** `keep` is required and defaults by policy to `false`: close the task space after completion unless there is a concrete reason to leave the live page visible.
+**`completeTaskSpace(nameOrId, { keep })` must occupy its own dedicated final cell, and run only after a prior cell's output has confirmed the task is genuinely done.** `keep` is required and defaults by policy to `false`: close the task space after completion unless there is a concrete reason to leave the live page visible.
 
 Use `{ keep: true }` only when the user explicitly asks to keep the page open, the task needs manual user action in that exact page, or the result cannot be delivered well as a URL, file, artifact, or summary. Do not keep a task space open merely because a page was visited, a document was created, or a screenshot was used for verification.
 
@@ -102,13 +106,13 @@ A "user is controlling" error is a hard stop on the whole task — not an obstac
 
 An "inactive", "not assigned to an agent", or similar task-space error is also a hard stop with the same confirmation requirement. Resume only after explicit user confirmation, then start with `await claimTaskSpace(id)`.
 
-**Handing off**: When the task requires user intervention (e.g. login, captcha, manual confirmation), call `await handOffTaskSpace([nameOrId])` to give control to the user, and tell them exactly what to do. Omitting `nameOrId` uses the currently selected task space; pass `task.id` across heredoc rounds to avoid ambiguity.
+**Handing off**: When the task requires user intervention (e.g. login, captcha, manual confirmation), call `await handOffTaskSpace([nameOrId])` to give control to the user, and tell them exactly what to do. Omitting `nameOrId` uses the currently selected task space; pass `task.id` across cells to avoid ambiguity.
 
-**Regaining control**: Take control back *only* after the user explicitly confirms — through an Ask (your harness's button/option prompt, e.g. "Continue" vs "Finish task") or a "continue" message in chat. Then start a new heredoc with `await takeOverTaskSpace([nameOrId])` and resume; if the user chooses to finish, close out with `await completeTaskSpace(nameOrId, { keep })`. Never call `takeOverTaskSpace` on your own to grab control back — it has no ownership check and will seize the browser away from the user.
+**Regaining control**: Take control back *only* after the user explicitly confirms — through an Ask (your harness's button/option prompt, e.g. "Continue" vs "Finish task") or a "continue" message in chat. Then start a new cell with `await takeOverTaskSpace([nameOrId])` and resume; if the user chooses to finish, close out with `await completeTaskSpace(nameOrId, { keep })`. Never call `takeOverTaskSpace` on your own to grab control back — it has no ownership check and will seize the browser away from the user.
 
 **Unexpected takeover**: The user can take over at any time via the browser GUI — the same effect as the agent calling `handOffTaskSpace`. Do not retry the failed operation and do not auto-takeover; surface the Ask above (Continue / Finish) and resume only when the user picks Continue.
 
-`await waitForAgentControl(nameOrId)` is a read-only blocking poll (it never takes control); use it only to wait inside the current heredoc for a handoff you initiated.
+`await waitForAgentControl(nameOrId)` is a read-only blocking poll (it never takes control); use it only to wait inside the current cell for a handoff you initiated.
 
 
 ### Scroll / mouse
@@ -187,7 +191,7 @@ Before writing substantial content into a rich editor, perform a tiny write prob
    - Keep browser-side logic in one explicit IIFE and return once.
    - Use `await cdp(...)` for browser protocol operations that helpers do not cover.
 
-These workflows can be combined. A task may take multiple heredoc rounds when the next step depends on fresh page state or user handoff. In each round, write a coherent script that advances the task: observe, act or extract, verify, and report with `console.log(...)`. Avoid tiny probe scripts, but don't force the whole task into one oversized script.
+These workflows can be combined. A task may take multiple cells when the next step depends on fresh page state or user handoff. In each cell, write coherent code that advances the task: observe, act or extract, verify, and report with `console.log(...)`. Avoid tiny probe cells, but don't force the whole task into one oversized cell.
 
 
 ## Caveats
@@ -199,8 +203,8 @@ These workflows can be combined. A task may take multiple heredoc rounds when th
 - Inside a `evaluate(...)` template string, regex backslashes must be doubled (e.g. `\\d`, `\\s`), or use `String.raw`.
 - If the source passed to `evaluate()` contains a top-level `return`, it will be auto-wrapped in an IIFE; `return` inside nested callbacks can also trigger this accidentally. For complex expressions, prefer the explicit `(() => { ... })()` form.
 - If `await pageInfo()` reports `w: 0` or `h: 0`, do not continue coordinate actions or screenshots until the viewport is fixed. Try switching to the real tab, reloading, or using CDP viewport metrics, then verify with `await pageInfo()` and `await screenshot()`.
-- Code in the heredoc body runs in Node.js; code inside `evaluate(...)` runs in the browser page. Navigation, waits, and `console.log(...)` belong in the heredoc body; `document`, `window`, and page selectors belong inside `evaluate(...)`.
+- Code in a REPL cell runs in Node.js; code inside `evaluate(...)` runs in the browser page. Navigation, waits, and `console.log(...)` belong in the cell; `document`, `window`, and page selectors belong inside `evaluate(...)`.
 - Always call `completeTaskSpace(name, { keep })` when the task is done — do not leave the space hanging. Default to `{ keep: false }`; use `{ keep: true }` only for the concrete live-page cases described in Task spaces.
 - When the user explicitly asks to use ego-browser, assume both `ego-browser` and the repo runtime are ready. Do not pre-check `which ego-browser`, `node -v`, package metadata, or help output. Only investigate environment issues if the first run produces an error.
-- If the first run reports `command not found` / a missing environment (most likely ego lite isn't installed yet), or the user explicitly asks to install ego lite, first read `references/install.md` and follow its flow to complete the install, then return to the original task — do not give up, and do not keep retrying the same heredoc.
+- If the first run reports `command not found` / a missing environment (most likely ego lite isn't installed yet), or the user explicitly asks to install ego lite, first read `references/install.md` and follow its flow to complete the install, then return to the original task — do not give up, and do not keep retrying the same command.
 - A trailing `[ego-browser:notice]` line means an ego lite update is available/required — it is an out-of-band hint appended after the command's own output, not an error or part of the result. Do not act on it mid-task; keep working toward the user's goal. Once the current browser task stops or completes (including right before/after `completeTaskSpace`), tell the user about the update and ask whether they want to run `ego-browser upgrade` and restart ego lite now.

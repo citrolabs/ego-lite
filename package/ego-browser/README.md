@@ -3,7 +3,7 @@
 The Node.js helper layer that runs inside the `ego-browser` Chromium browser. The browser exposes an `ego` runtime (tabs, CDP, snapshots, task spaces); this package bundles the agent-facing helpers that script that runtime.
 
 ```text
-ego-browser (Chromium) → globalThis.ego → helper functions → agent heredoc
+ego-browser (Chromium) → globalThis.ego → helper functions → agent REPL cells
 ```
 
 ## Build and run
@@ -14,17 +14,33 @@ npm run build     # bundle to dist/out/index.js
 npm test          # build + tsc --noEmit + node --test
 ```
 
-The build emits a single ESM file `dist/out/index.js`. The ego-browser browser dispatches `ego-browser nodejs <<'EOF' ... EOF` heredocs to that bundle. Inside the heredoc, all helpers (`snapshot`, `click`, `useOrCreateTaskSpace`, ...) are pre-imported in camelCase.
+The build emits a single ESM file `dist/out/index.js`. The ego-browser app loads that bundle for `ego-browser nodejs` sessions. Inside each REPL cell, all helpers (`snapshot`, `click`, `useOrCreateTaskSpace`, ...) are pre-imported in camelCase.
 
 ```bash
-ego-browser nodejs <<'EOF'
+ego-browser nodejs
+```
+
+```text
+repl> .cell
 await useOrCreateTaskSpace('demo')
 await openOrReuseTab('https://example.com', { wait: true })
 console.log(await snapshot())
-EOF
+.end
 ```
 
-Local invocation without the browser (for debugging the helper bundle itself) reads stdin:
+Local invocation without the browser (for debugging the helper bundle itself) can use interactive cell mode:
+
+```bash
+node dist/out/index.js --repl
+```
+
+```text
+repl> .cell
+console.log(await pageInfo())
+.end
+```
+
+Piped stdin remains supported for scripts and tests:
 
 ```bash
 node dist/out/index.js <<'JS'
@@ -32,7 +48,7 @@ console.log(await pageInfo())
 JS
 ```
 
-Flags: `-h | --help`, `--doctor`, `--reload`, `--debug-clicks`.
+Flags: `-h | --help`, `--doctor`, `--reload`, `--debug-clicks`, `--repl`.
 
 ## Skill workspace
 
@@ -45,9 +61,13 @@ By default the runtime loads agent helpers and site learnings from the sibling s
 Override with `EGO_BROWSER_AGENT_WORKSPACE`:
 
 ```bash
-EGO_BROWSER_AGENT_WORKSPACE=/path/to/skill ego-browser nodejs <<'EOF'
+EGO_BROWSER_AGENT_WORKSPACE=/path/to/skill ego-browser nodejs
+```
+
+```text
+repl> .cell
 console.log(await siteSkills())
-EOF
+.end
 ```
 
 Site learnings under `agentWorkspace()/learnings/<site>/` are always active and read on every helper call. Validate them with:
@@ -60,7 +80,7 @@ npm run validate:site-skills    # alias: validate:learnings
 
 ```
 src/
-  run.ts                 CLI entry; reads stdin, injects helpers, executes
+  run.ts                 CLI entry; REPL cells / stdin compatibility execution
   helpers.ts             public helper surface (re-exports + glue)
   browser-runtime.ts     bridge to globalThis.ego (CDP, sessions, events)
   element-resolver.ts    resolves @eN / CSS / XPath / ARIA targets

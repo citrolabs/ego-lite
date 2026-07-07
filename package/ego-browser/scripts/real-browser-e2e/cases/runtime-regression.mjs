@@ -36,7 +36,7 @@ export function runtimeRegressionCase() {
       "transient miss polls until the timeout elapses"
     );
 
-    /* js runs in the page, not the heredoc: caller closure variables are NOT
+    /* js runs in the page, not the Node-side script: caller closure variables are NOT
        captured. 'outer' is referenced only inside the serialized function. */
     const outer = 100;
     const closureType = await evaluate(function () {
