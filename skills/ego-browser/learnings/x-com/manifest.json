@@ -2,8 +2,65 @@
   "id": "x-com",
   "name": "X (Twitter)",
   "domains": ["x.com", "*.x.com", "twitter.com", "*.twitter.com"],
-  "notes": ["notes/overview.md", "notes/timeline.md"],
+  "notes": ["notes/overview.md", "notes/timeline.md", "notes/bookmarks.md"],
   "nodeTools": {
+    "get_bookmarks": {
+      "description": "Collect signed-in X bookmarks across virtualized scrolling with deduplication and bounded work.",
+      "path": "tools/bookmarks.js",
+      "callable": "getBookmarks",
+      "args": {
+        "maxPosts": {
+          "type": "integer",
+          "required": false,
+          "description": "Maximum number of unique bookmarks to collect (1-500)."
+        },
+        "maxScrolls": {
+          "type": "integer",
+          "required": false,
+          "description": "Maximum number of timeline scrolls (1-200)."
+        },
+        "idleScrolls": {
+          "type": "integer",
+          "required": false,
+          "description": "Stop after this many scrolls produce no new bookmarks (1-10)."
+        },
+        "waitMs": {
+          "type": "integer",
+          "required": false,
+          "description": "Wait between virtual-list scrolls in milliseconds (100-5000)."
+        },
+        "fromTop": {
+          "type": "boolean",
+          "required": false,
+          "description": "Start from the newest bookmarks at the top of the page."
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "Object with items, count, scrolls, and stop reason."
+      }
+    },
+    "get_post": {
+      "description": "Extract a specific X post and any expanded long-form article content.",
+      "path": "tools/post.js",
+      "callable": "getPost",
+      "args": {
+        "url": {
+          "type": "string",
+          "required": false,
+          "description": "X post or article URL; defaults to the current X page."
+        },
+        "maxArticleChars": {
+          "type": "integer",
+          "required": false,
+          "description": "Maximum long-form article characters to return (1000-200000)."
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "Post metadata and optional expanded article content."
+      }
+    },
     "get_timeline_posts": {
       "description": "Extract posts from the current X timeline using the anti-click-wrap pattern.",
       "path": "tools/timeline.js",
@@ -17,7 +74,7 @@
       },
       "returns": {
         "type": "array",
-        "description": "Array of post objects with text, author, and timestamp."
+        "description": "Array of post objects with id, URL, text, author, handle, timestamp, and links."
       }
     },
     "search_users": {

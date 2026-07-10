@@ -412,6 +412,61 @@ test("evaluate attaches to a target session when legacy target id is given", asy
       "(function(){return document.title})()",
     );
     assert.equal(calls[1][2], "sess-123");
+    assert.equal(calls[2][0], "Target.detachFromTarget");
+    assert.deepEqual(calls[2][1], { sessionId: "sess-123" });
+  } finally {
+    restore();
+  }
+});
+
+test("evaluate detaches a target session when evaluation fails", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride: async (method, params, sessionId) => {
+      calls.push([method, params, sessionId]);
+      if (method === "Target.attachToTarget") {
+        return { sessionId: "sess-failed" };
+      }
+      if (method === "Runtime.evaluate") {
+        throw new Error("evaluation failed");
+      }
+      return {};
+    },
+  });
+  try {
+    await assert.rejects(
+      () => evaluate("document.title", "target-abc"),
+      /evaluation failed/,
+    );
+    assert.equal(calls.at(-1)[0], "Target.detachFromTarget");
+    assert.deepEqual(calls.at(-1)[1], { sessionId: "sess-failed" });
+  } finally {
+    restore();
+  }
+});
+
+test("evaluate does not detach after a task-space hard stop", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride: async (method, params, sessionId) => {
+      calls.push([method, params, sessionId]);
+      if (method === "Target.attachToTarget") {
+        return { sessionId: "sess-user-control" };
+      }
+      const error = new Error("user is controlling");
+      error.error_code = "EGO_TASK_SPACE_USER_IN_CONTROL";
+      throw error;
+    },
+  });
+  try {
+    await assert.rejects(
+      () => evaluate("document.title", "target-abc"),
+      (error) => error.error_code === "EGO_TASK_SPACE_USER_IN_CONTROL",
+    );
+    assert.deepEqual(
+      calls.map(([method]) => method),
+      ["Target.attachToTarget", "Runtime.evaluate"],
+    );
   } finally {
     restore();
   }

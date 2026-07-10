@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 
 import { agentWorkspace, loadEnv } from "./env.js";
 import { browserCdp } from "./browser-runtime.js";
+import { runtimeState } from "./runtime-state.js";
 
 loadEnv();
 
@@ -21,23 +22,13 @@ async function defaultSend(req) {
   return { result: response.result || {} };
 }
 
-export const state = {
+export const state = Object.assign(runtimeState, {
   send: defaultSend,
-  cdpOverride: null,
-  now: () => Date.now(),
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   platform: process.platform,
   agentWorkspace: () => agentWorkspace(),
   writeFile,
-  sessionId: null,
-  sessionTargetId: null,
-  sessionAt: 0,
-  sessionInflight: null,
-  preferredTargetId: null,
-  defaultTimeout: 10000,
-  // Last observed Network domain state on the default session (tracked in cdp()).
-  networkDomainEnabled: false,
-};
+});
 
 export async function send(req) {
   return state.send(req);

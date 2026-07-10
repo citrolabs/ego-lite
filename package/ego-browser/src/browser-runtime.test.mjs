@@ -303,6 +303,27 @@ test("drainBrowserEvents caps at MAX_BUFFERED_EVENTS (10000)", async () => {
   }
 });
 
+test("drainBrowserEvents stays capped after internal buffer compaction", async () => {
+  const calls = installManualEgo();
+  try {
+    const p = browserCdp("Target.getVersion", {}, undefined, 5000);
+    globalThis.ego.onCDPMessage(
+      JSON.stringify({ id: calls[0].id, result: {} }),
+    );
+    await p;
+
+    for (let i = 0; i < 25050; i++) {
+      fireEvent(`evt.${i}`, {});
+    }
+    const evts = drainBrowserEvents();
+    assert.equal(evts.length, 10000, "buffer remains capped after compaction");
+    assert.equal(evts[0].method, "evt.15050", "oldest events are dropped");
+    assert.equal(evts[evts.length - 1].method, "evt.25049");
+  } finally {
+    cleanup();
+  }
+});
+
 /* ------------------------------------------------------------------ */
 /*  Dialog tracking                                                   */
 /* ------------------------------------------------------------------ */

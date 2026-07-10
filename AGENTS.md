@@ -12,7 +12,7 @@ This repo contains the open-source harness and the agent skill package — **not
 - Both paths expose the same helper surface, built by `helperContext()` in `src/helpers.ts` — the single source of truth for what agents can call (including `help()` and `agent_helpers.js` extensions).
 - `src/run.ts` executes stdin JavaScript inside an async function with the helpers injected as parameters.
 - `src/browser-runtime.ts` owns CDP transport over `ego.sendCDPMessage`, session attach/caching (2s TTL, auto re-attach on session loss), the buffered event queue (10k cap), and JS dialog tracking.
-- `src/cdp-eval.ts` provides `cdp()` and `js()` (string-expression evaluation; top-level `return` is auto-wrapped in an IIFE).
+- `src/cdp-eval.ts` provides `cdp()` and `evaluate()` (string-expression evaluation; top-level `return` is auto-wrapped in an IIFE).
 - `src/element-resolver.ts` resolves all target forms — `@N` refs, `loc=css:` / `loc=role:` / `loc=href:` locators, `xpath=`, raw CSS — and classifies failures as `transient` (retryable) or `permanent`.
 - `src/ref-map.ts` + `src/ref-state.ts`: refs are numeric `backendNodeId`s (`@21`, not `@e21`). The map is rebuilt on every snapshot; using a ref while the map is empty triggers an automatic re-snapshot, which is what makes refs work across heredoc rounds.
 - `src/driver/` — `nav` (tabs, navigation), `pointer` (click/scroll/drag), `keyboard`, `observe` (snapshot/screenshot), `waits`, `files` (upload), `element-ops` (objectId handles), `load`.

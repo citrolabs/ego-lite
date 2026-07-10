@@ -1,4 +1,5 @@
 import { send, state } from "./state.js";
+import { isEgoHardStopError } from "./ego-errors.js";
 
 class TimeoutError extends Error {}
 
@@ -61,7 +62,28 @@ export async function evaluate(pageFunction, arg = undefined) {
   if (hasReturnStatement(expression) && !expression.trim().startsWith("(")) {
     expression = `(function(){${expression}})()`;
   }
-  return runtimeEvaluate(expression, sessionId, true);
+  let shouldDetach = true;
+  try {
+    return await runtimeEvaluate(expression, sessionId, true);
+  } catch (error) {
+    // A user takeover/inactive task is a hard stop. Do not issue a cleanup
+    // command after it; the session will be reclaimed with the task context.
+    shouldDetach = !isEgoHardStopError(error);
+    throw error;
+  } finally {
+    if (sessionId && shouldDetach) {
+      await detachTemporarySession(sessionId);
+    }
+  }
+}
+
+async function detachTemporarySession(sessionId) {
+  try {
+    await cdp("Target.detachFromTarget", { sessionId });
+  } catch {
+    // The target or browser may already be gone. Cleanup must not replace the
+    // evaluation result (or its original error) with a secondary detach error.
+  }
 }
 
 async function runtimeEvaluate(

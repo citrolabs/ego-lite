@@ -44,7 +44,7 @@ ego-lite/
 │   │   ├── helpers.ts          # Public helper surface composition
 │   │   ├── browser-runtime.ts  # CDP transport and session cache
 │   │   ├── element-resolver.ts # @eN / CSS / XPath / ARIA resolution
-│   │   ├── cdp-eval.ts         # cdp() / js() helpers
+│   │   ├── cdp-eval.ts         # cdp() / evaluate() helpers
 │   │   ├── state.ts            # Shared mutable runtime state (singleton)
 │   │   ├── env.ts              # Environment variables
 │   │   ├── driver/             # Capability-scoped driver modules
@@ -155,7 +155,7 @@ JS
            │ helpers.ts (public API)      │
            │  ├─ task-space helpers       │
            │  ├─ driver/* capabilities    │
-           │  ├─ cdp() / js()             │
+           │  ├─ cdp() / evaluate()       │
            │  └─ learning helpers         │
            └──────────────┬───────────────┘
                           │
@@ -196,7 +196,7 @@ Control (`agent` ↔ `user`) is handed off via the `handOffTaskSpace` / `takeOve
 | `src/helpers.ts` | Composes and exports the helper set exposed to heredocs |
 | `src/browser-runtime.ts` | Maintains the CDP connection, session cache, and event buffer for the browser's ego runtime |
 | `src/element-resolver.ts` | Resolves `@eN` refs, CSS, XPath, and ARIA/role to backend nodeIds |
-| `src/cdp-eval.ts` | `cdp()` raw CDP calls + `js()` in-page evaluation |
+| `src/cdp-eval.ts` | `cdp()` raw CDP calls + `evaluate()` in-page evaluation |
 | `src/state.ts` | Shared mutable state singleton (`send`, `platform`, `agentWorkspace`, session caches). Tests can inject stubs via `setOverrides()` |
 | `src/driver/*` | Minimal-dependency primitives per capability; only call into `cdp()` |
 | `src/learning/index.ts` | Discovers and loads `learnings/<site>/`, exposes `runSiteTool` / `runSiteBrowserTool` |

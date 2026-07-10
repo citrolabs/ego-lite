@@ -1,4 +1,4 @@
-import { state } from "./state.js";
+import { runtimeState as state } from "./runtime-state.js";
 import { assertNoEgoError, buildEgoError } from "./ego-errors.js";
 
 const RESPONSE_TIMEOUT_MS = 15000;
@@ -6,6 +6,10 @@ const SESSION_TTL_MS = 2000;
 // Upper bound for buffered CDP events. The runtime can be long-lived (installEgoSdk
 // inside the browser); without a cap, undrained events grow without bound.
 const MAX_BUFFERED_EVENTS = 10000;
+// Dropped events are represented by an advancing head index so sustained CDP
+// traffic does not shift a 10k-element array on every new event. Compact in
+// batches to keep retained memory bounded while preserving an exact 10k cap.
+const EVENT_COMPACTION_THRESHOLD = 1024;
 const SESSION_LOST =
   /Session (?:with given id )?not found|Target closed|No session/i;
 const BROWSER_LEVEL = (method) =>
@@ -14,6 +18,7 @@ let nextMessageId = 1;
 const pending = new Map();
 const events = [];
 const eventWaiters = [];
+let eventHead = 0;
 const pageEnabledSessions = new Set();
 const pendingDialogs = new Map();
 export function isBrowserRuntime() {
@@ -156,7 +161,9 @@ export function clearPreferredTarget() {
 }
 
 export function drainBrowserEvents() {
-  const out = events.splice(0, events.length);
+  const out = events.slice(eventHead);
+  events.length = 0;
+  eventHead = 0;
   return out;
 }
 
@@ -259,8 +266,12 @@ function handleMessage(message) {
     }
   }
   events.push(data);
-  if (events.length > MAX_BUFFERED_EVENTS) {
-    events.splice(0, events.length - MAX_BUFFERED_EVENTS);
+  if (events.length - eventHead > MAX_BUFFERED_EVENTS) {
+    eventHead += 1;
+  }
+  if (eventHead >= EVENT_COMPACTION_THRESHOLD) {
+    events.splice(0, eventHead);
+    eventHead = 0;
   }
   for (const waiter of [...eventWaiters]) {
     let matched = false;
