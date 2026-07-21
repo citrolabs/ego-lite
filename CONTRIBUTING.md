@@ -2,7 +2,7 @@
 
 Thanks for your interest in contributing to **ego-browser (ego-lite)**! This guide is aimed at developers who want to build on top of the project or submit patches upstream. It covers the architecture, local development workflow, code conventions, and PR process.
 
-> For the project vision, see [`README.md`](./README.md). For the agent-facing runbook, see [`skills/ego-browser/SKILL.md`](./skills/ego-browser/SKILL.md) (or [`SKILL.zh.md`](./skills/ego-browser/SKILL.zh.md)). For repo-level guidance, see [`AGENTS.md`](./AGENTS.md).
+> For the project vision, see [`README.md`](./README.md). For the agent-facing runbook, see [`skills/ego-browser/SKILL.md`](./skills/ego-browser/SKILL.md). A local Chinese translation (`SKILL.zh.md`) may exist beside it but is gitignored and not part of the repo. For repo-level guidance, see [`AGENTS.md`](./AGENTS.md).
 
 ---
 
@@ -43,7 +43,7 @@ ego-lite/
 │   │   ├── run.ts              # stdin executor, CLI entry
 │   │   ├── helpers.ts          # Public helper surface composition
 │   │   ├── browser-runtime.ts  # CDP transport and session cache
-│   │   ├── element-resolver.ts # @eN / CSS / XPath / ARIA resolution
+│   │   ├── element-resolver.ts # @N refs / CSS / XPath / ARIA resolution
 │   │   ├── cdp-eval.ts         # cdp() / js() helpers
 │   │   ├── state.ts            # Shared mutable runtime state (singleton)
 │   │   ├── env.ts              # Environment variables
@@ -58,14 +58,14 @@ ego-lite/
 │   ├── scripts/
 │   │   ├── build.mjs           # esbuild + rollup bundler
 │   │   └── validate-site-skills.ts
-│   ├── test/                   # node --test suites
-│   ├── artifacts/              # Build output (published to GitHub Release by CI)
-│   ├── dist/                   # tsc output (gitignored)
+│   ├── dist/                   # build output (gitignored)
+│   │   ├── src/                # esbuild per-file emit + colocated *.test.mjs
+│   │   └── out/                # rollup bundle (index.js + copied skill package)
 │   ├── package.json
 │   └── tsconfig.json
 ├── skills/ego-browser/         # Agent skill package
-│   ├── SKILL.md / SKILL.zh.md  # Agent usage guide
-│   └── learnings/<site>/       # Per-site knowledge packs (github / google / x-com ...)
+│   ├── SKILL.md                # Agent usage guide
+│   └── learnings/<site>/       # Per-site knowledge packs (google / x-com / ...)
 ├── spec/                       # Spec references
 ├── public/                     # Demo assets
 ├── .github/workflows/ci.yml    # CI (test + release)
@@ -83,7 +83,7 @@ ego-lite/
 | Language | TypeScript (`tsc --noEmit` for typecheck only) |
 | Runtime | Node.js **>= 22**, ESM only (`"type": "module"`) |
 | Package manager | npm (commit `package-lock.json`) |
-| Bundler | esbuild + rollup (output: `artifacts/ego-browser/index.js`) |
+| Bundler | esbuild + rollup (bundle: `dist/out/index.js`; release zip: `dist/ego-browser-vX.Y.Z.zip`) |
 | Tests | Node built-in `node --test` + `node:assert/strict` |
 | Runtime deps | Only `acorn` (lightweight parsing) |
 | Browser transport | Chrome DevTools Protocol (CDP) directly — **no Puppeteer / Playwright** |
@@ -99,7 +99,7 @@ ego-lite/
 cd package/ego-browser
 npm ci
 
-# 2. Build (produces dist/ and artifacts/ego-browser/index.js)
+# 2. Build (produces dist/src/ and dist/out/index.js)
 npm run build
 
 # 3. Typecheck
@@ -115,9 +115,9 @@ npm run validate:site-skills    # alias: validate:learnings
 **Calling the CLI directly** (for local debugging):
 
 ```bash
-node artifacts/ego-browser/index.js <<'JS'
-await waitForLoadState()
-console.log(await pageInfo())
+node dist/out/index.js <<'JS'
+await page.waitForLoadState()
+console.log(await page.info())
 JS
 ```
 
@@ -195,7 +195,7 @@ Control (`agent` ↔ `user`) is handed off via the `handOffTaskSpace` / `takeOve
 | `src/run.ts` | Reads stdin, builds an `AsyncFunction`, and invokes it with helpers as named arguments |
 | `src/helpers.ts` | Composes and exports the helper set exposed to heredocs |
 | `src/browser-runtime.ts` | Maintains the CDP connection, session cache, and event buffer for the browser's ego runtime |
-| `src/element-resolver.ts` | Resolves `@eN` refs, CSS, XPath, and ARIA/role to backend nodeIds |
+| `src/element-resolver.ts` | Resolves `@N` snapshot refs (numeric `backendNodeId`s), CSS, XPath, and ARIA/role to backend nodeIds |
 | `src/cdp-eval.ts` | `cdp()` raw CDP calls + `js()` in-page evaluation |
 | `src/state.ts` | Shared mutable state singleton (`send`, `platform`, `agentWorkspace`, session caches). Tests can inject stubs via `setOverrides()` |
 | `src/driver/*` | Minimal-dependency primitives per capability; only call into `cdp()` |
@@ -221,7 +221,7 @@ learnings/<site>/
 
 **Adding a new site learning pack**:
 
-1. Copy the structure from an existing pack (recommend `learnings/github/`).
+1. Copy the structure from an existing pack (recommend `learnings/google/` or `learnings/x-com/`).
 2. Write `manifest.json` with `id`, `name`, `domains[]`, `notes[]`, `nodeTools{}`, `browserTools{}`, and parameter schemas.
 3. Implement `tools/*.js` and `browser-tools/*.js`.
 4. Validate:
@@ -229,7 +229,7 @@ learnings/<site>/
    cd package/ego-browser
    npm run validate:site-skills
    ```
-5. Add at least one behavior test in the `test/site-skills.test.js` style.
+5. Add at least one behavior test in the `src/learning/index.test.mjs` style.
 
 **Hard constraints for learning packs**:
 
@@ -242,7 +242,7 @@ learnings/<site>/
 ## 8. Testing & Quality
 
 - Test framework: `node --test` with `node:assert/strict`
-- Test files: `package/ego-browser/test/*.test.js`, split by responsibility (runtime / helpers / resolver / nav-driver / site-skills / build / state ...)
+- Test files: `package/ego-browser/src/**/*.test.mjs`, colocated with the code they cover (runtime / helpers / resolver / drivers / learning / build / state ...)
 - Style: behavior-driven, using **temp workspaces + `setOverrides()`** for stub injection — no real browser launches
 
 **Minimum pre-submit bar**:
@@ -251,14 +251,15 @@ learnings/<site>/
 cd package/ego-browser
 npm test                       # must pass
 npm run validate:site-skills   # if learnings changed
+npm run validate:agent-style   # if SKILL.md or learning notes changed
 ```
 
 **When to add/extend tests**:
 
-- Changes to session / connection handling → add cases in `browser-runtime.test.js` / `session-injection.test.js`
-- Changes to the resolver → `element-resolver.test.js`
-- New helper → `helpers.test.js` or the matching driver test
-- Changes to learning loading → `site-skills.test.js` / `validate-site-skills.test.js`
+- Changes to session / connection handling → add cases in `browser-runtime.test.mjs`
+- Changes to the resolver → `element-resolver.test.mjs`
+- New helper → `helpers.test.mjs` or the matching driver test
+- Changes to learning loading → `learning/index.test.mjs`
 
 ---
 
@@ -271,7 +272,7 @@ npm run validate:site-skills   # if learnings changed
 - **TypeScript non-strict mode**: `strict: false`, but keep explicit type signatures
 - **Shared state goes through the `state.ts` singleton** — do not thread `connection` / `send` through function parameters
 - **Helpers are injected, not imported**: agent scripts do not `import`; all helpers are placed in scope by `run.ts`
-- **Snapshot refs (`@eN`) are short-lived**: re-snapshot after any DOM mutation; for long-lived values use `loc=...` or stable CSS / ARIA
+- **Snapshot refs (`@N`, e.g. `@21`) are short-lived**: re-snapshot after any DOM mutation; for long-lived values use `loc=...` or stable CSS / ARIA
 - **No lint / prettier**: style is enforced by convention and code review. When editing, blend in with the surrounding code instead of introducing a new style
 
 ---
@@ -287,7 +288,7 @@ npm run validate:site-skills   # if learnings changed
   test(ego-browser): expand e2e coverage for handoff and control probing
   ```
 - Common `type`s: `feat` / `fix` / `refactor` / `test` / `docs` / `chore` / `ci`
-- `scope` is usually `ego-browser` or the learning pack name (e.g. `learnings/github`)
+- `scope` is usually `ego-browser` or the learning pack name (e.g. `learnings/google`)
 
 ### Pull Request
 
@@ -308,7 +309,8 @@ Add at least one release-note label so generated releases are grouped correctly:
 - [ ] If learnings changed, `npm run validate:site-skills` passes
 - [ ] Change is "minimal surgical edit" (see §12)
 - [ ] No undeclared runtime dependencies introduced
-- [ ] Public helper names / docs are kept in sync (update both `SKILL.md` and `SKILL.zh.md`)
+- [ ] Public helper names / docs are kept in sync (`SKILL.md`; update a local `SKILL.zh.md` translation separately if you maintain one)
+- [ ] If agent-facing docs changed, `npm run validate:agent-style` passes
 
 ---
 

@@ -73,3 +73,7 @@ jobs:
         working-directory: package/ego-browser
         run: npm run validate:site-skills
 
+      - name: Validate agent-facing doc style
+        working-directory: package/ego-browser
+        run: npm run validate:agent-style
+
