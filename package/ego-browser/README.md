@@ -63,12 +63,12 @@ src/
   run.ts                 CLI entry; reads stdin, injects helpers, executes
   helpers.ts             public Playwright-style facades plus internal helper glue
   browser-runtime.ts     bridge to globalThis.ego (CDP, sessions, events)
-  element-resolver.ts    resolves @eN / CSS / XPath / ARIA targets
+  element-resolver.ts    resolves @N snapshot refs / CSS / XPath / ARIA targets
   driver/
     pointer.ts           click, hover, drag, wheel, scrollIntoViewIfNeeded
     observe.ts           snapshot, screenshot, elementCenter
     keyboard.ts          focus, insertText, press, pressSequentially, fill, check, uncheck, setChecked, selectOption, dispatchEvent
-    locator.ts           first/nth/last selectors, getBy* text-style locators, textContent, innerText, inputValue, isChecked, getAttribute, count, allInnerTexts, allTextContents, evaluate, evaluateAll, extractAll
+    locator.ts           first/nth/last selectors, getBy* text-style locators, textContent, innerText, inputValue, isChecked, getAttribute, count, allInnerTexts, allTextContents, evaluate, evaluateAll
     nav.ts               tabs, goto, openOrReuseTab, closeTab
     load.ts              waitForDocumentLoad and load orchestration
     waits.ts             waitForTimeout, waitForLoadState, waitForSelector, waitForFunction, waitForURL

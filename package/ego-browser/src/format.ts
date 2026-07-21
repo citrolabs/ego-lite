@@ -377,7 +377,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
   "page.evaluate": {
     signature: "page.evaluate(expression) => Promise<any>",
     description:
-      "Evaluate page-wide browser JavaScript. Prefer locator.evaluateAll or extractAll for element collections.",
+      "Evaluate page-wide browser JavaScript. Prefer locator.evaluateAll for element collections.",
     params: [
       {
         name: "expression",
