@@ -108,7 +108,6 @@ export async function runMain(options: RunMainOptions = {}) {
 async function execute(code: string, stdout: WritableLike) {
   resetSink();
   const context = await executionContext();
-  Object.assign(globalThis, context);
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   const names = Object.keys(context);
   const values = Object.values(context);
