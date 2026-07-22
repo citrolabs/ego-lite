@@ -12,6 +12,12 @@ ego-browser exposes a real Chromium browser through a CLI-accessible Node.js run
 
 For setup, install, or connection problems, read `references/install.md`.
 
+The examples below require the Playwright-style runtime. If `taskSpaces`,
+`browser`, or `page` is undefined but legacy helpers such as
+`useOrCreateTaskSpace` exist, read
+[`references/legacy-runtime.md`](references/legacy-runtime.md) before
+continuing. Do not guess Playwright-style helper names against a legacy app.
+
 Run browser work with the `Bash` tool as `ego-browser nodejs <<'EOF' ... EOF`. Put the JavaScript directly in the heredoc; do not create a `.js` file, import Playwright, launch another browser, or invent helper names.
 
 **Treat the heredoc as an execution container, not a planning unit. Default to one Bash invocation for the whole browser task.** Keep every operation whose inputs can be derived inside that script: select the task space, observe state, branch with JavaScript, act, wait, extract, verify, complete the task space, and print the result. Use variables, loops, and conditionals instead of returning after each action. Start another Bash command only when continuation truly requires user input or control, visual inspection outside the script, or recovery from a command that cannot continue.

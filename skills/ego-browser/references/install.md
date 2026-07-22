@@ -45,15 +45,30 @@ export PATH="$HOME/.local/bin:$PATH"
 command -v ego-browser
 ```
 
-Once the command exists, verify the runtime with a minimal heredoc:
+Once the command exists, verify which runtime API the installed app exposes:
 
 ```bash
 ego-browser nodejs <<'EOF'
-console.log('ego-browser ready')
+const runtimeApi =
+  typeof taskSpaces === 'object' &&
+  typeof browser === 'object' &&
+  typeof page === 'object'
+    ? 'playwright-style'
+    : typeof useOrCreateTaskSpace === 'function'
+      ? 'legacy'
+      : 'unknown'
+
+console.log(JSON.stringify({ runtimeApi }))
 EOF
 ```
 
-Printing `ego-browser ready` means the environment is ready.
+`{"runtimeApi":"playwright-style"}` means the environment matches the examples
+in `SKILL.md`. If the probe reports `legacy`, run `ego-browser upgrade`, restart
+ego lite, and repeat the probe. When no newer app is available, read
+[the legacy runtime guide](legacy-runtime.md) for the supported fallback helper
+names. An `unknown` result
+means the CLI and app runtime are not compatible; capture the command output and
+report it rather than guessing helper names.
 
 ## After that, return to the original task
 
@@ -65,3 +80,4 @@ Once the environment is ready, return to the user's original task and continue w
 - **Download failed**: the script retries 3 times automatically; if it still fails, it's usually a network issue — have the user check their network and retry.
 - **Gatekeeper still blocks it**: the script already tries to strip quarantine; if the first launch is still blocked, have the user allow ego lite manually under System Settings → Privacy & Security.
 - **Command still unavailable after onboarding**: confirm `~/.local/bin` is on the PATH (see above); or have the user reopen ego lite, finish onboarding, and retry.
+- **`taskSpaces`, `browser`, or `page` is undefined**: run the capability probe above. Upgrade and restart ego lite when possible; otherwise follow [the legacy runtime guide](legacy-runtime.md) for the legacy helper surface.
