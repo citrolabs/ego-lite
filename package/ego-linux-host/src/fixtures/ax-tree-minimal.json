@@ -1,0 +1,68 @@
+{
+  "nodes": [
+    {
+      "nodeId": "1",
+      "ignored": false,
+      "role": { "type": "role", "value": "RootWebArea" },
+      "name": { "type": "computedString", "value": "Example" },
+      "childIds": ["2", "3", "4", "5"],
+      "backendDOMNodeId": 1
+    },
+    {
+      "nodeId": "2",
+      "ignored": false,
+      "role": { "type": "role", "value": "heading" },
+      "name": { "type": "computedString", "value": "Welcome" },
+      "childIds": [],
+      "backendDOMNodeId": 10
+    },
+    {
+      "nodeId": "3",
+      "ignored": false,
+      "role": { "type": "role", "value": "button" },
+      "name": { "type": "computedString", "value": "Submit" },
+      "childIds": [],
+      "backendDOMNodeId": 20
+    },
+    {
+      "nodeId": "4",
+      "ignored": false,
+      "role": { "type": "role", "value": "link" },
+      "name": { "type": "computedString", "value": "Home" },
+      "childIds": [],
+      "backendDOMNodeId": 30
+    },
+    {
+      "nodeId": "5",
+      "ignored": false,
+      "role": { "type": "role", "value": "textbox" },
+      "name": { "type": "computedString", "value": "Email" },
+      "childIds": [],
+      "backendDOMNodeId": 40
+    },
+    {
+      "nodeId": "6",
+      "ignored": true,
+      "role": { "type": "role", "value": "generic" },
+      "name": { "type": "computedString", "value": "" },
+      "childIds": [],
+      "backendDOMNodeId": 50
+    },
+    {
+      "nodeId": "7",
+      "ignored": false,
+      "role": { "type": "role", "value": "generic" },
+      "name": { "type": "computedString", "value": "" },
+      "childIds": [],
+      "backendDOMNodeId": 60
+    },
+    {
+      "nodeId": "8",
+      "ignored": false,
+      "role": { "type": "role", "value": "StaticText" },
+      "name": { "type": "computedString", "value": "Hello world" },
+      "childIds": [],
+      "backendDOMNodeId": 70
+    }
+  ]
+}
