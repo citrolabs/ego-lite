@@ -188,6 +188,22 @@ Combine the paths within the same Bash invocation whenever their next inputs are
 - Once the current browser task stops or completes (including right before/after `taskSpaces.complete`), tell the user about the update: the notice line, and the current version shown in the notice. Proactively offer to run the upgrade — mention that it updates the ego lite browser, the CLI, and the Skills together, not just the app.
 - If the user agrees, run `ego-browser upgrade` in the shell. After the upgrade finishes, re-read the `ego-browser` skill (this file) before continuing, since the upgrade may have changed its content.
 
+## Runtime compatibility
+
+The Playwright-style `page`, `browser`, and `taskSpaces` facades documented above require a recent ego lite App/CLI. Older builds (for example `ego-browser 0.4.4.x`) inject only the legacy top-level helpers instead, so a script written against the new facades fails immediately with `ReferenceError: taskSpaces is not defined` (or the same for `page` / `browser`).
+
+If a first command fails that way, the installed runtime is out of date, not the script. Run `ego-browser upgrade` (it updates the browser, CLI, and Skills together), then re-read this file and retry with the facade API. Only if the upgrade is unavailable, fall back to the legacy top-level helpers exposed by the older runtime:
+
+| Facade API (this skill) | Legacy top-level helper (older App/CLI) |
+|---|---|
+| `taskSpaces.useOrCreate(nameOrId)` | `useOrCreateTaskSpace(nameOrId)` |
+| `taskSpaces.complete(nameOrId, { keep })` | `completeTaskSpace(nameOrId, { keep })` |
+| `browser.openOrReuseTab(url, opts)` | `openOrReuseTab(url, opts)` |
+| `page.snapshot()` | `snapshotText()` |
+| `fetch.server` / `fetch.browser` | `fetch` |
+
+Probe the runtime with `typeof taskSpaces !== 'undefined' ? 'facade' : 'legacy'` when you are unsure which API a build exposes. The legacy helpers are a compatibility fallback only; prefer upgrading so the documented facade behavior, waits, and ownership semantics apply.
+
 ## Caveats
 
 - Timeouts are milliseconds in the Playwright-style `page`, locator, navigation, and browser helpers. Exceptions: `fetch.server` / `fetch.browser` timeout and `taskSpaces.waitForAgentControl` interval/timeout are seconds.
