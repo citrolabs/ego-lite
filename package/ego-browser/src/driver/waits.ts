@@ -8,7 +8,7 @@ import { waitForBrowserEvent } from "../browser-runtime.js";
 
 type WaitForSelectorOptions = {
   timeout?: number;
-  state?: "visible" | "attached";
+  state?: "visible" | "attached" | "hidden" | "detached";
 };
 
 type WaitForFunctionOptions = {
@@ -483,17 +483,19 @@ function acquireNetworkEvents() {
 }
 
 /**
- * Wait until an element exists, optionally requiring visibility.
+ * Wait until an element reaches a DOM state: "attached" (present, the default),
+ * "visible" (present and visible), "hidden" (absent or not visible), or
+ * "detached" (absent).
  * @param {string} selector CSS selector / @ref / loc= / xpath= to poll.
- * @param {{timeout?: number, state?: "visible"|"attached"}} [options] timeout in milliseconds; state defaults to "attached".
- * @returns {Promise<boolean>} True when found before timeout.
+ * @param {{timeout?: number, state?: "visible"|"attached"|"hidden"|"detached"}} [options] timeout in milliseconds; state defaults to "attached".
+ * @returns {Promise<boolean>} True when the state is reached before timeout.
  */
 export async function waitForSelector(
   selector: string,
   options: WaitForSelectorOptions = {},
 ) {
   const timeout = options.timeout ?? state.defaultTimeout;
-  const requireVisible = options.state === "visible";
+  const wanted = options.state ?? "attached";
   const deadline = state.now() + timeout;
   const visibilityFn =
     "function(){if(typeof this.checkVisibility==='function')return this.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});const s=getComputedStyle(this);return s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';}";
@@ -503,26 +505,31 @@ export async function waitForSelector(
       handle = await resolveHandle(selector);
     } catch (err) {
       if (err instanceof ElementResolutionError && err.kind === "transient") {
+        if (wanted === "hidden" || wanted === "detached") return true;
         await state.sleep(300);
-        continue; // not found / not ready yet — keep polling.
+        continue;
       }
-      throw err; // permanent (bad selector / ambiguous) or unknown error — fail loud.
+      throw err;
     }
     try {
-      if (!requireVisible) return true;
-      const response = await cdp(
-        "Runtime.callFunctionOn",
-        {
-          functionDeclaration: visibilityFn,
-          objectId: handle.objectId,
-          returnByValue: true,
-          awaitPromise: false,
-        },
-        handle.sessionId,
-      );
-      if (response.result?.value) return true;
+      if (wanted === "attached") return true;
+      if (wanted !== "detached") {
+        const response = await cdp(
+          "Runtime.callFunctionOn",
+          {
+            functionDeclaration: visibilityFn,
+            objectId: handle.objectId,
+            returnByValue: true,
+            awaitPromise: false,
+          },
+          handle.sessionId,
+        );
+        const visible = Boolean(response.result?.value);
+        if (wanted === "visible" && visible) return true;
+        if (wanted === "hidden" && !visible) return true;
+      }
     } catch {
-      // visibility check failed (element raced away); treat as not-ready, keep polling.
+      /* retry */
     } finally {
       await releaseHandle(handle.objectId, handle.sessionId);
     }

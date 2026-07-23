@@ -13,6 +13,7 @@ import {
   waitForLoadState,
   waitForRequest,
   waitForResponse,
+  waitForSelector,
   waitForURL,
 } from "../../dist/src/driver/waits.js";
 
@@ -857,6 +858,110 @@ test("waitForLoadState survives a bridge that rejects Network.enable", async () 
   try {
     const result = await waitForLoadState("networkidle", { timeout: 5000 });
     assert.equal(result, true, "falls back to passive observation");
+  } finally {
+    restore();
+  }
+});
+
+function selectorHarness({ attachedAt = () => true, visible = false }) {
+  let t = 0;
+  const sleeps = [];
+  let resolveCall = 0;
+  const restore = setOverrides({
+    now: () => t,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      t += ms;
+    },
+    cdpOverride: async (method) => {
+      if (method === "Runtime.evaluate") {
+        const attached = attachedAt(resolveCall++);
+        return attached ? { result: { objectId: "obj-1" } } : { result: {} };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        return { result: { value: visible } };
+      }
+      return {};
+    },
+  });
+  return { restore, sleeps };
+}
+
+test("waitForSelector state:attached resolves once the element is present", async () => {
+  const { restore, sleeps } = selectorHarness({ attachedAt: () => true });
+  try {
+    assert.equal(await waitForSelector("#ready", { timeout: 1000 }), true);
+  } finally {
+    restore();
+  }
+  assert.deepEqual(sleeps, []);
+});
+
+test("waitForSelector state:visible resolves when the element is visible", async () => {
+  const { restore } = selectorHarness({
+    attachedAt: () => true,
+    visible: true,
+  });
+  try {
+    assert.equal(
+      await waitForSelector("#ready", { state: "visible", timeout: 1000 }),
+      true,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("waitForSelector state:hidden resolves when the element is present but not visible", async () => {
+  const { restore } = selectorHarness({
+    attachedAt: () => true,
+    visible: false,
+  });
+  try {
+    assert.equal(
+      await waitForSelector("#spinner", { state: "hidden", timeout: 1000 }),
+      true,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("waitForSelector state:hidden resolves immediately when the element is absent", async () => {
+  const { restore, sleeps } = selectorHarness({ attachedAt: () => false });
+  try {
+    assert.equal(
+      await waitForSelector("#spinner", { state: "hidden", timeout: 1000 }),
+      true,
+    );
+  } finally {
+    restore();
+  }
+  assert.deepEqual(sleeps, []);
+});
+
+test("waitForSelector state:hidden keeps waiting while the element stays visible", async () => {
+  const { restore } = selectorHarness({
+    attachedAt: () => true,
+    visible: true,
+  });
+  try {
+    assert.equal(
+      await waitForSelector("#spinner", { state: "hidden", timeout: 900 }),
+      false,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("waitForSelector state:detached resolves after the element leaves the DOM", async () => {
+  const { restore } = selectorHarness({ attachedAt: (call) => call === 0 });
+  try {
+    assert.equal(
+      await waitForSelector("#dialog", { state: "detached", timeout: 1000 }),
+      true,
+    );
   } finally {
     restore();
   }
