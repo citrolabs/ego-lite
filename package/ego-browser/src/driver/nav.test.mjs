@@ -141,24 +141,46 @@ test("newTab throws when the binding returns no targetId", async () => {
   );
 });
 
-test("openOrReuseTab settles a newly opened tab in milliseconds, not seconds", async () => {
+test("openOrReuseTab selects a newly opened tab and settles it in milliseconds", async () => {
   // Regression: the new-tab branch used to sleep(settle * 1000), so settle:500
   // (documented as 500ms) blocked for 500 seconds while the reuse branch
   // already treated it as milliseconds.
   const sleeps = [];
+  const cdpCalls = [];
+  let created = false;
   await withEgo(
     {
       async listTabs() {
-        return { tabs: [] }; // no match → open a new tab
+        return {
+          tabs: created
+            ? [
+                {
+                  targetId: "target-new",
+                  active: true,
+                  title: "Fresh",
+                  url: "https://example.com/fresh",
+                },
+              ]
+            : [], // no match → open a new tab
+        };
       },
       async createTab() {
+        created = true;
         return { targetId: "target-new" };
       },
     },
     async () => {
       const restore = setOverrides({
+        sessionId: "session-old",
+        sessionTargetId: "target-old",
+        sessionAt: Date.now(),
+        preferredTargetId: null,
         sleep: async (ms) => {
           sleeps.push(ms);
+        },
+        cdpOverride(method, params) {
+          cdpCalls.push({ method, params });
+          return {};
         },
       });
       try {
@@ -168,6 +190,18 @@ test("openOrReuseTab settles a newly opened tab in milliseconds, not seconds", a
         });
         assert.equal(opened.reused, false);
         assert.equal(opened.targetId, "target-new");
+        assert.equal(opened.active, true);
+        // The opened tab is selected before returning: activated, the stale
+        // session for the previous tab is dropped, and it becomes preferred so
+        // later work (and the load wait) targets the new tab.
+        assert.deepEqual(cdpCalls, [
+          {
+            method: "Target.activateTarget",
+            params: { targetId: "target-new" },
+          },
+        ]);
+        assert.equal(state.sessionId, null);
+        assert.equal(state.preferredTargetId, "target-new");
       } finally {
         restore();
       }

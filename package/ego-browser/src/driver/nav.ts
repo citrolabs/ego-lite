@@ -198,6 +198,7 @@ export async function openOrReuseTab(
     return { ...existing, active: true, reused: true };
   }
   const targetId = await newTab(url);
+  await switchTab(targetId);
   if (options.wait !== false) {
     await waitForDocumentLoad({ timeout: options.timeout ?? 20000 });
   }
