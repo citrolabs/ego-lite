@@ -194,6 +194,41 @@ test("press leaves ordinary printable keys unchanged", async () => {
   });
 });
 
+test("press sends Tab as a navigation key without inserting text", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride(method, params, sessionId) {
+      calls.push({ method, params, sessionId });
+      return {};
+    },
+  });
+  try {
+    await press("Tab");
+  } finally {
+    restore();
+  }
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0].params, {
+    type: "keyDown",
+    key: "Tab",
+    code: "Tab",
+    modifiers: 0,
+    windowsVirtualKeyCode: 9,
+    nativeVirtualKeyCode: 9,
+  });
+  assert.equal(calls[0].params.text, undefined);
+  assert.equal(calls[0].params.unmodifiedText, undefined);
+  assert.deepEqual(calls[1].params, {
+    type: "keyUp",
+    key: "Tab",
+    code: "Tab",
+    modifiers: 0,
+    windowsVirtualKeyCode: 9,
+    nativeVirtualKeyCode: 9,
+  });
+});
+
 test("press maps Backspace and Delete to editing commands", async () => {
   const calls = [];
   const restore = setOverrides({

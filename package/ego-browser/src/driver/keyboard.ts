@@ -21,7 +21,7 @@ type SelectOption =
 
 const KEYS = {
   Enter: { vk: 13, key: "Enter", code: "Enter", text: "\r" },
-  Tab: { vk: 9, key: "Tab", code: "Tab", text: "\t" },
+  Tab: { vk: 9, key: "Tab", code: "Tab", text: "" },
   Backspace: { vk: 8, key: "Backspace", code: "Backspace", text: "" },
   Escape: { vk: 27, key: "Escape", code: "Escape", text: "" },
   Delete: { vk: 46, key: "Delete", code: "Delete", text: "" },
