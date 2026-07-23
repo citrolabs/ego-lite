@@ -1,12 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { tmpdir } from "node:os";
+import { resolve, sep } from "node:path";
 
 import {
   clearPreferredTarget,
   drainBrowserEvents,
   invalidateSession,
 } from "../../dist/src/browser-runtime.js";
-import { waitForEvent } from "../../dist/src/driver/downloads.js";
+import {
+  waitForEvent,
+  safeDownloadFilename,
+} from "../../dist/src/driver/downloads.js";
 
 function installAutoEgo(options = {}) {
   const calls = [];
@@ -79,6 +84,52 @@ test("waitForEvent('download') returns a Playwright-style download facade", asyn
   } finally {
     cleanup();
   }
+});
+
+test("waitForEvent('download') keeps a traversal suggestedFilename inside the download dir", async () => {
+  installAutoEgo();
+  try {
+    const promise = waitForEvent("download", { timeout: 1000 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // A malicious server can set this via Content-Disposition; it is untrusted.
+    fireEvent("Page.downloadWillBegin", {
+      guid: "download-1",
+      url: "https://attacker.example/report",
+      suggestedFilename: "../../../../../../../../etc/passwd",
+    });
+    fireEvent("Page.downloadProgress", {
+      guid: "download-1",
+      state: "completed",
+    });
+    const download = await promise;
+
+    const downloadedPath = resolve(await download.path());
+    const tmpRoot = resolve(tmpdir());
+    assert.ok(
+      downloadedPath.startsWith(tmpRoot + sep),
+      `download.path() escaped the temp dir: ${downloadedPath}`,
+    );
+    assert.ok(
+      !downloadedPath.includes(`${sep}..${sep}`) &&
+        !downloadedPath.endsWith(`${sep}..`),
+      `download.path() still contains a traversal segment: ${downloadedPath}`,
+    );
+    // Sanitized to the basename, so it lands inside the per-download dir.
+    assert.match(downloadedPath, /passwd$/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("safeDownloadFilename strips directory components and rejects dot segments", () => {
+  assert.equal(safeDownloadFilename("../../etc/passwd"), "passwd");
+  assert.equal(safeDownloadFilename("..\\..\\Windows\\win.ini"), "win.ini");
+  assert.equal(safeDownloadFilename("/etc/shadow"), "shadow");
+  assert.equal(safeDownloadFilename("report.pdf"), "report.pdf");
+  assert.equal(safeDownloadFilename(".."), "");
+  assert.equal(safeDownloadFilename("."), "");
+  assert.equal(safeDownloadFilename(""), "");
+  assert.equal(safeDownloadFilename(undefined), "");
 });
 
 test("waitForEvent('download') rejects when the download is canceled", async () => {
