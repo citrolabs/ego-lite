@@ -2,7 +2,7 @@
 
 Thanks for your interest in contributing to **ego-browser (ego-lite)**! This guide is aimed at developers who want to build on top of the project or submit patches upstream. It covers the architecture, local development workflow, code conventions, and PR process.
 
-> For the project vision, see [`README.md`](./README.md). For the agent-facing runbook, see [`skills/ego-browser/SKILL.md`](./skills/ego-browser/SKILL.md) (or [`SKILL.zh.md`](./skills/ego-browser/SKILL.zh.md)). For repo-level guidance, see [`AGENTS.md`](./AGENTS.md).
+> For the project vision, see [`README.md`](./README.md). For the agent-facing runbook, see [`skills/ego-browser/SKILL.md`](./skills/ego-browser/SKILL.md). For repo-level guidance, see [`AGENTS.md`](./AGENTS.md).
 
 ---
 
@@ -64,10 +64,11 @@ ego-lite/
 │   ├── package.json
 │   └── tsconfig.json
 ├── skills/ego-browser/         # Agent skill package
-│   ├── SKILL.md / SKILL.zh.md  # Agent usage guide
+│   ├── SKILL.md                # Agent usage guide
 │   └── learnings/<site>/       # Per-site knowledge packs (github / google / x-com ...)
 ├── spec/                       # Spec references
-├── public/                     # Demo assets
+├── assets/                     # Brand assets (logo, composer icons)
+├── docs/                       # README & demo assets (banner, benchmark)
 ├── .github/workflows/ci.yml    # CI (test + release)
 ├── .claude-plugin/             # Claude Code plugin marketplace manifest
 ├── AGENTS.md                   # Repo-level agent / contributor guidance
@@ -308,7 +309,7 @@ Add at least one release-note label so generated releases are grouped correctly:
 - [ ] If learnings changed, `npm run validate:site-skills` passes
 - [ ] Change is "minimal surgical edit" (see §12)
 - [ ] No undeclared runtime dependencies introduced
-- [ ] Public helper names / docs are kept in sync (update both `SKILL.md` and `SKILL.zh.md`)
+- [ ] Public helper names / docs are kept in sync (update `SKILL.md`)
 
 ---
 
