@@ -204,7 +204,16 @@ export async function runRealBrowserE2e() {
 
   try {
     console.log("== build ==");
-    await runCommand("npm", ["run", "build"], { cwd: packageDir });
+    // Call the build script through the current Node binary: spawning the bare
+    // name "npm" resolves to npm.cmd on Windows, which spawn() cannot launch
+    // without a shell (ENOENT).
+    await runCommand(
+      process.execPath,
+      [join(packageDir, "scripts", "build.mjs")],
+      {
+        cwd: packageDir,
+      },
+    );
     await stat(egoBrowserSdkPath);
 
     tempDir = await mkdtemp(join(tmpdir(), "ego-browser-real-e2e-"));
