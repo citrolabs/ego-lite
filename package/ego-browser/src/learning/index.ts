@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { readFile } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
   iterLearningDirs,
@@ -230,7 +230,7 @@ function relativeSitePath(siteDir, manifestPath, label) {
   }
   const resolved = resolve(siteDir, manifestPath);
   const siteRoot = resolve(siteDir);
-  if (resolved !== siteRoot && !resolved.startsWith(`${siteRoot}/`)) {
+  if (resolved !== siteRoot && !resolved.startsWith(`${siteRoot}${sep}`)) {
     throw new Error(`${label} path must stay inside the site skill directory`);
   }
   return resolved;
