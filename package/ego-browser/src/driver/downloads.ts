@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { cdp } from "../cdp-eval.js";
 import { ensureSession, waitForBrowserEvent } from "../browser-runtime.js";
 import { state } from "../state.js";
+import { waitForDialog } from "./dialogs.js";
 
 type WaitForEventOptions = {
   timeout?: number;
@@ -29,21 +30,24 @@ type DownloadProgress = {
 };
 
 /**
- * Wait for a Playwright-style page event. Currently supports "download".
- * @param {"download"} eventName Event name.
+ * Wait for a Playwright-style page event. Supports "download" and "dialog".
+ * @param {"download"|"dialog"} eventName Event name.
  * @param {{timeout?: number}} [options] Timeout in milliseconds.
- * @returns {Promise<object>} Download facade with suggestedFilename(), path(), saveAs(path), url().
+ * @returns {Promise<object>} Event-specific result.
  */
 export async function waitForEvent(
   eventName,
   options: WaitForEventOptions = {},
 ) {
-  if (eventName !== "download") {
-    throw new Error(
-      `page.waitForEvent currently supports only "download", got ${JSON.stringify(eventName)}`,
-    );
+  if (eventName === "download") {
+    return waitForDownload(options);
   }
-  return waitForDownload(options);
+  if (eventName === "dialog") {
+    return waitForDialog(options);
+  }
+  throw new Error(
+    `page.waitForEvent currently supports only "download" and "dialog", got ${JSON.stringify(eventName)}`,
+  );
 }
 
 async function waitForDownload(options: WaitForEventOptions = {}) {
