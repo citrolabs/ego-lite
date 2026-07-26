@@ -20,8 +20,12 @@ import {
   ensureRefMapForRef,
   registerSnapshotForRefRefresh,
 } from "../ref-state.js";
+import {
+  filterSnapshotContent,
+  type SnapshotFilterOptions,
+} from "./snapshot-filter.js";
 
-type SnapshotOptions = {
+export type SnapshotOptions = SnapshotFilterOptions & {
   scope?: "only_within_viewport" | "full_page";
   includeActionMarks?: boolean;
   includeStableLocator?: boolean;
@@ -42,6 +46,26 @@ type ScreenshotOptions = {
   clip?: ScreenshotClip;
 };
 
+function egoSnapshotOptions(options: SnapshotOptions = {}) {
+  const {
+    interactiveOnly: _interactiveOnly,
+    roles: _roles,
+    match: _match,
+    maxChars: _maxChars,
+    ...egoOptions
+  } = options;
+  return egoOptions;
+}
+
+function filterOptions(options: SnapshotOptions = {}): SnapshotFilterOptions {
+  return {
+    interactiveOnly: options.interactiveOnly,
+    roles: options.roles,
+    match: options.match,
+    maxChars: options.maxChars,
+  };
+}
+
 export function drainEvents() {
   return drainBrowserEvents();
 }
@@ -49,7 +73,7 @@ export function drainEvents() {
 export async function snapshotRaw(options: SnapshotOptions = {}) {
   let result;
   try {
-    result = await browserEgo().snapshot(options);
+    result = await browserEgo().snapshot(egoSnapshotOptions(options));
   } catch (err) {
     // ego.snapshot rejects directly (it never resolves with { error }), so it never
     // reached buildEgoError — the single birthplace that records a hard stop for the
@@ -59,6 +83,13 @@ export async function snapshotRaw(options: SnapshotOptions = {}) {
     throw buildEgoError(err, "snapshot");
   }
   browserSnapshotRefsToRefMap(browserRefMap, result.refs || []);
+  const filters = filterOptions(options);
+  if (result.content != null) {
+    result = {
+      ...result,
+      content: filterSnapshotContent(result.content, filters),
+    };
+  }
   return result;
 }
 
@@ -67,7 +98,7 @@ registerSnapshotForRefRefresh(() => snapshotRaw());
 /**
  * Return snapshot content with agent-friendly defaults. The text surface most
  * agents want; use snapshotRaw when you need the structured { content, refs }.
- * @param {{scope?: "only_within_viewport"|"full_page", includeActionMarks?: boolean, includeStableLocator?: boolean}} [options]
+ * @param {{scope?: "only_within_viewport"|"full_page", includeActionMarks?: boolean, includeStableLocator?: boolean, interactiveOnly?: boolean, roles?: string[], match?: string|RegExp, maxChars?: number}} [options]
  * @returns {Promise<string>}
  */
 export async function snapshot(options: SnapshotOptions = {}) {
@@ -75,6 +106,10 @@ export async function snapshot(options: SnapshotOptions = {}) {
     scope: options.scope ?? "full_page",
     includeActionMarks: options.includeActionMarks ?? true,
     includeStableLocator: options.includeStableLocator ?? true,
+    interactiveOnly: options.interactiveOnly,
+    roles: options.roles,
+    match: options.match,
+    maxChars: options.maxChars,
   });
   return result.content || "";
 }
@@ -137,3 +172,8 @@ export async function screenshot(options: ScreenshotOptions = {}) {
   await state.writeFile(path, Buffer.from(result.data, "base64"));
   return path;
 }
+
+export {
+  filterSnapshotContent,
+  type SnapshotFilterOptions,
+} from "./snapshot-filter.js";
