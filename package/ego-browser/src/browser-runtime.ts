@@ -9,7 +9,9 @@ const MAX_BUFFERED_EVENTS = 10000;
 const SESSION_LOST =
   /Session (?:with given id )?not found|Target closed|No session/i;
 const BROWSER_LEVEL = (method) =>
-  method.startsWith("Target.") || method.startsWith("Browser.");
+  method.startsWith("Target.") ||
+  method.startsWith("Browser.") ||
+  method.startsWith("Extensions.");
 type BrowserEventSubscriber = {
   method: string;
   sessionId?: string;
