@@ -1,0 +1,93 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "domains": ["github.com", "*.github.com"],
+  "notes": ["notes/overview.md"],
+  "nodeTools": {
+    "search_repositories": {
+      "description": "Search GitHub repositories and extract the top results.",
+      "path": "tools/search-repos.js",
+      "callable": "searchRepositories",
+      "args": {
+        "query": {
+          "type": "string",
+          "required": true,
+          "description": "Search query string."
+        },
+        "maxResults": {
+          "type": "integer",
+          "required": false,
+          "description": "Maximum number of results to extract."
+        }
+      },
+      "returns": {
+        "type": "array",
+        "description": "Array of {name, url, description} objects."
+      }
+    },
+    "get_repo_info": {
+      "description": "Open a repository page and extract name, description, stars, and forks.",
+      "path": "tools/repo-info.js",
+      "callable": "getRepoInfo",
+      "args": {
+        "owner": {
+          "type": "string",
+          "required": true,
+          "description": "Repository owner (user or organization)."
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "description": "Repository name."
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "Object with name, url, description, stars, forks."
+      }
+    },
+    "get_trending_repos": {
+      "description": "Extract repositories from the GitHub trending page.",
+      "path": "tools/trending.js",
+      "callable": "getTrendingRepos",
+      "args": {
+        "language": {
+          "type": "string",
+          "required": false,
+          "description": "Filter by programming language (e.g. typescript)."
+        },
+        "since": {
+          "type": "string",
+          "required": false,
+          "description": "Trending window: daily, weekly, or monthly. Defaults to daily."
+        },
+        "maxResults": {
+          "type": "integer",
+          "required": false,
+          "description": "Maximum number of repositories to extract."
+        }
+      },
+      "returns": {
+        "type": "array",
+        "description": "Array of {name, url, description, language, stars} objects."
+      }
+    }
+  },
+  "browserTools": {
+    "extract_readme": {
+      "description": "Extract headings and text from the README rendered on the current repository page.",
+      "path": "browser-tools/extract-readme.js",
+      "args": {
+        "maxChars": {
+          "type": "integer",
+          "required": false,
+          "description": "Maximum number of README text characters to return."
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "Object with headings array and truncated README text."
+      }
+    }
+  }
+}
