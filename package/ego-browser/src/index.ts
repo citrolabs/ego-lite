@@ -111,6 +111,8 @@ const LEGACY_GLOBAL_HELPERS = [
   "screenshot",
   "elementCenter",
   "drainEvents",
+  "drainConsole",
+  "waitForConsole",
   "waitForTimeout",
   "waitForLoadState",
   "waitForSelector",
