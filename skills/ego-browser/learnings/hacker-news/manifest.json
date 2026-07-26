@@ -1,0 +1,93 @@
+{
+  "id": "hacker-news",
+  "name": "Hacker News",
+  "domains": ["news.ycombinator.com", "hn.algolia.com"],
+  "notes": ["notes/overview.md"],
+  "nodeTools": {
+    "get_posts": {
+      "description": "Extract posts from a Hacker News feed page (front page, newest, ask, show, best).",
+      "path": "tools/posts.js",
+      "callable": "getPosts",
+      "args": {
+        "feed": {
+          "type": "string",
+          "required": false,
+          "description": "Feed to read: news, newest, front, ask, show, or best. Defaults to news."
+        },
+        "page": {
+          "type": "integer",
+          "required": false,
+          "description": "1-based feed page number. Defaults to 1."
+        },
+        "maxResults": {
+          "type": "integer",
+          "required": false,
+          "description": "Maximum number of posts to extract (a feed page holds 30)."
+        }
+      },
+      "returns": {
+        "type": "array",
+        "description": "Array of {id, rank, title, url, score, author, age, comments} objects."
+      }
+    },
+    "get_item": {
+      "description": "Open a Hacker News item page and extract the story plus its comment thread.",
+      "path": "tools/item.js",
+      "callable": "getItem",
+      "args": {
+        "id": {
+          "type": "string",
+          "required": true,
+          "description": "Numeric Hacker News item id."
+        },
+        "maxComments": {
+          "type": "integer",
+          "required": false,
+          "description": "Maximum number of comments to extract."
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "Object with title, url, author, score, age, text, and a comments array of {id, author, indent, age, text}."
+      }
+    },
+    "search_posts": {
+      "description": "Search Hacker News stories via the public Algolia API (the on-site search UI is client-rendered).",
+      "path": "tools/search.js",
+      "callable": "searchPosts",
+      "args": {
+        "query": {
+          "type": "string",
+          "required": true,
+          "description": "Search query string."
+        },
+        "maxResults": {
+          "type": "integer",
+          "required": false,
+          "description": "Maximum number of stories to return."
+        }
+      },
+      "returns": {
+        "type": "array",
+        "description": "Array of {id, title, url, author, points, numComments, createdAt} objects."
+      }
+    }
+  },
+  "browserTools": {
+    "extract_comments": {
+      "description": "Extract the visible comment thread from the current Hacker News item page.",
+      "path": "browser-tools/extract-comments.js",
+      "args": {
+        "maxComments": {
+          "type": "integer",
+          "required": false,
+          "description": "Maximum number of comments to extract."
+        }
+      },
+      "returns": {
+        "type": "array",
+        "description": "Array of {id, author, indent, text} objects."
+      }
+    }
+  }
+}
