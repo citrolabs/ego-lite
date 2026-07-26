@@ -191,9 +191,7 @@ export async function loadBrowserToolSource(
   return readFile(toolPath, "utf8");
 }
 
-export function wrapBrowserTool(source, args: any = {}) {
-  return `(async () => { const __egoBrowserTool = ${source}; return await __egoBrowserTool(${JSON.stringify(args || {})}); })()`;
-}
+export { wrapBrowserTool } from "./wrap-browser-tool.js";
 
 export { learningEntry };
 

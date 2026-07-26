@@ -2,6 +2,10 @@ import { pathToFileURL } from "node:url";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
+import { parse } from "acorn";
+
+import { wrapBrowserTool } from "./wrap-browser-tool.js";
+
 import {
   iterLearningDirs,
   learningsRoot,
@@ -138,9 +142,57 @@ export async function validateLearning(siteDir: string) {
       `${siteId}: browser tool ${JSON.stringify(toolName)}`,
       errors,
     );
+    await validateBrowserToolSource(
+      siteDir,
+      schema.path,
+      `${siteId}: browser tool ${JSON.stringify(toolName)}`,
+      errors,
+    );
   }
 
   return errors;
+}
+
+async function validateBrowserToolSource(
+  siteDir: string,
+  relativePath: string,
+  prefix: string,
+  errors: string[],
+) {
+  let source;
+  try {
+    source = await readFile(join(siteDir, relativePath), "utf8");
+  } catch {
+    return;
+  }
+  let program;
+  try {
+    // Parse exactly what runSiteBrowserTool will evaluate in the page.
+    program = parse(wrapBrowserTool(source, {}), { ecmaVersion: "latest" });
+  } catch (error) {
+    errors.push(
+      `${prefix}: cannot parse ${JSON.stringify(relativePath)}: ${error.message}`,
+    );
+    return;
+  }
+  if (!isFunctionExpression(browserToolInit(program))) {
+    errors.push(
+      `${prefix}: ${JSON.stringify(relativePath)} must contain a single function expression`,
+    );
+  }
+}
+
+function browserToolInit(program) {
+  const wrapperBody = program?.body?.[0]?.expression?.callee?.body?.body;
+  const declaration = wrapperBody?.[0]?.declarations?.[0];
+  return declaration?.id?.name === "__egoBrowserTool" ? declaration.init : null;
+}
+
+function isFunctionExpression(node) {
+  return (
+    node?.type === "FunctionExpression" ||
+    node?.type === "ArrowFunctionExpression"
+  );
 }
 
 export async function validateLearnings(root = learningsRoot()) {
