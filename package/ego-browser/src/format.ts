@@ -714,7 +714,8 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
   },
   "taskSpaces.complete": {
     signature: "taskSpaces.complete(nameOrId, options) => Promise<object>",
-    description: "Finish a task space. options.keep is required.",
+    description:
+      "Finish a task space. options.keep is required; prefer keep:true unless the user explicitly asked to close or delete the space.",
     params: [
       {
         name: "nameOrId",
@@ -730,7 +731,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
       },
     ],
     returns: "Promise<object>",
-    example: "await taskSpaces.complete(task.id, { keep: false })",
+    example: "await taskSpaces.complete(task.id, { keep: true })",
   },
   "taskSpaces.handOff": {
     signature: "taskSpaces.handOff(nameOrId?) => Promise<object>",
