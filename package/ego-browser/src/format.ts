@@ -619,7 +619,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
   "browser.closeTab": {
     signature: "browser.closeTab(target?) => Promise<string>",
     description:
-      "Refresh the current tab list, validate, and close a tab by target id/object, or close the current tab when omitted.",
+      "Refresh the current tab list, validate, and close a tab by target id/object, or close the current tab when omitted. Refuses to close the last tab because that would destroy the task space.",
     params: [
       {
         name: "target",

@@ -274,7 +274,7 @@ test("switchTab rejects tab objects without targetId at the boundary", async () 
   );
 });
 
-test("closeTab closes an explicit current target and returns its id", async () => {
+test("closeTab refuses to close the last tab in a task space", async () => {
   const calls = [];
   await withEgo(
     {
@@ -299,20 +299,17 @@ test("closeTab closes an explicit current target and returns its id", async () =
         },
       });
       try {
-        assert.equal(await closeTab("target-2"), "target-2");
+        await assert.rejects(
+          () => closeTab("target-2"),
+          /closeTab refuses to close the last tab.*taskSpaces\.complete/,
+        );
       } finally {
         restore();
       }
     },
   );
 
-  assert.deepEqual(calls, [
-    {
-      method: "Target.closeTarget",
-      params: { targetId: "target-2" },
-      sessionId: undefined,
-    },
-  ]);
+  assert.deepEqual(calls, []);
 });
 
 test("closeTab rejects a stale explicit target before CDP dispatch", async () => {
@@ -404,16 +401,27 @@ test("closeTab waits for a closed target to disappear from listTabs", async () =
 
 test("closeTab closes the current tab and invalidates matching session state", async () => {
   const calls = [];
+  let targetClosed = false;
   await withEgo(
     {
       async listTabs() {
         return {
           tabs: [
+            ...(targetClosed
+              ? []
+              : [
+                  {
+                    targetId: "target-1",
+                    active: true,
+                    title: "Example",
+                    url: "https://example.com/",
+                  },
+                ]),
             {
-              targetId: "target-1",
-              active: true,
-              title: "Example",
-              url: "https://example.com/",
+              targetId: "target-2",
+              active: targetClosed,
+              title: "Remaining",
+              url: "https://example.com/remaining",
             },
           ],
         };
@@ -423,6 +431,9 @@ test("closeTab closes the current tab and invalidates matching session state", a
       const restore = setOverrides({
         cdpOverride(method, params, sessionId) {
           calls.push({ method, params, sessionId });
+          if (method === "Target.closeTarget") {
+            targetClosed = true;
+          }
           return { success: true };
         },
         sessionId: "session-1",
