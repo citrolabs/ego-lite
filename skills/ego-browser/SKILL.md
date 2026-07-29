@@ -171,6 +171,14 @@ A "user is controlling", "inactive", or "not assigned" error is a hard stop for 
 
 For login, captcha, or another manual step, finish all safe preparation in the current Bash invocation, call `taskSpaces.handOff([nameOrId])`, check its `done` result, and tell the user exactly what to do. Resume only after explicit confirmation: use `taskSpaces.takeOver(nameOrId)` for a space the agent handed off, or `taskSpaces.claim(id)` for an existing user-owned/inactive space.
 
+`taskSpaces.takeOver(nameOrId)` only restores agent control and resolves no value; `taskSpaces.claim(id)` resolves the task space. Do not assign the result of `takeOver` or read `task.id` from it. Keep the id returned by `useOrCreate` and reuse it when resuming:
+
+```js
+const taskId = 3
+await taskSpaces.takeOver(taskId)
+console.log(JSON.stringify({ taskSpaceId: taskId, url: (await page.info()).url }))
+```
+
 `taskSpaces.waitForAgentControl(nameOrId)` only polls; it never takes control. Use it only when the same script initiated the handoff and intentionally remains alive; after it resolves, continue the remaining work in that script.
 
 ## Choose the interaction path
