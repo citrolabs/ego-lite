@@ -122,9 +122,15 @@ export async function screenshot(options: ScreenshotOptions = {}) {
         if ("dialog" in info) {
           return screenshot({ ...options, path, raw: true });
         }
+        // Page.captureScreenshot clips in document coordinates. With
+        // captureBeyondViewport false the compositor only has the current
+        // viewport rasterized, so pinning the origin to 0,0 asks for the top of
+        // the document and comes back blank whenever the page is scrolled. Anchor
+        // the viewport clip to the scroll offset; fullPage rasterizes the whole
+        // document, where 0,0 is the right origin.
         params.clip = {
-          x: 0,
-          y: 0,
+          x: full ? 0 : info.sx,
+          y: full ? 0 : info.sy,
           width: full ? info.pw : info.w,
           height: full ? info.ph : info.h,
           scale: cssScale,
