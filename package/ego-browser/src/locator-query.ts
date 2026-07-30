@@ -389,10 +389,16 @@ function roleElementsExpression(locator, rootExpression = "document") {
         if (tag === 'img' && el.hasAttribute('alt')) return 'img';
         if (/^h[1-6]$/.test(tag)) return 'heading';
         if (tag === 'input') {
-          if (type === 'button' || type === 'submit' || type === 'reset') return 'button';
+          if (type === 'button' || type === 'submit' || type === 'reset' || type === 'image') return 'button';
           if (type === 'checkbox') return 'checkbox';
           if (type === 'radio') return 'radio';
           if (type === 'range') return 'slider';
+          if (type === 'number') return 'spinbutton';
+          // No corresponding ARIA role: these must not fall through to textbox.
+          if (['color', 'date', 'datetime-local', 'file', 'hidden', 'month', 'password', 'time', 'week'].includes(type)) return '';
+          if (el.hasAttribute('list')) return 'combobox';
+          if (type === 'search') return 'searchbox';
+          // text/email/tel/url, plus a missing or unknown type, which the browser renders as text.
           return 'textbox';
         }
         return '';
