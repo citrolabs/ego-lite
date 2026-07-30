@@ -1,4 +1,4 @@
-import { cdp } from "../cdp-eval.js";
+import { cdp, runtimeValue } from "../cdp-eval.js";
 import { browserCdp } from "../browser-runtime.js";
 import { withHandle, resolveAndCall } from "./element-ops.js";
 import { click } from "./pointer.js";
@@ -273,6 +273,9 @@ export async function focus(selector) {
 
 /**
  * Focus an input, optionally clear it, write a value, and fire input/change events.
+ *
+ * Disabled or readonly inputs and textareas, and any `<select>`, throw rather
+ * than being filled.
  * @param {string} selector CSS selector / @ref / loc= / xpath= for the input-like element.
  * @param {string} value Text to write.
  * @param {{clearFirst?: boolean, timeout?: number}} [options] clearFirst defaults to true (Playwright fill always clears); clearFirst:false appends (ego-browser extension). timeout in milliseconds.
@@ -285,10 +288,12 @@ export async function fill(selector, value, options: FillOptions = {}) {
     throw new Error(`fill: element not found: ${JSON.stringify(selector)}`);
   }
   await withHandle(selector, async ({ objectId, sessionId }) => {
+    const editableGuard =
+      "if(this instanceof HTMLSelectElement||((this instanceof HTMLInputElement||this instanceof HTMLTextAreaElement)&&(this.disabled||this.readOnly))) throw new Error('fill target is not editable');";
     const focusSource = clearFirst
-      ? "function(){this.focus(); if(this.isContentEditable){const range=document.createRange();range.selectNodeContents(this);const sel=getSelection();sel.removeAllRanges();sel.addRange(range);}else if(typeof this.select==='function') this.select();}"
-      : "function(){this.focus();}";
-    await cdp(
+      ? `function(){${editableGuard} this.focus(); if(this.isContentEditable){const range=document.createRange();range.selectNodeContents(this);const sel=getSelection();sel.removeAllRanges();sel.addRange(range);}else if(typeof this.select==='function') this.select();}`
+      : `function(){${editableGuard} this.focus();}`;
+    const focusResult = await cdp(
       "Runtime.callFunctionOn",
       {
         functionDeclaration: focusSource,
@@ -298,6 +303,7 @@ export async function fill(selector, value, options: FillOptions = {}) {
       },
       sessionId,
     );
+    runtimeValue(focusResult, focusSource);
     if (clearFirst) {
       await cdp(
         "Runtime.callFunctionOn",
