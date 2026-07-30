@@ -451,8 +451,7 @@ export async function selectOption(
         throw new Error("selectOption target must be a select element");
       }
       const wanted = Array.isArray(values) ? values : [values];
-      const selected = [];
-      for (const option of this.options) option.selected = false;
+      const matches = [];
       for (const wantedOption of wanted) {
         let match;
         if (typeof wantedOption === "object" && wantedOption !== null) {
@@ -467,9 +466,14 @@ export async function selectOption(
           match = [...this.options].find((option) => option.value === String(wantedOption));
         }
         if (!match) throw new Error("selectOption could not find option " + JSON.stringify(wantedOption));
+        matches.push(match);
+        if (!this.multiple) break;
+      }
+      const selected = [];
+      for (const option of this.options) option.selected = false;
+      for (const match of matches) {
         match.selected = true;
         selected.push(match.value);
-        if (!this.multiple) break;
       }
       this.dispatchEvent(new Event("input", { bubbles: true }));
       this.dispatchEvent(new Event("change", { bubbles: true }));

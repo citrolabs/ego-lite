@@ -12,6 +12,7 @@ import {
 } from "./pointer.mjs";
 import { keyboardCase } from "./keyboard.mjs";
 import { keyboardRegressionCase } from "./keyboard-regression.mjs";
+import { selectOptionAtomicCases } from "./select-option-atomic.mjs";
 import { macosInputRegressionCase } from "./macos-input-regression.mjs";
 import {
   cdpJsHelpCase,
@@ -59,6 +60,7 @@ export const e2eCases = [
   { name: "runtime regression", body: runtimeRegressionCase },
   { name: "screencast recording", body: videoRecordingCase },
   { name: "concert ticket rush", body: damaiRushCase },
+  ...selectOptionAtomicCases,
   ...adversarialCases,
   ...workflowCases,
   ...downloadCases,

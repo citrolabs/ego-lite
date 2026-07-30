@@ -462,6 +462,120 @@ test("selectOption returns selected values", async () => {
   assert.match(call.params.functionDeclaration, /HTMLSelectElement/);
 });
 
+// Stand-in for the <select> that selectOption's page-side body runs against.
+// The body is applied to an instance of this class so the suite can read back
+// the selection and the events it left behind.
+class SelectStub {
+  constructor(values, selectedIndex, multiple = false) {
+    this.multiple = multiple;
+    this.options = values.map((value, index) => ({
+      value,
+      label: value.toUpperCase(),
+      text: value.toUpperCase(),
+      selected: index === selectedIndex,
+    }));
+    this.events = [];
+  }
+
+  dispatchEvent(event) {
+    this.events.push(event.type);
+    return true;
+  }
+
+  get selectedValues() {
+    return this.options
+      .filter((option) => option.selected)
+      .map((option) => option.value);
+  }
+}
+
+function selectStubHarness(stub) {
+  return setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Runtime.evaluate") {
+        return { result: { objectId: "object-1" } };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        const pageFunction = new Function(
+          "HTMLSelectElement",
+          `return (${params.functionDeclaration});`,
+        )(SelectStub);
+        try {
+          const value = pageFunction.apply(
+            stub,
+            params.arguments.map((argument) => argument.value),
+          );
+          return { result: { value } };
+        } catch (error) {
+          return {
+            result: { subtype: "error", description: String(error) },
+          };
+        }
+      }
+      return {};
+    },
+  });
+}
+
+test("selectOption leaves the selection alone when no option matches", async () => {
+  for (const wanted of ["delta", { label: "DELTA" }, { index: 7 }]) {
+    const stub = new SelectStub(["alpha", "beta", "gamma"], 2);
+    const restore = selectStubHarness(stub);
+    try {
+      await assert.rejects(
+        () => selectOption("#choice", wanted),
+        /could not find option/,
+      );
+    } finally {
+      restore();
+    }
+
+    assert.deepEqual(stub.selectedValues, ["gamma"]);
+    assert.deepEqual(stub.events, []);
+  }
+});
+
+test("selectOption keeps every selection in a multiple select on a partial miss", async () => {
+  const stub = new SelectStub(["one", "two", "three"], 0, true);
+  const selecting = selectStubHarness(stub);
+  try {
+    assert.deepEqual(await selectOption("#choice", ["one", "three"]), [
+      "one",
+      "three",
+    ]);
+  } finally {
+    selecting();
+  }
+
+  const restore = selectStubHarness(stub);
+  try {
+    await assert.rejects(
+      () => selectOption("#choice", ["two", "four"]),
+      /could not find option/,
+    );
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(stub.selectedValues, ["one", "three"]);
+  assert.deepEqual(stub.events, ["input", "change"]);
+});
+
+test("selectOption on a single select applies the first value and ignores the rest", async () => {
+  const stub = new SelectStub(["alpha", "beta", "gamma"], 2);
+  const restore = selectStubHarness(stub);
+  try {
+    assert.deepEqual(await selectOption("#choice", ["beta", "delta"]), [
+      "beta",
+    ]);
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(stub.selectedValues, ["beta"]);
+  assert.deepEqual(stub.events, ["input", "change"]);
+});
+
 test("setChecked rejects page-side validation errors", async () => {
   const restore = setOverrides({
     cdpOverride(method) {
