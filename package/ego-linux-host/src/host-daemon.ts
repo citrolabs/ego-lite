@@ -7,7 +7,7 @@
  */
 
 import { createServer, type Server, type Socket } from "node:net";
-import { mkdir, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { connectCdp, type CdpBridge } from "./cdp-bridge.js";
 import {
@@ -30,6 +30,8 @@ import {
 import { SpaceManager } from "./space-manager.js";
 
 export const HOST_VERSION = "0.1.0";
+// macOS sockaddr_un.sun_path is 104 bytes including the trailing NUL.
+const MAX_PORTABLE_UNIX_SOCKET_PATH_BYTES = 103;
 
 export type HostDaemonOptions = {
   config?: HostConfig;
@@ -84,6 +86,47 @@ async function safeUnlink(path: string): Promise<void> {
   }
 }
 
+export function validateUnixSocketPath(socketPath: string): void {
+  const bytes = Buffer.byteLength(socketPath);
+  if (bytes > MAX_PORTABLE_UNIX_SOCKET_PATH_BYTES) {
+    throw makeEgoError(
+      "EGO_INVALID_ARGUMENT",
+      `Unix socket path is ${bytes} bytes; keep it at or below ${MAX_PORTABLE_UNIX_SOCKET_PATH_BYTES}. Set EGO_RUNTIME_DIR to a shorter path such as /run/ego-lite.`,
+    );
+  }
+}
+
+async function closeChromeWithFallback(
+  cdp: CdpBridge | null,
+  chrome: ChromeHandle | null,
+): Promise<void> {
+  if (chrome === null) return;
+
+  if (cdp) {
+    try {
+      await cdp.send("Browser.close");
+    } catch {
+      // Ignore failures from already-closed/debuggable-browser state.
+    }
+    try {
+      await cdp.close();
+    } catch {
+      // ignore
+    }
+  }
+
+  const waitForExit = chrome.waitForExit;
+  if (waitForExit) {
+    const exited = await waitForExit(3000);
+    if (exited) return;
+  }
+  try {
+    await chrome.kill();
+  } catch {
+    // ignore
+  }
+}
+
 /**
  * Start the host daemon: config → chrome → CDP → spaces → Unix socket.
  */
@@ -92,12 +135,14 @@ export async function startDaemon(
 ): Promise<HostDaemon> {
   const env = options.env ?? process.env;
   const config = options.config ?? (await loadConfig(env));
+  validateUnixSocketPath(config.hostSocket);
   const dataDir = config.dataDir;
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
+  await mkdir(config.runtimeDir, { recursive: true, mode: 0o700 });
 
   const spacesPath =
     options.spacesPath ?? join(dataDir, "spaces.json");
-  const pidPath = options.pidPath ?? join(dataDir, "host.pid");
+  const pidPath = options.pidPath ?? join(config.runtimeDir, "host.pid");
   const socketPath = config.hostSocket;
 
   const spaceManager = new SpaceManager(spacesPath);
@@ -376,16 +421,37 @@ export async function startDaemon(
     });
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(socketPath, () => {
-      server.removeListener("error", reject);
-      resolve();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, () => {
+        server.removeListener("error", reject);
+        resolve();
+      });
     });
-  });
+    await chmod(socketPath, 0o600);
 
-  if (options.writePid !== false) {
-    await writeFile(pidPath, String(process.pid), "utf8");
+    if (options.writePid !== false) {
+      await writeFile(pidPath, String(process.pid), { encoding: "utf8", mode: 0o600 });
+    }
+  } catch (error) {
+    for (const socket of clients) socket.destroy();
+    clients.clear();
+    if (server.listening) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    await safeUnlink(socketPath).catch(() => {});
+    if (options.writePid !== false) {
+      await safeUnlink(pidPath).catch(() => {});
+    }
+    if (detachForward) {
+      detachForward();
+      detachForward = undefined;
+    }
+    await closeChromeWithFallback(cdp, chrome);
+    cdp = null;
+    chrome = null;
+    throw error;
   }
 
   let closed = false;
@@ -408,23 +474,16 @@ export async function startDaemon(
       server.close(() => resolve());
     });
     await safeUnlink(socketPath);
-    if (options.writePid !== false) {
-      await safeUnlink(pidPath);
-    }
-    if (cdp) {
-      try {
-        await cdp.close();
-      } catch {
-        // ignore
-      }
-      cdp = null;
-    }
-    // Do not kill chrome on daemon stop by default — profile may stay warm.
-    // Callers that own chrome (tests) can kill via returned handle if needed.
     try {
       await spaceManager.save();
     } catch {
       // ignore
+    }
+    await closeChromeWithFallback(cdp, chrome);
+    cdp = null;
+    chrome = null;
+    if (options.writePid !== false) {
+      await safeUnlink(pidPath);
     }
   }
 

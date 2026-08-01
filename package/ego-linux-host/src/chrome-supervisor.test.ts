@@ -8,6 +8,7 @@ import {
   resolveChromePath,
   isCdpUp,
   ensureChrome,
+  buildChromeArgs,
 } from "./chrome-supervisor.js";
 import type { HostConfig } from "./config.js";
 
@@ -19,10 +20,21 @@ function baseConfig(overrides: Partial<HostConfig> = {}): HostConfig {
     headless: true,
     hostSocket: "/tmp/ego-test.sock",
     dataDir: join(tmpdir(), `ego-chrome-data-${process.pid}`),
+    runtimeDir: join(tmpdir(), `ego-chrome-runtime-${process.pid}`),
     seedFromChrome: false,
+    noSandbox: false,
     ...overrides,
   };
 }
+
+test("buildChromeArgs keeps CDP local and makes no-sandbox explicit", () => {
+  const secure = buildChromeArgs(baseConfig());
+  assert.ok(secure.includes("--remote-debugging-address=127.0.0.1"));
+  assert.ok(!secure.includes("--no-sandbox"));
+
+  const containerFallback = buildChromeArgs(baseConfig({ noSandbox: true }));
+  assert.ok(containerFallback.includes("--no-sandbox"));
+});
 
 test("resolveChromePath prefers EGO_CHROME_PATH when executable", async () => {
   const dir = join(tmpdir(), `ego-chrome-${process.pid}`);

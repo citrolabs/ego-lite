@@ -11,6 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { loadConfig, type HostConfig } from "./config.js";
 import { connectHost, installEgoClient, pingSocket } from "./ego-client.js";
+import { cleanupStoppedHost, inspectHost } from "./host-control.js";
 
 const PACKAGE_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -158,37 +159,45 @@ export async function ensureHost(
   const env = options.env ?? process.env;
   if (await pingSocket(config.hostSocket)) return;
 
-  // Stale socket recovery: file exists but daemon is not answering → unlink + restart.
-  await unlinkStaleSocket(config.hostSocket);
+  const initial = await inspectHost(config);
+  const ownerIsStarting = initial.state === "starting";
+  if (initial.state === "stale" || initial.state === "stopped") {
+    await cleanupStoppedHost(config);
+  }
 
   const packageRoot = options.packageRoot ?? PACKAGE_ROOT;
   const daemonScript = join(packageRoot, "bin", "ego-linux-hostd.mjs");
-  if (!existsSync(daemonScript)) {
+  if (!ownerIsStarting && !existsSync(daemonScript)) {
     throw new Error(`daemon entry not found: ${daemonScript}`);
   }
 
   await mkdir(config.dataDir, { recursive: true, mode: 0o700 });
-  const logPath = join(config.dataDir, "host.log");
-  const logFh = await open(logPath, "a");
+  await mkdir(config.runtimeDir, { recursive: true, mode: 0o700 });
+  const logPath = join(config.runtimeDir, "host.log");
 
-  const childEnv: NodeJS.ProcessEnv = {
-    ...env,
-    EGO_HOST_SOCK: config.hostSocket,
-    EGO_DATA_DIR: config.dataDir,
-    EGO_USER_DATA_DIR: config.userDataDir,
-    EGO_CDP_PORT: String(config.cdpPort),
-  };
-  if (config.chromePath) childEnv.EGO_CHROME_PATH = config.chromePath;
-  if (config.headless) childEnv.EGO_HEADLESS = "1";
+  if (!ownerIsStarting) {
+    const logFh = await open(logPath, "a");
+    const childEnv: NodeJS.ProcessEnv = {
+      ...env,
+      EGO_HOST_SOCK: config.hostSocket,
+      EGO_DATA_DIR: config.dataDir,
+      EGO_RUNTIME_DIR: config.runtimeDir,
+      EGO_USER_DATA_DIR: config.userDataDir,
+      EGO_CDP_PORT: String(config.cdpPort),
+      EGO_CHROME_NO_SANDBOX: config.noSandbox ? "1" : "0",
+    };
+    if (config.chromePath) childEnv.EGO_CHROME_PATH = config.chromePath;
+    if (config.headless) childEnv.EGO_HEADLESS = "1";
 
-  const child = spawn(process.execPath, [daemonScript], {
-    detached: true,
-    stdio: ["ignore", logFh.fd, logFh.fd],
-    env: childEnv,
-  });
-  child.unref();
-  // Parent no longer needs the fd; child has inherited it.
-  await logFh.close().catch(() => {});
+    const child = spawn(process.execPath, [daemonScript, "run"], {
+      detached: true,
+      stdio: ["ignore", logFh.fd, logFh.fd],
+      env: childEnv,
+    });
+    child.unref();
+    // Parent no longer needs the fd; child has inherited it.
+    await logFh.close().catch(() => {});
+  }
 
   const timeoutMs = options.timeoutMs ?? 15_000;
   const pollMs = options.pollMs ?? 200;

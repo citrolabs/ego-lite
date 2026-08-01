@@ -1,9 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { SpaceManager } from "./space-manager.js";
+import { SpaceManager, writePersistAtomically } from "./space-manager.js";
 
 test("bootstraps user space id 1", () => {
   const sm = new SpaceManager();
@@ -158,6 +165,58 @@ test("persist save/load round-trips spaces and selection", async () => {
     assert.equal(sm2.selected()?.ownership, "agentDelegatedToUser");
     assert.deepEqual(sm2.targetsForSelected(), ["pt1"]);
     assert.ok(sm2.list().find((s) => s.id === 1));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("persist save writes with restricted file mode", async () => {
+  const dir = join(tmpdir(), `ego-space-mgr-mode-${process.pid}-${Date.now()}`);
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, "spaces.json");
+  try {
+    const sm = new SpaceManager(path);
+    sm.createAgentSpace("secure");
+    await sm.save();
+
+    const info = await stat(path);
+    assert.equal(info.mode & 0o777, 0o600);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("failed atomic commit preserves the previous valid state", async () => {
+  const dir = join(tmpdir(), `ego-space-mgr-atomic-${process.pid}-${Date.now()}`);
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, "spaces.json");
+  const original = JSON.stringify({ version: "original" });
+  try {
+    await writeFile(path, original, { encoding: "utf8", mode: 0o600 });
+
+    await assert.rejects(
+      () =>
+        writePersistAtomically(
+          path,
+          {
+            nextId: 2,
+            selectedId: null,
+            spaces: [],
+          },
+          {
+            async beforeRename() {
+              throw new Error("injected failure before rename");
+            },
+          },
+        ),
+      /injected failure/,
+    );
+
+    assert.equal(await readFile(path, "utf8"), original);
+    assert.deepEqual(
+      (await readdir(dir)).filter((name) => name.endsWith(".tmp")),
+      [],
+    );
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

@@ -16,6 +16,18 @@ test("loadConfig honors EGO_HEADLESS and EGO_CDP_PORT", async () => {
   assert.equal(cfg.userDataDir, "/tmp/ego-cfg-test/profile");
 });
 
+test("loadConfig separates runtime state and enables explicit sandbox fallback", async () => {
+  const cfg = await loadConfig({
+    EGO_DATA_DIR: "/data/ego-lite",
+    EGO_RUNTIME_DIR: "/run/ego-lite",
+    EGO_CHROME_NO_SANDBOX: "1",
+  });
+  assert.equal(cfg.dataDir, "/data/ego-lite");
+  assert.equal(cfg.runtimeDir, "/run/ego-lite");
+  assert.equal(cfg.hostSocket, "/run/ego-lite/host.sock");
+  assert.equal(cfg.noSandbox, true);
+});
+
 test("loadConfig defaults are headed, cdp 9222, null chromePath", async () => {
   const cfg = await loadConfig({
     EGO_DATA_DIR: "/tmp/ego-cfg-defaults",
@@ -27,6 +39,7 @@ test("loadConfig defaults are headed, cdp 9222, null chromePath", async () => {
   assert.equal(cfg.dataDir, "/tmp/ego-cfg-defaults");
   assert.equal(cfg.hostSocket, "/tmp/ego-cfg-defaults/host.sock");
   assert.equal(cfg.seedFromChrome, false);
+  assert.equal(cfg.noSandbox, false);
 });
 
 test("loadConfig env wins over config.json", async () => {

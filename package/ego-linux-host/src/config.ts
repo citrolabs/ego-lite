@@ -5,6 +5,7 @@ import {
   defaultConfigDir,
   defaultDataDir,
   defaultProfileDir,
+  defaultRuntimeDir,
   defaultSocketPath,
 } from "./paths.js";
 
@@ -15,7 +16,9 @@ export type HostConfig = {
   headless: boolean;
   hostSocket: string;
   dataDir: string;
+  runtimeDir: string;
   seedFromChrome: boolean;
+  noSandbox: boolean;
 };
 
 /** Optional fields from ~/.config/ego-lite/config.json */
@@ -26,6 +29,7 @@ type FileConfig = {
   headless?: boolean;
   seedFromChrome?: boolean;
   hostSocket?: string;
+  noSandbox?: boolean;
 };
 
 function configFilePath(env: NodeJS.ProcessEnv): string {
@@ -66,6 +70,7 @@ export async function loadConfig(
   const file = await readFileConfig(env);
 
   const dataDir = defaultDataDir(env);
+  const runtimeDir = defaultRuntimeDir(env);
 
   let chromePath: string | null;
   if (env.EGO_CHROME_PATH !== undefined && env.EGO_CHROME_PATH !== "") {
@@ -108,6 +113,9 @@ export async function loadConfig(
   }
 
   const seedFromChrome = file.seedFromChrome ?? false;
+  const noSandboxEnv = parseTruthy(env.EGO_CHROME_NO_SANDBOX);
+  const noSandbox =
+    noSandboxEnv !== undefined ? noSandboxEnv : (file.noSandbox ?? false);
 
   return {
     chromePath,
@@ -116,6 +124,8 @@ export async function loadConfig(
     headless,
     hostSocket,
     dataDir,
+    runtimeDir,
     seedFromChrome,
+    noSandbox,
   };
 }

@@ -4,13 +4,14 @@ ego-shaped Linux host for ego lite: a long-lived Chromium supervisor plus CLI sh
 
 This is **not** the Citro/macOS ego app. It is an OSS-friendly host that approximates the ego product model (shared profile/logins, Task Spaces as tab sets + ownership, CDP-only) on stock Chromium.
 
-**Design spec:** [`docs/superpowers/specs/2026-07-23-ego-linux-host-design.md`](../../docs/superpowers/specs/2026-07-23-ego-linux-host-design.md)
-
 ## Status
 
-MVP host: daemon, CDP bridge, Task Spaces, CLI shim, doctor diagnostics, stale-socket recovery, and Chrome respawn on next ensure.
+Experimental Linux host: daemon, CDP bridge, Task Spaces, CLI shim, doctor
+diagnostics, stale-runtime recovery, and Chrome respawn on next ensure.
 
-**MVP acceptance (2026-07-23):** manual checklist PASS on Linux headed Chrome — `ego-browser` on PATH, `--doctor` healthy, example.com smoke (title + snapshot), user-tab isolation, two-space disjoint tabs, space reuse by name, handoff → `EGO_TASK_SPACE_USER_IN_CONTROL` → `takeOver` recovery, `package/ego-browser` and `package/ego-linux-host` unit tests green. Details: `.superpowers/sdd/task-11-report.md`.
+The host currently assumes one serialized owner. Task Spaces are tab sets in a
+single Chromium profile and therefore share cookies and other profile state;
+they are not isolated browser contexts.
 
 ## Requirements
 
@@ -83,8 +84,26 @@ Without Chrome + display, skip the smoke script; unit/integration tests still pa
 | `defaultDataDir()` | `EGO_DATA_DIR` | `$XDG_DATA_HOME/ego-lite` or `~/.local/share/ego-lite` |
 | `defaultConfigDir()` | `EGO_CONFIG_DIR` | `$XDG_CONFIG_HOME/ego-lite` or `~/.config/ego-lite` |
 | `defaultProfileDir()` | `EGO_USER_DATA_DIR` | `<dataDir>/profile` |
-| `defaultSocketPath()` | `EGO_HOST_SOCK` | `<dataDir>/host.sock` |
+| `defaultRuntimeDir()` | `EGO_RUNTIME_DIR` | `<dataDir>` (set `/run/ego-lite` for managed containers) |
+| `defaultSocketPath()` | `EGO_HOST_SOCK` | `<runtimeDir>/host.sock` |
 | `defaultCdpPort()` | `EGO_CDP_PORT` | `9222` |
+
+Keep `EGO_RUNTIME_DIR` off persistent volumes. PID, lock, socket, and local log
+files represent one container lifecycle; only the profile and `spaces.json`
+belong on durable storage.
+
+## Host controls
+
+```bash
+npm run host:run
+npm run host:status
+npm run host:stop
+```
+
+Managed `run` uses an exclusive runtime lock so two daemons cannot own the
+same Chromium profile. `status` distinguishes ready, starting, stale, and
+stopped state. `stop` is idempotent and drives the graceful Chromium shutdown
+path.
 
 ## Diagnostics (`ego-browser --doctor`)
 
@@ -92,7 +111,9 @@ Reports (among others): `chromePath`, `chromeRunning`, `cdpPort`, `cdpUp`, `prof
 
 Hardening behavior:
 
-- **Stale socket**: if `host.sock` exists but ping fails, the CLI unlinks it and restarts the daemon.
+- **Stale socket**: if `host.sock` exists but ping fails, the CLI first checks
+  the managed PID/lock state. It refuses to unlink a socket owned by a live
+  starting process; only confirmed stale runtime artifacts are cleaned.
 - **Chrome death**: the next ego RPC that needs the browser re-runs `ensureChrome` (attach if CDP is back, otherwise respawn). Failures surface as `EGO_BROWSER_UNAVAILABLE` with clear text.
 
 ## Source layout

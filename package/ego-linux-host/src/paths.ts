@@ -15,6 +15,11 @@ export function defaultConfigDir(env: NodeJS.ProcessEnv = process.env): string {
   return join(xdg, APP_NAME);
 }
 
+export function defaultRuntimeDir(env: NodeJS.ProcessEnv = process.env): string {
+  if (env.EGO_RUNTIME_DIR) return env.EGO_RUNTIME_DIR;
+  return defaultDataDir(env);
+}
+
 export function defaultProfileDir(env: NodeJS.ProcessEnv = process.env): string {
   if (env.EGO_USER_DATA_DIR) return env.EGO_USER_DATA_DIR;
   return join(defaultDataDir(env), "profile");
@@ -22,7 +27,7 @@ export function defaultProfileDir(env: NodeJS.ProcessEnv = process.env): string 
 
 export function defaultSocketPath(env: NodeJS.ProcessEnv = process.env): string {
   if (env.EGO_HOST_SOCK) return env.EGO_HOST_SOCK;
-  return join(defaultDataDir(env), "host.sock");
+  return join(defaultRuntimeDir(env), "host.sock");
 }
 
 export function defaultCdpPort(env: NodeJS.ProcessEnv = process.env): number {

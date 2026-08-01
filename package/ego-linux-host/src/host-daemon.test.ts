@@ -1,10 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createConnection } from "node:net";
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { startDaemon, HOST_VERSION } from "./host-daemon.js";
+import {
+  startDaemon,
+  HOST_VERSION,
+  validateUnixSocketPath,
+} from "./host-daemon.js";
 import {
   decodeLine,
   encodeRequest,
@@ -82,9 +86,22 @@ function testConfig(dir: string): HostConfig {
     headless: true,
     hostSocket: join(dir, "host.sock"),
     dataDir: dir,
+    runtimeDir: join(dir, "run"),
     seedFromChrome: false,
+    noSandbox: false,
   };
 }
+
+test("daemon rejects non-portable Unix socket paths before startup", () => {
+  assert.throws(
+    () => validateUnixSocketPath(`/tmp/${"x".repeat(110)}.sock`),
+    (error: Error & { error_code?: string }) => {
+      assert.equal(error.error_code, "EGO_INVALID_ARGUMENT");
+      assert.match(error.message, /socket path|EGO_RUNTIME_DIR/i);
+      return true;
+    },
+  );
+});
 
 test("daemon listens and answers ping without Chrome", async () => {
   await withTempDir(async (dir) => {
@@ -94,6 +111,7 @@ test("daemon listens and answers ping without Chrome", async () => {
       writePid: true,
     });
     try {
+      assert.equal((await stat(daemon.socketPath)).mode & 0o777, 0o600);
       const result = await rpcCall(daemon.socketPath, "ping");
       assert.deepEqual(result, { ok: true, version: HOST_VERSION });
     } finally {
@@ -161,6 +179,166 @@ test("daemon rejects unknown methods", async () => {
     } finally {
       await daemon.close();
     }
+  });
+});
+
+test("daemon close sends graceful Browser.close before fallback", async () => {
+  await withTempDir(async (dir) => {
+    const calls: string[] = [];
+    const config = testConfig(dir);
+    const daemon = await startDaemon({
+      config,
+      ensureChrome: async () => ({
+        pid: 1111,
+        cdpPort: config.cdpPort,
+        userDataDir: config.userDataDir,
+        async waitForExit() {
+          calls.push("chrome.waitForExit");
+          return true;
+        },
+        async kill() {
+          calls.push("chrome.kill");
+        },
+      }),
+      connectCdp: async () => ({
+        async send(method: string) {
+          calls.push(`cdp.send:${method}`);
+          return {};
+        },
+        sendRaw() {},
+        onEvent() {
+          return () => {};
+        },
+        onMessage() {
+          return () => {};
+        },
+        async close() {
+          calls.push("cdp.close");
+        },
+        async listPageTargets() {
+          return [];
+        },
+        async createTarget() {
+          return "new-target";
+        },
+        async attach() {
+          return "session-1";
+        },
+      }),
+    });
+
+    await daemon.close();
+    assert.ok(calls.includes("cdp.send:Browser.close"), "expected Browser.close");
+    assert.ok(calls.includes("cdp.close"), "expected cdp.close");
+    assert.ok(calls.includes("chrome.waitForExit"), "expected graceful exit wait");
+    assert.ok(!calls.includes("chrome.kill"), "expected no hard-kill when exit is observed");
+  });
+});
+
+test("daemon persists task-space metadata before closing Chromium", async () => {
+  await withTempDir(async (dir) => {
+    const config = testConfig(dir);
+    const spacesPath = join(dir, "spaces.json");
+    let persistedBeforeBrowserClose = false;
+    const daemon = await startDaemon({
+      config,
+      spacesPath,
+      ensureChrome: async () => ({
+        pid: 1112,
+        cdpPort: config.cdpPort,
+        userDataDir: config.userDataDir,
+        async waitForExit() {
+          return true;
+        },
+        async kill() {},
+      }),
+      connectCdp: async () => ({
+        async send(method: string) {
+          if (method === "Browser.close") {
+            const persisted = JSON.parse(await readFile(spacesPath, "utf8"));
+            persistedBeforeBrowserClose = persisted.spaces.some(
+              (space: { name?: string }) => space.name === "shutdown-persist",
+            );
+          }
+          return {};
+        },
+        sendRaw() {},
+        onEvent() {
+          return () => {};
+        },
+        onMessage() {
+          return () => {};
+        },
+        async close() {},
+        async listPageTargets() {
+          return [];
+        },
+        async createTarget() {
+          return "new-target";
+        },
+        async attach() {
+          return "session-1";
+        },
+      }),
+    });
+
+    daemon.spaceManager.createAgentSpace("shutdown-persist");
+    await daemon.close();
+
+    assert.equal(persistedBeforeBrowserClose, true);
+  });
+});
+
+test("daemon hard-stops Chromium when graceful exit misses its bound", async () => {
+  await withTempDir(async (dir) => {
+    const calls: string[] = [];
+    const config = testConfig(dir);
+    const daemon = await startDaemon({
+      config,
+      ensureChrome: async () => ({
+        pid: 1113,
+        cdpPort: config.cdpPort,
+        userDataDir: config.userDataDir,
+        async waitForExit() {
+          calls.push("chrome.waitForExit");
+          return false;
+        },
+        async kill() {
+          calls.push("chrome.kill");
+        },
+      }),
+      connectCdp: async () => ({
+        async send(method: string) {
+          calls.push(`cdp.send:${method}`);
+          return {};
+        },
+        sendRaw() {},
+        onEvent() {
+          return () => {};
+        },
+        onMessage() {
+          return () => {};
+        },
+        async close() {
+          calls.push("cdp.close");
+        },
+        async listPageTargets() {
+          return [];
+        },
+        async createTarget() {
+          return "new-target";
+        },
+        async attach() {
+          return "session-1";
+        },
+      }),
+    });
+
+    await daemon.close();
+
+    assert.ok(calls.includes("cdp.send:Browser.close"));
+    assert.ok(calls.includes("chrome.waitForExit"));
+    assert.ok(calls.includes("chrome.kill"));
   });
 });
 

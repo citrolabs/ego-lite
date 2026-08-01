@@ -12,7 +12,10 @@
     "clean": "rm -rf dist",
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && npm run typecheck && node --test \"dist/**/*.test.js\""
+    "test": "npm run build && npm run typecheck && node --test \"dist/**/*.test.js\"",
+    "host:run": "node bin/ego-linux-hostd.mjs run",
+    "host:status": "node bin/ego-linux-hostd.mjs status",
+    "host:stop": "node bin/ego-linux-hostd.mjs stop"
   },
   "license": "MIT",
   "devDependencies": {

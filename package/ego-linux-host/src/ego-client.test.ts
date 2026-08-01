@@ -11,6 +11,7 @@ import {
   type HostConnection,
 } from "./ego-client.js";
 import { startDaemon } from "./host-daemon.js";
+import { acquireHostLock } from "./host-control.js";
 import type { HostConfig } from "./config.js";
 import {
   stripNodejsSubcommand,
@@ -236,7 +237,9 @@ test("connectHost ping + installEgoClient against daemon", async () => {
       headless: true,
       hostSocket: join(dir, "host.sock"),
       dataDir: dir,
+      runtimeDir: dir,
       seedFromChrome: false,
+      noSandbox: false,
     };
     assert.equal(await pingSocket(config.hostSocket), false);
     const daemon = await startDaemon({
@@ -305,7 +308,9 @@ test("ensureHost unlinks stale socket before failing on missing daemon", async (
       headless: true,
       hostSocket: sockPath,
       dataDir: dir,
+      runtimeDir: dir,
       seedFromChrome: false,
+      noSandbox: false,
     };
 
     await assert.rejects(
@@ -322,6 +327,40 @@ test("ensureHost unlinks stale socket before failing on missing daemon", async (
       "stale socket should be unlinked before spawn attempt",
     );
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("ensureHost never unlinks a socket owned by a live starting daemon", async () => {
+  const dir = join(tmpdir(), `ehl-${process.pid}-${Date.now()}`);
+  await mkdir(dir, { recursive: true });
+  const sockPath = join(dir, "host.sock");
+  const config: HostConfig = {
+    chromePath: null,
+    userDataDir: join(dir, "profile"),
+    cdpPort: 19226,
+    headless: true,
+    hostSocket: sockPath,
+    dataDir: join(dir, "data"),
+    runtimeDir: dir,
+    seedFromChrome: false,
+    noSandbox: false,
+  };
+  const lock = await acquireHostLock(config);
+  try {
+    await writeFile(sockPath, "");
+    await assert.rejects(
+      () =>
+        ensureHost(config, {
+          packageRoot: join(dir, "no-such-package"),
+          timeoutMs: 30,
+          pollMs: 5,
+        }),
+      /did not become ready/,
+    );
+    assert.equal(existsSync(sockPath), true);
+  } finally {
+    await lock.release();
     await rm(dir, { recursive: true, force: true });
   }
 });

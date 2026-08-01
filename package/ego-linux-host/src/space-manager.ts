@@ -1,5 +1,58 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
+
+type PersistPayload = PersistShape;
+
+function mkTempPath(path: string): string {
+  return `${path}.${process.pid}.${randomUUID()}.tmp`;
+}
+
+export type AtomicPersistHooks = {
+  /** Deterministic failpoint for crash-safety tests. */
+  beforeRename?: (tmpPath: string, targetPath: string) => Promise<void>;
+};
+
+export async function writePersistAtomically(
+  path: string,
+  payload: PersistPayload,
+  hooks: AtomicPersistHooks = {},
+): Promise<void> {
+  const tmpPath = mkTempPath(path);
+  const text = JSON.stringify(payload, null, 2);
+  const handle = await open(tmpPath, "wx", 0o600);
+  let handleOpen = true;
+  try {
+    await handle.writeFile(text, "utf8");
+    await handle.sync();
+    await handle.close();
+    handleOpen = false;
+    await hooks.beforeRename?.(tmpPath, path);
+    await rename(tmpPath, path);
+
+    // Persist the new directory entry as well as the file contents.
+    const directory = await open(dirname(path), "r");
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
+  } catch (err) {
+    if (handleOpen) {
+      try {
+        await handle.close();
+      } catch {
+        // ignore
+      }
+    }
+    try {
+      await unlink(tmpPath);
+    } catch {
+      // Best-effort cleanup only
+    }
+    throw err;
+  }
+}
 
 export type Ownership = "agent" | "agentDelegatedToUser" | "user";
 
@@ -55,6 +108,7 @@ export class SpaceManager {
   private nextId = USER_SPACE_ID + 1;
   private selectedId: number | null = null;
   private spaces: Space[] = [bootstrapUserSpace()];
+  private saveQueue: Promise<void> = Promise.resolve();
 
   constructor(persistPath?: string) {
     this.persistPath = persistPath;
@@ -144,13 +198,18 @@ export class SpaceManager {
 
   async save(): Promise<void> {
     if (!this.persistPath) return;
-    const payload: PersistShape = {
+    const payload: PersistPayload = {
       nextId: this.nextId,
       selectedId: this.selectedId,
       spaces: this.spaces.map(cloneSpace),
     };
     await mkdir(dirname(this.persistPath), { recursive: true });
-    await writeFile(this.persistPath, JSON.stringify(payload, null, 2), "utf8");
+
+    const op = this.saveQueue.then(() => writePersistAtomically(this.persistPath!, payload));
+    this.saveQueue = op.catch(() => {
+      // keep the queue alive; callers keep own failure handling
+    });
+    await op;
   }
 
   /** Internal list including targetIds. */
