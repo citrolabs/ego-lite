@@ -12,6 +12,7 @@ import {
   newTab,
   openOrReuseTab,
   pageInfo,
+  setViewportSize,
   closeTab,
   switchTab,
 } from "../../dist/src/driver/nav.js";
@@ -530,6 +531,137 @@ test("pageInfo tolerates a transient document without documentElement", async ()
       pw: 800,
       ph: 600,
     });
+  } finally {
+    restore();
+  }
+});
+
+test("setViewportSize accepts an exact unscaled CSS viewport", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride: async (method, params) => {
+      calls.push({ method, params });
+      if (method === "Runtime.evaluate") {
+        return {
+          result: {
+            value: JSON.stringify({ width: 390, height: 844, dpr: 1 }),
+          },
+        };
+      }
+      return {};
+    },
+  });
+  try {
+    await setViewportSize({ width: 390, height: 844 });
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(
+    calls.filter(
+      ({ method }) => method === "Emulation.setDeviceMetricsOverride",
+    ),
+    [
+      {
+        method: "Emulation.setDeviceMetricsOverride",
+        params: {
+          width: 390,
+          height: 844,
+          deviceScaleFactor: 1,
+          mobile: false,
+        },
+      },
+    ],
+  );
+});
+
+test("setViewportSize compensates for a scaled CSS viewport", async () => {
+  const metricCalls = [];
+  const observations = [
+    { width: 312, height: 675, dpr: 1.25 },
+    { width: 390, height: 844, dpr: 1.25 },
+  ];
+  const restore = setOverrides({
+    cdpOverride: async (method, params) => {
+      if (method === "Emulation.setDeviceMetricsOverride") {
+        metricCalls.push(params);
+        return {};
+      }
+      if (method === "Runtime.evaluate") {
+        return {
+          result: { value: JSON.stringify(observations.shift()) },
+        };
+      }
+      return {};
+    },
+  });
+  try {
+    await setViewportSize({ width: 390, height: 844 });
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(metricCalls, [
+    {
+      width: 390,
+      height: 844,
+      deviceScaleFactor: 1,
+      mobile: false,
+    },
+    {
+      width: 488,
+      height: 1055,
+      deviceScaleFactor: 1,
+      mobile: false,
+    },
+  ]);
+});
+
+test("setViewportSize rejects invalid dimensions before CDP dispatch", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride: async (...args) => {
+      calls.push(args);
+      return {};
+    },
+  });
+  try {
+    for (const viewport of [
+      { width: 0, height: 844 },
+      { width: 390, height: -1 },
+      { width: Number.NaN, height: 844 },
+      { width: 390, height: Number.POSITIVE_INFINITY },
+      { width: 390.5, height: 844 },
+    ]) {
+      await assert.rejects(
+        () => setViewportSize(viewport),
+        /positive integer width and height/,
+      );
+    }
+  } finally {
+    restore();
+  }
+  assert.deepEqual(calls, []);
+});
+
+test("setViewportSize reports a persistent viewport mismatch", async () => {
+  const restore = setOverrides({
+    cdpOverride: async (method) => {
+      if (method === "Runtime.evaluate") {
+        return {
+          result: {
+            value: JSON.stringify({ width: 312, height: 675, dpr: 1.25 }),
+          },
+        };
+      }
+      return {};
+    },
+  });
+  try {
+    await assert.rejects(
+      () => setViewportSize({ width: 390, height: 844 }),
+      /requested 390x844 CSS pixels.*observed 312x675.*devicePixelRatio 1\.25/,
+    );
   } finally {
     restore();
   }

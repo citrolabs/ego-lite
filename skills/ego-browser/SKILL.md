@@ -37,7 +37,7 @@ The heredoc body runs as a Node.js script that controls the selected ego-browser
 - Navigation / state: `listTabs`, `openOrReuseTab`, `closeTab`, `gotoAndWait`, `currentTab`, `switchTab`, `gotoUrl`, `pageInfo`, `ensureRealTab`
 - Observation: `snapshotText`, `captureScreenshot`, `drainEvents`
 - Scroll / mouse: `scrollBy`, `scrollToBottomUntil`, `scroll`, `click`, `doubleClick`, `hover`, `dragMouse`
-- Keyboard & input: `typeText`, `fillInput`, `pressKey`, `dispatchKey`
+- Keyboard & input: `page.keyboard.press`, `page.keyboard.down`, `page.keyboard.up`, `page.keyboard.insertText`, `page.keyboard.type`
 - File: `uploadFile`
 - Wait: `wait`, `waitForLoad`, `waitForElement`, `waitForNetworkIdle`
 - Fetch: `serverFetch`, `browserFetch`
@@ -184,12 +184,13 @@ Before writing substantial content into a rich editor, perform a tiny write prob
    - After meaningful clicks, input, or navigation, observe again with `await snapshotText()`, `await pageInfo()`, or `await captureScreenshot()` before assuming success.
 
 2. **Visual workflow: `await captureScreenshot()` + coordinate/keyboard actions** — use when the page is primarily visual, canvas-like, heavily virtualized, or when accessibility / semantic structure is incomplete.
-   - Inspect the screenshot, act with viewport coordinates such as `await click([x, y])`, `await doubleClick([x, y])`, `await pressKey(...)`, and `await typeText(...)`, then verify with another screenshot or a reliable export/readback path.
+   - Inspect the screenshot, act with viewport coordinates such as `await click([x, y])` and `await doubleClick([x, y])`, and use real keyboard operations such as `await page.keyboard.press(...)`, `await page.keyboard.down(...)`, and `await page.keyboard.up(...)`; then verify with another screenshot or a reliable export/readback path.
    - Prefer this path for rich editors, spreadsheets, visual menus, map/canvas UIs, drag interactions, and targets that are obvious visually but poor in the DOM/AX tree.
 
 3. **Direct DOM / CDP workflow: `await js(...)` / `await cdp(...)`** — use when you need browser state, compact data extraction, custom DOM traversal, or raw browser capabilities.
    - Keep browser-side logic in one explicit IIFE and return once.
-   - Use `await cdp(...)` for browser protocol operations that helpers do not cover.
+   - Use `await page.setViewportSize({ width, height })` for exact responsive checks in CSS pixels. It verifies and compensates for host display scaling so `page.info()` and `page.screenshot()` agree.
+   - Use `await cdp(...)` for raw browser protocol operations that helpers do not cover; it does not normalize viewport units.
 
 These workflows can be combined. A task may take multiple heredoc rounds when the next step depends on fresh page state or user handoff. In each round, write a coherent script that advances the task: observe, act or extract, verify, and report with `cliLog(...)`. Avoid tiny probe scripts, but don't force the whole task into one oversized script.
 
@@ -202,7 +203,7 @@ These workflows can be combined. A task may take multiple heredoc rounds when th
 - `js()` returns the evaluated result, not a JSON string — don't wrap it with `JSON.parse(...)`.
 - Inside a `js(...)` template string, regex backslashes must be doubled (e.g. `\\d`, `\\s`), or use `String.raw`.
 - If the source passed to `js()` contains a top-level `return`, it will be auto-wrapped in an IIFE; `return` inside nested callbacks can also trigger this accidentally. For complex expressions, prefer the explicit `(() => { ... })()` form.
-- If `await pageInfo()` reports `w: 0` or `h: 0`, do not continue coordinate actions or screenshots until the viewport is fixed. Try switching to the real tab, reloading, or using CDP viewport metrics, then verify with `await pageInfo()` and `await captureScreenshot()`.
+- If `await pageInfo()` reports `w: 0` or `h: 0`, do not continue coordinate actions or screenshots until the viewport is fixed. Try switching to the real tab, reloading, or calling `await page.setViewportSize({ width, height })`, then verify with `await pageInfo()` and `await captureScreenshot()`.
 - Code in the heredoc body runs in Node.js; code inside `js(...)` runs in the browser page. Navigation, waits, and `cliLog(...)` belong in the heredoc body; `document`, `window`, and page selectors belong inside `js(...)`.
 - Always call `completeTaskSpace(name, { keep })` when the task is done — do not leave the space hanging. Default to `{ keep: false }`; use `{ keep: true }` only for the concrete live-page cases described in Task spaces.
 - When the user explicitly asks to use ego-browser, assume both `ego-browser` and the repo runtime are ready. Do not pre-check `which ego-browser`, `node -v`, package metadata, or help output. Only investigate environment issues if the first run produces an error.

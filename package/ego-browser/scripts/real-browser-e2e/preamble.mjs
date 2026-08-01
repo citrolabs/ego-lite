@@ -203,12 +203,7 @@ async function allowWheelDispatch(label, fn) {
 async function setStableViewport() {
   await cdp("Page.bringToFront").catch(() => {});
   await cdp("Emulation.clearDeviceMetricsOverride").catch(() => {});
-  await cdp("Emulation.setDeviceMetricsOverride", {
-    width: 1280,
-    height: 800,
-    deviceScaleFactor: 1,
-    mobile: false,
-  }).catch(() => {});
+  await page.setViewportSize({ width: 1280, height: 800 });
   await page.waitForTimeout(100);
 }
 

@@ -29,6 +29,21 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     returns: "void",
     example: "page.setDefaultTimeout(10000)",
   },
+  "page.setViewportSize": {
+    signature: "page.setViewportSize(viewport) => Promise<void>",
+    description:
+      "Set the viewport to exact CSS pixels across host display scales.",
+    params: [
+      {
+        name: "viewport",
+        type: "{ width: number, height: number }",
+        required: true,
+        description: "Positive integer width and height in CSS pixels.",
+      },
+    ],
+    returns: "Promise<void>",
+    example: "await page.setViewportSize({ width: 390, height: 844 })",
+  },
   "page.goto": {
     signature: "page.goto(url, options?) => Promise<any>",
     description: "Navigate the current tab to a URL.",

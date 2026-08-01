@@ -98,6 +98,7 @@ test("helper surface exposes Playwright-style object facades", () => {
   const context = helperContext();
   assert.equal(typeof context.page, "object");
   assert.equal(typeof context.page.goto, "function");
+  assert.equal(typeof context.page.setViewportSize, "function");
   assert.equal(typeof context.page.locator, "function");
   assert.equal(typeof context.page.getByText, "function");
   assert.equal(typeof context.page.getByLabel, "function");
@@ -119,6 +120,10 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal(typeof context.page.mouse.click, "function");
   assert.equal(typeof context.page.mouse.down, "function");
   assert.equal(typeof context.page.mouse.up, "function");
+  assert.match(
+    context.help("page.setViewportSize"),
+    /page\.setViewportSize\(viewport\).*CSS pixels/,
+  );
   const locator = context.page.locator("#target");
   assert.equal(typeof locator.click, "function");
   assert.equal(typeof locator.fill, "function");
