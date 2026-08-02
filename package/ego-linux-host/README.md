@@ -114,6 +114,9 @@ Hardening behavior:
 - **Stale socket**: if `host.sock` exists but ping fails, the CLI first checks
   the managed PID/lock state. It refuses to unlink a socket owned by a live
   starting process; only confirmed stale runtime artifacts are cleaned.
+- **Attached browser**: if the host finds an existing CDP endpoint that it did
+  not spawn, daemon shutdown closes only the CDP bridge and never closes or
+  signals the external browser process.
 - **Chrome death**: the next ego RPC that needs the browser re-runs `ensureChrome` (attach if CDP is back, otherwise respawn). Failures surface as `EGO_BROWSER_UNAVAILABLE` with clear text.
 
 ## Source layout

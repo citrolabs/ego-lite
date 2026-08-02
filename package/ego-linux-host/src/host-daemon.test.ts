@@ -235,6 +235,60 @@ test("daemon close sends graceful Browser.close before fallback", async () => {
   });
 });
 
+test("daemon close leaves an externally attached Chrome process running", async () => {
+  await withTempDir(async (dir) => {
+    const calls: string[] = [];
+    const config = testConfig(dir);
+    const daemon = await startDaemon({
+      config,
+      ensureChrome: async () => ({
+        pid: null,
+        cdpPort: config.cdpPort,
+        userDataDir: config.userDataDir,
+        async waitForExit() {
+          calls.push("chrome.waitForExit");
+          return false;
+        },
+        async kill() {
+          calls.push("chrome.kill");
+        },
+      }),
+      connectCdp: async () => ({
+        async send(method: string) {
+          calls.push(`cdp.send:${method}`);
+          return {};
+        },
+        sendRaw() {},
+        onEvent() {
+          return () => {};
+        },
+        onMessage() {
+          return () => {};
+        },
+        async close() {
+          calls.push("cdp.close");
+        },
+        async listPageTargets() {
+          return [];
+        },
+        async createTarget() {
+          return "new-target";
+        },
+        async attach() {
+          return "session-1";
+        },
+      }),
+    });
+
+    await daemon.close();
+
+    assert.ok(calls.includes("cdp.close"));
+    assert.ok(!calls.includes("cdp.send:Browser.close"));
+    assert.ok(!calls.includes("chrome.waitForExit"));
+    assert.ok(!calls.includes("chrome.kill"));
+  });
+});
+
 test("daemon persists task-space metadata before closing Chromium", async () => {
   await withTempDir(async (dir) => {
     const config = testConfig(dir);
@@ -417,7 +471,7 @@ test("daemon throws EGO_BROWSER_UNAVAILABLE when ensureChrome fails on ego metho
         ensureCount++;
         if (ensureCount === 1) {
           return {
-            pid: 0,
+            pid: null,
             cdpPort: config.cdpPort,
             userDataDir: config.userDataDir,
             async kill() {},

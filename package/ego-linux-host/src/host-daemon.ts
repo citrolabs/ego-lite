@@ -101,12 +101,16 @@ async function closeChromeWithFallback(
   chrome: ChromeHandle | null,
 ): Promise<void> {
   if (chrome === null) return;
+  const ownsProcess =
+    chrome.pid !== null && Number.isInteger(chrome.pid) && chrome.pid > 0;
 
   if (cdp) {
-    try {
-      await cdp.send("Browser.close");
-    } catch {
-      // Ignore failures from already-closed/debuggable-browser state.
+    if (ownsProcess) {
+      try {
+        await cdp.send("Browser.close");
+      } catch {
+        // Ignore failures from already-closed/debuggable-browser state.
+      }
     }
     try {
       await cdp.close();
@@ -114,6 +118,10 @@ async function closeChromeWithFallback(
       // ignore
     }
   }
+
+  // A browser discovered on an existing CDP endpoint is externally owned.
+  // Closing the bridge is sufficient; never close or signal that process.
+  if (!ownsProcess) return;
 
   const waitForExit = chrome.waitForExit;
   if (waitForExit) {

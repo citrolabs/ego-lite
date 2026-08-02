@@ -131,10 +131,23 @@ test("ensureChrome attaches when CDP already up", async () => {
         chromePath: "/nonexistent/should-not-matter",
       }),
     );
+    assert.equal(handle.pid, null);
     assert.equal(handle.cdpPort, addr.port);
     assert.equal(handle.userDataDir, userDataDir);
     assert.equal(typeof handle.kill, "function");
-    await handle.kill();
+    const originalKill = process.kill;
+    const signaledPids: number[] = [];
+    process.kill = ((pid: number) => {
+      signaledPids.push(pid);
+      return true;
+    }) as typeof process.kill;
+    try {
+      assert.equal(await handle.waitForExit?.(0), false);
+      await handle.kill();
+    } finally {
+      process.kill = originalKill;
+    }
+    assert.deepEqual(signaledPids, []);
   } finally {
     await new Promise<void>((resolve, reject) =>
       server.close((err) => (err ? reject(err) : resolve())),

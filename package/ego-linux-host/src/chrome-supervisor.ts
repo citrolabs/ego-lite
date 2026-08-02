@@ -29,7 +29,8 @@ const CDP_READY_TIMEOUT_MS = 15_000;
 const CDP_POLL_MS = 100;
 
 export type ChromeHandle = {
-  pid: number;
+  /** Spawned Chrome PID, or null when attached to an externally owned CDP endpoint. */
+  pid: number | null;
   cdpPort: number;
   userDataDir: string;
   kill(): Promise<void>;
@@ -124,8 +125,8 @@ function hasDisplayEnv(env: NodeJS.ProcessEnv = process.env): boolean {
   return Boolean(env.DISPLAY || env.WAYLAND_DISPLAY);
 }
 
-async function killProcessGroup(pid: number): Promise<void> {
-  if (!pid || pid <= 0) return;
+async function killProcessGroup(pid: number | null): Promise<void> {
+  if (pid === null || !Number.isInteger(pid) || pid <= 0) return;
 
   const signal = (sig: NodeJS.Signals) => {
     try {
@@ -156,7 +157,7 @@ async function killProcessGroup(pid: number): Promise<void> {
 }
 
 function makeHandle(
-  pid: number,
+  pid: number | null,
   cdpPort: number,
   userDataDir: string,
   child?: ChildProcess,
@@ -167,7 +168,7 @@ function makeHandle(
     cdpPort,
     userDataDir,
     async waitForExit(timeoutMs = 3000) {
-      if (!pid || pid <= 0) return false;
+      if (pid === null || !Number.isInteger(pid) || pid <= 0) return false;
       return waitForProcessExit(pid, timeoutMs);
     },
     async kill() {
@@ -212,8 +213,9 @@ export async function ensureChrome(
   options?: EnsureChromeOptions,
 ): Promise<ChromeHandle> {
   if (await isCdpUp(config.cdpPort)) {
-    // Attached mode: we did not spawn; pid unknown (0). kill is best-effort no-op on 0.
-    return makeHandle(0, config.cdpPort, config.userDataDir);
+    // Attached mode: the process is externally owned, so shutdown must not
+    // close or signal it. A null pid makes that ownership boundary explicit.
+    return makeHandle(null, config.cdpPort, config.userDataDir);
   }
 
   const chromePath = resolveChromePath(process.env, config.chromePath, {
