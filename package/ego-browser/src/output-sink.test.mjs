@@ -6,6 +6,7 @@ import {
   flushSink,
   markHardStop,
   resetSink,
+  setNoticeTrailer,
 } from "../dist/src/output-sink.js";
 
 function fakeStream() {
@@ -71,4 +72,20 @@ test("a message that already ends in a newline is not double-terminated", () => 
   const out = fakeStream();
   flushSink(out, false);
   assert.equal(out.text(), "already terminated\n");
+});
+
+test("a stale-skill hard stop remains distinct from a trailing update notice", () => {
+  resetSink();
+  markHardStop("[ego-browser:skill-stale] re-read the skill");
+  setNoticeTrailer("[ego-browser:notice] ego lite update available");
+  const out = fakeStream();
+  flushSink(out, false);
+  assert.equal(
+    out.text(),
+    [
+      "[ego-browser:skill-stale] re-read the skill",
+      "[ego-browser:notice] ego lite update available",
+      "",
+    ].join("\n"),
+  );
 });

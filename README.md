@@ -4,6 +4,8 @@
 
 **The fastest browser for AI agents to run browser automation**
 
+[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
+
 <a href="https://trendshift.io/repositories/42334?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-42334" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/42334" alt="citrolabs%2Fego-lite | Trendshift" width="250" height="55"/></a>
 
 <p>

@@ -281,7 +281,11 @@ function handleMessage(message) {
       continue;
     }
     deliveredToSubscriber = true;
-    subscriber.listener(data);
+    try {
+      subscriber.listener(data);
+    } catch (error) {
+      console.error("Browser event subscriber failed:", error);
+    }
   }
   if (!(deliveredToSubscriber && data.method === "Page.screencastFrame")) {
     events.push(data);

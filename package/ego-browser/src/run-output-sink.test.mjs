@@ -199,6 +199,39 @@ test("an ordinary uncaught error still flushes the output logged before it", asy
   assert.equal(result.stdout, "partial result\n");
 });
 
+test("an uncaught legacy task-space helper reports a stale skill instead of a ReferenceError", async () => {
+  const result = await runScript(`
+    await useOrCreateTaskSpace("checkout-flow");
+  `);
+
+  assert.ok(result.error, "expected runMain to reject");
+  assert.equal(result.error.name, "EgoBrowserSkillStaleError");
+  assert.match(result.error.message, /^\[ego-browser:skill-stale\]/);
+  assert.match(result.error.message, /useOrCreateTaskSpace/);
+  assert.match(result.error.message, /taskSpaces\.useOrCreate/);
+  assert.doesNotMatch(result.error.message, /is not defined/);
+  assert.equal(result.stdout, "");
+});
+
+test("a swallowed legacy task-space helper collapses output to one stale-skill message", async () => {
+  const result = await runScript(`
+    console.log("before");
+    try {
+      await useOrCreateTaskSpace("checkout-flow");
+    } catch (error) {
+      console.log("swallowed: " + error.message);
+    }
+    console.log("after");
+  `);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.error, null);
+  assert.match(result.stdout, /^\[ego-browser:skill-stale\]/);
+  assert.match(result.stdout, /taskSpaces\.useOrCreate/);
+  assert.doesNotMatch(result.stdout, /before|swallowed|after/);
+  assert.equal(result.stdout.match(/\[ego-browser:skill-stale\]/g)?.length, 1);
+});
+
 test("runMain finalizes an active screencast when the script ends", async () => {
   let stopCalls = 0;
   const restore = screencastTesting.setOverrides({

@@ -1,6 +1,7 @@
 import { cdp } from "../cdp-eval.js";
 import { browserCdp } from "../browser-runtime.js";
 import { withHandle, resolveAndCall } from "./element-ops.js";
+import { click } from "./pointer.js";
 import { waitForSelector } from "./waits.js";
 import { state } from "../state.js";
 
@@ -390,29 +391,47 @@ export async function uncheck(selector) {
   await setChecked(selector, false);
 }
 
+// Page-side guard shared by the read before the click and the read after it:
+// rejects non checkbox/radio targets and radio unchecking, then reports the
+// current state. One source string so both reads validate identically.
+const CHECKED_STATE_SOURCE = `function(checked){
+  if (!(this instanceof HTMLInputElement) || (this.type !== "checkbox" && this.type !== "radio")) {
+    throw new Error("setChecked target must be a checkbox or radio input");
+  }
+  if (this.type === "radio" && !checked) {
+    throw new Error("setChecked cannot uncheck a radio input");
+  }
+  return this.checked;
+}`;
+
 /**
  * Set the checked state of a checkbox or radio, Playwright-style.
+ *
+ * Toggles through a real click rather than assigning `this.checked`: an
+ * assignment updates the DOM property without the activation behavior a click
+ * runs, so frameworks that track the property (React's controlled inputs) never
+ * see a change and silently drop the update. The state is read back afterwards
+ * and a click that did not take throws instead of reporting success.
  * @param {string} selector CSS selector / @ref / loc= / xpath= for the input.
  * @param {boolean} checked Desired checked state.
  * @returns {Promise<void>}
  */
 export async function setChecked(selector, checked) {
-  await resolveAndCall(
-    selector,
-    `function(checked){
-      if (!(this instanceof HTMLInputElement) || (this.type !== "checkbox" && this.type !== "radio")) {
-        throw new Error("setChecked target must be a checkbox or radio input");
-      }
-      if (this.type === "radio" && !checked) {
-        throw new Error("setChecked cannot uncheck a radio input");
-      }
-      if (this.checked === checked) return;
-      this.checked = checked;
-      this.dispatchEvent(new Event("input", { bubbles: true }));
-      this.dispatchEvent(new Event("change", { bubbles: true }));
-    }`,
-    [Boolean(checked)],
-  );
+  const target = Boolean(checked);
+  if ((await readCheckedState(selector, target)) === target) return;
+  await click(selector);
+  if ((await readCheckedState(selector, target)) !== target) {
+    throw new Error(
+      `setChecked: clicking ${JSON.stringify(selector)} did not make it ${target ? "checked" : "unchecked"}`,
+    );
+  }
+}
+
+async function readCheckedState(selector, target: boolean) {
+  const { result } = await resolveAndCall(selector, CHECKED_STATE_SOURCE, [
+    target,
+  ]);
+  return result.result?.value;
 }
 
 /**

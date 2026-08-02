@@ -287,6 +287,47 @@ test("subscribeBrowserEvent stops delivery after unsubscribe", async () => {
   }
 });
 
+test("subscribeBrowserEvent isolates listener failures", async () => {
+  const { subscribeBrowserEvent } =
+    await import("../dist/src/browser-runtime.js");
+  installAutoEgo();
+  const originalConsoleError = console.error;
+  const errors = [];
+  console.error = (...args) => errors.push(args);
+  let unsubscribeFailing;
+  let unsubscribeHealthy;
+  try {
+    await browserCdp("Runtime.evaluate", { expression: "1" });
+    unsubscribeFailing = subscribeBrowserEvent(
+      "Page.screencastFrame",
+      "sess-video",
+      () => {
+        throw new Error("subscriber failed");
+      },
+    );
+    const received = [];
+    unsubscribeHealthy = subscribeBrowserEvent(
+      "Page.screencastFrame",
+      "sess-video",
+      (event) => received.push(event.params.data),
+    );
+
+    assert.doesNotThrow(() => {
+      fireEvent("Page.screencastFrame", { data: "frame-1" }, "sess-video");
+    });
+
+    assert.deepEqual(received, ["frame-1"]);
+    assert.equal(errors.length, 1);
+    assert.match(String(errors[0][0]), /subscriber/i);
+    assert.match(String(errors[0][1]), /subscriber failed/);
+  } finally {
+    unsubscribeFailing?.();
+    unsubscribeHealthy?.();
+    console.error = originalConsoleError;
+    cleanup();
+  }
+});
+
 test("subscribed screencast frames bypass the generic event buffer", async () => {
   const { subscribeBrowserEvent } =
     await import("../dist/src/browser-runtime.js");

@@ -75,6 +75,24 @@ export function keyboardCase() {
     assertEqual(await page.locator("#checkbox").isChecked(), false, "isChecked reads unchecked state");
     await page.locator("#checkbox").setChecked(true);
     await waitForJsValue("window.__fixtureState.checkboxChecked", true, "setChecked sets explicit state");
+    await page.locator("#checkbox").setChecked(true);
+    await waitForJsValue("window.__fixtureState.checkboxChecked", true, "setChecked is a no-op when the state already matches");
+
+    /* A controlled input only advances on a real click; a property write is dropped. */
+    await page.locator("#controlled-checkbox").check();
+    await waitForJsValue("window.__fixtureState.controlledChecked", true, "check drives a controlled checkbox");
+    await waitForJsValue("window.__fixtureState.controlledChanges", 1, "check fires exactly one controlled change");
+    await page.locator("#controlled-checkbox").uncheck();
+    await waitForJsValue("window.__fixtureState.controlledChecked", false, "uncheck clears a controlled checkbox");
+
+    await page.locator("#controlled-radio-pro").setChecked(true);
+    await waitForJsValue("window.__fixtureState.controlledPlan", "pro", "setChecked drives a controlled radio");
+    assertEqual(await page.locator("#controlled-radio-basic").isChecked(), false, "controlled radio group keeps a single selection");
+    await assertRejects(
+      () => page.locator("#controlled-radio-pro").uncheck(),
+      "cannot uncheck a radio",
+      "uncheck rejects radio inputs"
+    );
 
     await page.locator("#text-input").fill("select me", { timeout: 3000 });
     await page.keyboard.press("ControlOrMeta+a");

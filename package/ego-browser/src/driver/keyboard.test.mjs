@@ -343,25 +343,110 @@ test("focus resolves a selector and focuses the element", async () => {
   assert.match(call.params.functionDeclaration, /this\.focus\(\)/);
 });
 
-test("setChecked, check, and uncheck use Playwright-style checked state", async () => {
-  const { calls, restore } = selectorCallHarness();
+// setChecked toggles through a real click, so the harness has to answer the
+// whole click path: handle resolution, the visibility gate, the click point,
+// and the checked reads that bracket it. `states` is the queue of checked
+// values those reads return; the last entry answers every later read.
+function checkedStateHarness(states) {
+  const calls = [];
+  const reads = [];
+  const queue = [...states];
+  const restore = setOverrides({
+    cdpOverride(method, params, sessionId) {
+      calls.push({ method, params, sessionId });
+      if (
+        method === "Runtime.evaluate" &&
+        params.objectGroup === "ego-browser"
+      ) {
+        return { result: { objectId: "object-1" } };
+      }
+      if (method === "Runtime.evaluate") {
+        return { result: { value: { x: 40, y: 60 } } };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        const source = params.functionDeclaration;
+        if (source.includes("setChecked target must be")) {
+          reads.push(params.arguments);
+          return {
+            result: { value: queue.length > 1 ? queue.shift() : queue[0] },
+          };
+        }
+        if (source.includes("checkVisibility")) {
+          return { result: { value: true } };
+        }
+      }
+      return {};
+    },
+  });
+  return { calls, reads, restore };
+}
+
+test("setChecked toggles a checkbox with a real click, not a property write", async () => {
+  const { calls, restore } = checkedStateHarness([false, true]);
   try {
     await setChecked("#agree", true);
-    await check("#agree");
-    await uncheck("#agree");
   } finally {
     restore();
   }
 
-  const callsOnElement = calls.filter(
-    (entry) => entry.method === "Runtime.callFunctionOn",
-  );
-  assert.equal(callsOnElement.length, 3);
   assert.deepEqual(
-    callsOnElement.map((entry) => entry.params.arguments),
-    [[{ value: true }], [{ value: true }], [{ value: false }]],
+    calls
+      .filter((entry) => entry.method === "Input.dispatchMouseEvent")
+      .map((entry) => entry.params.type),
+    ["mouseMoved", "mousePressed", "mouseReleased"],
   );
-  assert.match(callsOnElement[0].params.functionDeclaration, /this\.checked/);
+  assert.ok(
+    calls
+      .filter((entry) => entry.method === "Runtime.callFunctionOn")
+      .every(
+        (entry) => !/this\.checked\s*=/.test(entry.params.functionDeclaration),
+      ),
+    "never assigns the checked property page-side",
+  );
+});
+
+test("setChecked skips the click when the state already matches", async () => {
+  const { calls, restore } = checkedStateHarness([true]);
+  try {
+    await setChecked("#agree", true);
+  } finally {
+    restore();
+  }
+
+  assert.equal(
+    calls.filter((entry) => entry.method === "Input.dispatchMouseEvent").length,
+    0,
+  );
+});
+
+test("setChecked throws when the click leaves the state unchanged", async () => {
+  const { restore } = checkedStateHarness([false]);
+  try {
+    await assert.rejects(
+      () => setChecked("#agree", true),
+      /did not make it checked/,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("check and uncheck request the matching target state", async () => {
+  const { reads, restore } = checkedStateHarness([false, true]);
+  try {
+    await check("#agree");
+  } finally {
+    restore();
+  }
+  assert.deepEqual(reads[0], [{ value: true }]);
+
+  const unchecking = checkedStateHarness([true, false]);
+  try {
+    await uncheck("#agree");
+  } finally {
+    unchecking.restore();
+  }
+  assert.deepEqual(unchecking.reads[0], [{ value: false }]);
 });
 
 test("selectOption returns selected values", async () => {

@@ -6,6 +6,7 @@ import {
   click,
   down,
   hover,
+  scrollIntoViewIfNeeded,
   up,
   wheel,
 } from "../../dist/src/driver/pointer.js";
@@ -120,15 +121,90 @@ test("click scrolls a selector into view before resolving its click point", asyn
   }
 
   const scrollIndex = calls.findIndex(
-    (call) =>
-      call.method === "Runtime.callFunctionOn" &&
-      call.params.functionDeclaration.includes("scrollIntoView"),
+    (call) => call.method === "DOM.scrollIntoViewIfNeeded",
   );
   const dispatchIndex = calls.findIndex(
     (call) => call.method === "Input.dispatchMouseEvent",
   );
   assert.ok(scrollIndex >= 0, "scrolls the target into the viewport");
   assert.ok(scrollIndex < dispatchIndex, "scrolls before mouse dispatch");
+});
+
+// The scroll must run browser-side: an in-page scroll is animated under CSS
+// scroll-behavior:smooth unless a style override is injected, and a strict
+// style-src CSP rejects that override. CDP scrolling has neither problem.
+test("scrollIntoViewIfNeeded scrolls through CDP, not page-side JavaScript", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      calls.push({ method, params });
+      if (
+        method === "Runtime.evaluate" &&
+        params.objectGroup === "ego-browser"
+      ) {
+        return { result: { objectId: "object-1" } };
+      }
+      return {};
+    },
+  });
+  try {
+    await scrollIntoViewIfNeeded("#target");
+  } finally {
+    restore();
+  }
+
+  const scroll = calls.find(
+    (call) => call.method === "DOM.scrollIntoViewIfNeeded",
+  );
+  assert.ok(scroll, "scrolls via DOM.scrollIntoViewIfNeeded");
+  assert.equal(scroll.params.objectId, "object-1");
+  assert.ok(
+    !calls.some((call) => call.method === "Runtime.callFunctionOn"),
+    "does not run page-side scroll code on the CDP path",
+  );
+  assert.ok(
+    calls.some(
+      (call) =>
+        call.method === "Runtime.releaseObject" &&
+        call.params.objectId === "object-1",
+    ),
+    "releases the resolved handle",
+  );
+});
+
+test("scrollIntoViewIfNeeded falls back to an in-page scroll when the CDP scroll fails", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      calls.push({ method, params });
+      if (
+        method === "Runtime.evaluate" &&
+        params.objectGroup === "ego-browser"
+      ) {
+        return { result: { objectId: "object-1" } };
+      }
+      if (method === "DOM.scrollIntoViewIfNeeded") {
+        throw new Error("'DOM.scrollIntoViewIfNeeded' wasn't found");
+      }
+      return {};
+    },
+  });
+  try {
+    await scrollIntoViewIfNeeded("#target");
+  } finally {
+    restore();
+  }
+
+  const fallback = calls.find(
+    (call) =>
+      call.method === "Runtime.callFunctionOn" &&
+      call.params.functionDeclaration.includes("scrollIntoView"),
+  );
+  assert.ok(fallback, "scrolls page-side when the CDP scroll is unavailable");
+  assert.match(
+    fallback.params.functionDeclaration,
+    /scroll-behavior:auto !important/,
+  );
 });
 
 test("wheel defaults to scrolling down (positive deltaY) via CDP when visible and focused", async () => {

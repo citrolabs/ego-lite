@@ -8,6 +8,7 @@ import {
   setPreferredTarget,
 } from "./browser-runtime.js";
 import { formatCliLogValue } from "./format.js";
+import { installLegacySkillGuards } from "./legacy-skill-guard.js";
 import {
   bufferOutput,
   installLifecycleFlush,
@@ -73,70 +74,6 @@ const SYNC_FACTORY_METHODS = new Set([
   "last",
   "filter",
 ]);
-const LEGACY_GLOBAL_HELPERS = [
-  "click",
-  "dblclick",
-  "hover",
-  "drag",
-  "wheel",
-  "scrollIntoViewIfNeeded",
-  "press",
-  "insertText",
-  "focus",
-  "fill",
-  "pressSequentially",
-  "check",
-  "uncheck",
-  "setChecked",
-  "selectOption",
-  "dispatchEvent",
-  "textContent",
-  "innerText",
-  "inputValue",
-  "isChecked",
-  "getAttribute",
-  "count",
-  "allInnerTexts",
-  "allTextContents",
-  "evaluateAll",
-  "goto",
-  "pageInfo",
-  "listTabs",
-  "currentTab",
-  "switchTab",
-  "openOrReuseTab",
-  "closeTab",
-  "snapshot",
-  "snapshotRaw",
-  "screenshot",
-  "elementCenter",
-  "drainEvents",
-  "waitForTimeout",
-  "waitForLoadState",
-  "waitForSelector",
-  "waitForFunction",
-  "waitForURL",
-  "waitForRequest",
-  "waitForResponse",
-  "setInputFiles",
-  "evaluate",
-  "serverFetch",
-  "browserFetch",
-  "listTaskSpaces",
-  "switchTaskSpace",
-  "newTaskSpace",
-  "useOrCreateTaskSpace",
-  "claimTaskSpace",
-  "completeTaskSpace",
-  "handOffTaskSpace",
-  "takeOverTaskSpace",
-  "waitForAgentControl",
-  "siteSkills",
-  "siteSkillsForUrl",
-  "runSiteTool",
-  "runSiteBrowserTool",
-  "learnContext",
-];
 // Marks an ego runtime whose mutating methods have already been wrapped, so a
 // second installEgoSdk call cannot double-wrap createTab / task-space methods.
 const EGO_WRAPPED = Symbol.for("egoBrowser.sdkWrapped");
@@ -149,11 +86,6 @@ export function installEgoSdk(
     return target;
   }
   const context = options.context || helpers.helperContext();
-  for (const name of LEGACY_GLOBAL_HELPERS) {
-    if (Object.prototype.hasOwnProperty.call(target, name)) {
-      delete target[name];
-    }
-  }
   const readySignal = Promise.resolve(options.ready);
   let readyError = null;
   readySignal.catch((error) => {
@@ -172,6 +104,7 @@ export function installEgoSdk(
     });
     installed[name] = exposed;
   }
+  installLegacySkillGuards(target);
   const usingDefaultLog = !options.cliLog;
   // The agent's primary output channel is console.log. Route it through the host's
   // sink (options.cliLog) when provided, otherwise the buffered default. There is no

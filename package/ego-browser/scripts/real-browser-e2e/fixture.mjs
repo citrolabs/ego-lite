@@ -19,7 +19,17 @@ export async function startFixtureServer(taskName) {
   const handleDamaiRushRoute = createDamaiRushRoutes();
   const fixtureServer = createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
-    if (await handleDamaiRushRoute(req, res, url)) return;
+    try {
+      if (await handleDamaiRushRoute(req, res, url)) return;
+    } catch (error) {
+      if (res.headersSent) {
+        res.destroy(error);
+      } else {
+        res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+        res.end("Internal Server Error");
+      }
+      return;
+    }
     if (url.pathname === "/healthz") {
       res.writeHead(200, {
         "content-type": "application/json",
@@ -564,6 +574,13 @@ function pageHtml(kind) {
       <div id="inner-scroll"><div id="inner-scroll-content">Inner scroll marker</div></div>
       <section id="scroll-area"><div id="bottom-marker">Bottom marker</div></section>
 
+      <!-- Kept below #scroll-area: new nodes above it shift the page and break the wheel cases. -->
+      <div id="controlled-checkable">
+        <label><input type="checkbox" id="controlled-checkbox"> Nonstop only</label>
+        <label><input type="radio" name="controlled-plan" id="controlled-radio-basic" value="basic"> Plan basic</label>
+        <label><input type="radio" name="controlled-plan" id="controlled-radio-pro" value="pro"> Plan pro</label>
+      </div>
+
       ${kind === "frame" ? '<div id="iframe-marker" data-iframe="true" style="border:2px solid var(--accent);padding:4px 8px;margin-top:4px;border-radius:4px;font-size:0.8rem">iframe target</div>' : ""}
     </main>
     <script>
@@ -581,6 +598,10 @@ function pageHtml(kind) {
         dynamicElementExists: false,
         tabOrder: [],
         checkboxChecked: false,
+        controlledChecked: false,
+        controlledChanges: 0,
+        controlledPlan: "",
+        controlledPlanChanges: 0,
         dropdownValue: "alpha",
         valueEvents: {},
         canvasStrokes: 0,
@@ -680,6 +701,62 @@ function pageHtml(kind) {
         el.addEventListener("input", () => { state = el.value; render(); });
         el.addEventListener("change", () => { stateEl.textContent = state + " (change)"; });
         render();
+      })();
+
+      /* ---- react-style controlled checkbox / radio ----
+         Mirrors React's input value tracker: writing the checked property runs the
+         instance setter, which records the new value, so the event that follows
+         looks like a no-op and the state never advances. A real click sets
+         checkedness internally and bypasses the setter, so the tracker still sees
+         a change. React derives checkbox/radio onChange from the click event, so
+         this listens there too. */
+      (function () {
+        const native = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked");
+        function track(node) {
+          let tracked = String(native.get.call(node));
+          Object.defineProperty(node, "checked", {
+            configurable: true,
+            get() { return native.get.call(this); },
+            set(value) { tracked = String(value); native.set.call(this, value); },
+          });
+          return {
+            changed() {
+              const next = String(native.get.call(node));
+              if (next === tracked) return false;
+              tracked = next;
+              return true;
+            },
+            sync(value) { tracked = String(value); native.set.call(node, value); },
+          };
+        }
+
+        const box = document.querySelector("#controlled-checkbox");
+        const boxTracker = track(box);
+        function renderBox(checked) {
+          window.__fixtureState.controlledChecked = checked;
+          boxTracker.sync(checked);
+        }
+        box.addEventListener("click", () => {
+          if (!boxTracker.changed()) return;
+          window.__fixtureState.controlledChanges += 1;
+          renderBox(native.get.call(box));
+        });
+        renderBox(false);
+
+        const radios = Array.from(document.querySelectorAll("input[name='controlled-plan']"));
+        const radioTrackers = new Map(radios.map((radio) => [radio, track(radio)]));
+        function renderPlan(plan) {
+          window.__fixtureState.controlledPlan = plan;
+          for (const radio of radios) radioTrackers.get(radio).sync(radio.value === plan);
+        }
+        for (const radio of radios) {
+          radio.addEventListener("click", () => {
+            if (!radioTrackers.get(radio).changed()) return;
+            window.__fixtureState.controlledPlanChanges += 1;
+            renderPlan(radio.value);
+          });
+        }
+        renderPlan("");
       })();
 
       /* ---- context menu ---- */

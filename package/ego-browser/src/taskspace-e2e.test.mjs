@@ -245,7 +245,11 @@ test("taskspace e2e exposes taskSpaces facade", async () => {
       newType: typeof taskSpaces.new,
       switchType: typeof taskSpaces.switch,
       claimType: typeof taskSpaces.claim,
-      oldNewType: typeof newTaskSpace,
+      legacyNewGuardType: typeof newTaskSpace,
+      legacyNewGuardEnumerable: Object.prototype.propertyIsEnumerable.call(
+        globalThis,
+        "newTaskSpace"
+      ),
       rawClaimType: typeof ego.claimTaskSpace
     }));
   `,
@@ -257,7 +261,8 @@ test("taskspace e2e exposes taskSpaces facade", async () => {
     newType: "function",
     switchType: "function",
     claimType: "function",
-    oldNewType: "undefined",
+    legacyNewGuardType: "function",
+    legacyNewGuardEnumerable: false,
     rawClaimType: "function",
   });
 });

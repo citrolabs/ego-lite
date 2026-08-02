@@ -6,6 +6,7 @@ import {
 
 import { formatCliLogValue } from "./format.js";
 import * as helpers from "./helpers.js";
+import { installLegacySkillGuards } from "./legacy-skill-guard.js";
 import { bufferOutput, flushSink, resetSink } from "./output-sink.js";
 
 type WritableLike = {
@@ -109,6 +110,7 @@ async function execute(code: string, stdout: WritableLike) {
   resetSink();
   const context = await executionContext();
   Object.assign(globalThis, context);
+  installLegacySkillGuards(globalThis as Record<string, unknown>);
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   const names = Object.keys(context);
   const values = Object.values(context);

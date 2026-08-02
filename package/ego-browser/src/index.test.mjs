@@ -2,13 +2,32 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { installEgoSdk } from "../dist/src/index.js";
+import { resetSink } from "../dist/src/output-sink.js";
 
 test("installEgoSdk keeps page.locator chainable while wrapping locator methods", () => {
   const originalLog = console.log;
-  const target = { click() {} };
+  const target = { click() {}, useOrCreateTaskSpace() {} };
   try {
     installEgoSdk(target, { cliLog() {} });
     assert.equal(typeof target.click, "undefined");
+    assert.equal(typeof target.useOrCreateTaskSpace, "function");
+    assert.equal(
+      Object.prototype.propertyIsEnumerable.call(
+        target,
+        "useOrCreateTaskSpace",
+      ),
+      false,
+    );
+    assert.throws(
+      () => target.useOrCreateTaskSpace("checkout-flow"),
+      (error) => {
+        assert.equal(error.name, "EgoBrowserSkillStaleError");
+        assert.match(error.message, /^\[ego-browser:skill-stale\]/);
+        assert.match(error.message, /useOrCreateTaskSpace/);
+        assert.match(error.message, /taskSpaces\.useOrCreate/);
+        return true;
+      },
+    );
     assert.equal(typeof target.page.locator, "function");
     assert.equal(typeof target.page.getByText("Allow").click, "function");
     assert.equal(typeof target.page.getByLabel("Email").fill, "function");
@@ -39,6 +58,7 @@ test("installEgoSdk keeps page.locator chainable while wrapping locator methods"
       "function",
     );
   } finally {
+    resetSink();
     console.log = originalLog;
   }
 });
@@ -74,7 +94,33 @@ test("installEgoSdk exposes the site facade under ego.learnings", () => {
     assert.equal(typeof target.ego.learnings.runTool, "function");
     assert.equal(typeof target.ego.learnings.runBrowserTool, "function");
     assert.equal(typeof target.ego.learnings.learnContext, "function");
+    assert.equal(target.ego.helpers.useOrCreateTaskSpace, undefined);
   } finally {
+    console.log = originalLog;
+  }
+});
+
+test("installEgoSdk keeps raw task-space bridge methods behind stale-skill guards", () => {
+  const originalLog = console.log;
+  const target = {
+    ego: {
+      async listTaskSpaces() {
+        return [];
+      },
+    },
+  };
+  try {
+    installEgoSdk(target, { cliLog() {} });
+    assert.throws(
+      () => target.listTaskSpaces(),
+      (error) => {
+        assert.equal(error.name, "EgoBrowserSkillStaleError");
+        assert.match(error.message, /taskSpaces\.list\(\)/);
+        return true;
+      },
+    );
+  } finally {
+    resetSink();
     console.log = originalLog;
   }
 });
