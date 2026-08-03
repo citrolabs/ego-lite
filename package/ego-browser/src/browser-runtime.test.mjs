@@ -373,6 +373,32 @@ test("waitForBrowserEvent resolves future matching events", async () => {
   }
 });
 
+test("waitForBrowserEvent can scope matching events to the current session", async () => {
+  installAutoEgo();
+  try {
+    await browserCdp("Runtime.evaluate", { expression: "1" });
+    const promise = waitForBrowserEvent(
+      (event) => event.method === "Page.downloadWillBegin",
+      500,
+      { sessionScope: "current" },
+    );
+    fireEvent(
+      "Page.downloadWillBegin",
+      { guid: "other-download" },
+      "other-session",
+    );
+    fireEvent(
+      "Page.downloadWillBegin",
+      { guid: "current-download" },
+      state.sessionId,
+    );
+    const event = await promise;
+    assert.equal(event.params.guid, "current-download");
+  } finally {
+    cleanup();
+  }
+});
+
 test("waitForBrowserEvent ignores events that happened before waiting", async () => {
   installAutoEgo();
   try {

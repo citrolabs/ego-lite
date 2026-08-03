@@ -58,6 +58,7 @@ async function waitForDownload(options: WaitForEventOptions = {}) {
   const willBeginPromise = waitForBrowserEvent(
     (event) => event?.method === "Page.downloadWillBegin",
     timeout,
+    { sessionScope: "current" },
   ) as Promise<DownloadWillBegin>;
   let downloadGuid;
   const progressPromise = waitForBrowserEvent(
@@ -67,6 +68,7 @@ async function waitForDownload(options: WaitForEventOptions = {}) {
       (event?.params?.state === "completed" ||
         event?.params?.state === "canceled"),
     timeout,
+    { sessionScope: "current" },
   ) as Promise<DownloadProgress>;
   await Promise.all([sessionPromise, behaviorPromise]);
   const willBegin = await willBeginPromise;

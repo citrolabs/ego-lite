@@ -6,6 +6,7 @@ import {
   drainBrowserEvents,
   invalidateSession,
 } from "../../dist/src/browser-runtime.js";
+import { state } from "../../dist/src/state.js";
 import { waitForEvent } from "../../dist/src/driver/downloads.js";
 
 function installAutoEgo(options = {}) {
@@ -43,7 +44,7 @@ function installAutoEgo(options = {}) {
   return calls;
 }
 
-function fireEvent(method, params = {}, sessionId = "sess-1") {
+function fireEvent(method, params = {}, sessionId = state.sessionId) {
   globalThis.ego.onCDPMessage(JSON.stringify({ method, params, sessionId }));
 }
 
@@ -76,6 +77,41 @@ test("waitForEvent('download') returns a Playwright-style download facade", asyn
       calls.some((call) => call.method === "Browser.setDownloadBehavior"),
       "enables browser download behavior",
     );
+  } finally {
+    cleanup();
+  }
+});
+
+test("waitForEvent('download') ignores events from other CDP sessions", async () => {
+  installAutoEgo();
+  try {
+    const promise = waitForEvent("download", { timeout: 1000 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fireEvent(
+      "Page.downloadWillBegin",
+      {
+        guid: "other-download",
+        url: "https://example.com/other.txt",
+        suggestedFilename: "other.txt",
+      },
+      "other-session",
+    );
+    fireEvent(
+      "Page.downloadProgress",
+      { guid: "other-download", state: "canceled" },
+      "other-session",
+    );
+    fireEvent("Page.downloadWillBegin", {
+      guid: "current-download",
+      url: "https://example.com/current.txt",
+      suggestedFilename: "current.txt",
+    });
+    fireEvent("Page.downloadProgress", {
+      guid: "current-download",
+      state: "completed",
+    });
+    const download = await promise;
+    assert.equal(download.suggestedFilename(), "current.txt");
   } finally {
     cleanup();
   }
