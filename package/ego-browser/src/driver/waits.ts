@@ -262,6 +262,14 @@ async function waitForNetworkMatch(
       matched = processNetworkEvent(kind, matcher, event, requests, timeout);
       return Boolean(matched);
     }, browserEventTimeout(timeout));
+    // Response bodies are only available while the Network domain is enabled.
+    // Prime the matched facade before release() so later .body()/.text()/.json()
+    // calls do not race Network.disable. Do this while we still hold the domain
+    // refcount — never defer release to the body accessor (that leaks if the
+    // caller never reads the body).
+    if (kind === "response" && matched) {
+      await primeResponseBody(matched);
+    }
     return matched;
   } catch (error) {
     if (/page\.waitForEvent timed out/i.test(error?.message || "")) {
@@ -363,6 +371,17 @@ function createRequestFacade(info) {
   };
 }
 
+const PRIME_RESPONSE_BODY = Symbol("primeResponseBody");
+
+type CachedResponseBody = {
+  body?: string;
+  base64Encoded?: boolean;
+};
+
+type ResponseBodyState =
+  | { status: "ready"; body: CachedResponseBody }
+  | { status: "error"; error: Error };
+
 function createResponseFacade(info, timeout) {
   const response = info.response || {};
   const request =
@@ -378,6 +397,51 @@ function createResponseFacade(info, timeout) {
     });
   const status = Number(response.status || 0);
   const headers = normalizeHeaders(response.headers);
+  let bodyState: ResponseBodyState | null = null;
+  let bodyLoad: Promise<ResponseBodyState> | null = null;
+
+  function loadBody(): Promise<ResponseBodyState> {
+    if (bodyState) {
+      return Promise.resolve(bodyState);
+    }
+    if (bodyLoad) {
+      return bodyLoad;
+    }
+    bodyLoad = readResponseBody(info.requestId, timeout)
+      .then((body): ResponseBodyState => {
+        bodyState = { status: "ready", body };
+        return bodyState;
+      })
+      .catch((error): ResponseBodyState => {
+        const message =
+          error instanceof Error
+            ? error.message
+            : error == null
+              ? String(error)
+              : String(error);
+        bodyState = {
+          status: "error",
+          error:
+            error instanceof Error &&
+            /response body is unavailable/.test(error.message)
+              ? error
+              : new Error(
+                  `response body is unavailable for request ${info.requestId}: ${message}`,
+                ),
+        };
+        return bodyState;
+      });
+    return bodyLoad;
+  }
+
+  async function requireBody(): Promise<CachedResponseBody> {
+    const state = await loadBody();
+    if (state.status === "error") {
+      throw state.error;
+    }
+    return state.body;
+  }
+
   const facade: any = {
     url: () => response.url || request.url || "",
     status: () => status,
@@ -386,20 +450,31 @@ function createResponseFacade(info, timeout) {
     headers: () => ({ ...headers }),
     request: () => createRequestFacade(request),
     body: async () => {
-      const body = await readResponseBody(info.requestId, timeout);
+      const body = await requireBody();
       return body.base64Encoded
         ? Buffer.from(body.body || "", "base64")
         : Buffer.from(body.body || "", "utf8");
     },
     text: async () => {
-      const body = await readResponseBody(info.requestId, timeout);
+      const body = await requireBody();
       return body.base64Encoded
         ? Buffer.from(body.body || "", "base64").toString("utf8")
         : body.body || "";
     },
   };
   facade.json = async () => JSON.parse(await facade.text());
+  // Internal: waitForNetworkMatch primes the body before Network.disable.
+  facade[PRIME_RESPONSE_BODY] = () => loadBody();
   return facade;
+}
+
+async function primeResponseBody(facade) {
+  const prime = facade?.[PRIME_RESPONSE_BODY];
+  if (typeof prime !== "function") {
+    return;
+  }
+  // Always settle before release(); body accessors rethrow stored errors later.
+  await prime();
 }
 
 async function readResponseBody(requestId, timeout) {

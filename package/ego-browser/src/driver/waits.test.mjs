@@ -32,7 +32,7 @@ function installAutoEgo(resultFor = () => ({})) {
             ? { sessionId: `auto-sess-${parsed.id}` }
             : resultFor(parsed);
         const message =
-          outcome && Object.prototype.hasOwnProperty.call(outcome, "error")
+          outcome && Object.hasOwn(outcome, "error")
             ? { id: parsed.id, error: outcome.error }
             : { id: parsed.id, result: outcome || {} };
         globalThis.ego.onCDPMessage(JSON.stringify(message));
@@ -504,6 +504,200 @@ test("response body waits for loadingFinished when initially unavailable", async
   } finally {
     cleanupBrowserRuntime();
   }
+});
+
+// #189: Chrome drops buffered response bodies after Network.disable. The
+// wait must prime/cache the body before release, otherwise later .text()
+// races a disabled domain and fails with "No resource with given identifier".
+test("waitForResponse body remains readable after owned Network domain is disabled", async () => {
+  const methods = [];
+  let networkEnabled = false;
+  let bodyAttempts = 0;
+  installAutoEgo((call) => {
+    methods.push(call.method);
+    if (call.method === "Network.enable") {
+      networkEnabled = true;
+      return {};
+    }
+    if (call.method === "Network.disable") {
+      networkEnabled = false;
+      return {};
+    }
+    if (call.method === "Network.getResponseBody") {
+      bodyAttempts += 1;
+      if (!networkEnabled) {
+        return {
+          error: { message: "No resource with given identifier found" },
+        };
+      }
+      return { body: '{"ok":true,"source":"primed"}', base64Encoded: false };
+    }
+    return {};
+  });
+  try {
+    const promise = waitForResponse("https://example.com/api/orders", {
+      timeout: 1000,
+    });
+    setTimeout(() => {
+      fireEvent("Network.requestWillBeSent", {
+        requestId: "req-orders",
+        type: "Fetch",
+        request: {
+          url: "https://example.com/api/orders",
+          method: "GET",
+          headers: {},
+        },
+      });
+      fireEvent("Network.responseReceived", {
+        requestId: "req-orders",
+        type: "Fetch",
+        response: {
+          url: "https://example.com/api/orders",
+          status: 200,
+          statusText: "OK",
+          headers: { "Content-Type": "application/json" },
+        },
+      });
+    }, 20);
+    const response = await promise;
+    assert.ok(
+      methods.includes("Network.disable"),
+      "waitForResponse must release the owned Network domain before returning",
+    );
+    assert.equal(networkEnabled, false);
+    assert.ok(
+      bodyAttempts >= 1,
+      "body must be primed while the Network domain is still enabled",
+    );
+    assert.deepEqual(await response.json(), { ok: true, source: "primed" });
+    assert.equal(await response.text(), '{"ok":true,"source":"primed"}');
+    assert.equal(
+      (await response.body()).toString("utf8"),
+      '{"ok":true,"source":"primed"}',
+    );
+    // Accessors reuse the cached body; no post-disable CDP body fetch.
+    assert.equal(bodyAttempts, 1);
+    assert.equal(networkEnabled, false);
+  } finally {
+    cleanupBrowserRuntime();
+  }
+});
+
+test("waitForResponse primes body after loadingFinished before Network.disable", async () => {
+  const methods = [];
+  let networkEnabled = false;
+  let bodyAttempts = 0;
+  installAutoEgo((call) => {
+    methods.push(call.method);
+    if (call.method === "Network.enable") {
+      networkEnabled = true;
+      return {};
+    }
+    if (call.method === "Network.disable") {
+      networkEnabled = false;
+      return {};
+    }
+    if (call.method === "Network.getResponseBody") {
+      bodyAttempts += 1;
+      if (!networkEnabled) {
+        return {
+          error: { message: "No resource with given identifier found" },
+        };
+      }
+      if (bodyAttempts === 1) {
+        setTimeout(() => {
+          fireEvent("Network.loadingFinished", {
+            requestId: "req-late-body",
+          });
+        }, 20);
+        return {
+          error: { message: "No resource with given identifier found" },
+        };
+      }
+      return { body: "late-body", base64Encoded: false };
+    }
+    return {};
+  });
+  try {
+    const promise = waitForResponse("https://example.com/api/late-body", {
+      timeout: 1000,
+    });
+    setTimeout(() => {
+      fireEvent("Network.requestWillBeSent", {
+        requestId: "req-late-body",
+        type: "Fetch",
+        request: {
+          url: "https://example.com/api/late-body",
+          method: "GET",
+          headers: {},
+        },
+      });
+      fireEvent("Network.responseReceived", {
+        requestId: "req-late-body",
+        type: "Fetch",
+        response: {
+          url: "https://example.com/api/late-body",
+          status: 200,
+          statusText: "OK",
+          headers: {},
+        },
+      });
+    }, 20);
+    const response = await promise;
+    const disableIndex = methods.indexOf("Network.disable");
+    const lastBodyIndex = methods.lastIndexOf("Network.getResponseBody");
+    assert.ok(disableIndex >= 0, "owned Network domain must be released");
+    assert.ok(
+      lastBodyIndex >= 0 && lastBodyIndex < disableIndex,
+      "successful body prime must complete before Network.disable",
+    );
+    assert.equal(await response.text(), "late-body");
+    assert.equal(bodyAttempts, 2);
+    assert.equal(networkEnabled, false);
+  } finally {
+    cleanupBrowserRuntime();
+  }
+});
+
+test("waitForResponse still releases Network domain when body is never read", async () => {
+  const methods = [];
+  installAutoEgo((call) => {
+    methods.push(call.method);
+    if (call.method === "Network.getResponseBody") {
+      return { body: "unused", base64Encoded: false };
+    }
+    return {};
+  });
+  try {
+    const promise = waitForResponse("https://example.com/api/unused-body", {
+      timeout: 1000,
+    });
+    setTimeout(() => {
+      fireEvent("Network.responseReceived", {
+        requestId: "req-unused",
+        type: "XHR",
+        response: {
+          url: "https://example.com/api/unused-body",
+          status: 200,
+          statusText: "OK",
+          headers: {},
+        },
+      });
+    }, 20);
+    const response = await promise;
+    assert.equal(response.status(), 200);
+  } finally {
+    cleanupBrowserRuntime();
+  }
+  assert.ok(methods.includes("Network.enable"));
+  assert.ok(
+    methods.includes("Network.getResponseBody"),
+    "body is primed even if the caller never reads it",
+  );
+  assert.ok(
+    methods.includes("Network.disable"),
+    "must not leak Network domain ownership when body is unused",
+  );
 });
 
 test("waitForRequest supports synchronous request predicates", async () => {
