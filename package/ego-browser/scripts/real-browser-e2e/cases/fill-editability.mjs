@@ -72,4 +72,101 @@ export const fillEditabilityCases = [
       );
     `),
   },
+  {
+    name: "fill rejects enabled non-text inputs",
+    body: homeCase(`
+      /* Add the non-text input types the fixture does not carry, and record
+         every input and change event the whole set receives. */
+      await page.evaluate(\`(() => {
+        const host = document.createElement("div");
+        host.innerHTML = [
+          '<input id="range-field" type="range" min="0" max="100" value="30">',
+          '<input id="color-field" type="color" value="#ff0000">',
+          '<input id="submit-field" type="submit" value="Send">',
+          '<input id="radio-field" type="radio" name="pick" value="one">',
+          '<input id="date-field" type="date" value="2020-01-02">',
+          '<input id="month-field" type="month" value="2020-01">',
+          '<input id="week-field" type="week" value="2020-W02">',
+          '<input id="time-field" type="time" value="10:30">',
+          '<input id="datetime-field" type="datetime-local" value="2020-01-02T10:30">',
+        ].join("");
+        document.body.append(host);
+        window.__nonTextProbe = {};
+        const ids = [
+          "checkbox", "file-input", "range-field", "color-field", "submit-field",
+          "radio-field", "date-field", "month-field", "week-field", "time-field",
+          "datetime-field",
+        ];
+        for (const id of ids) {
+          const el = document.querySelector("#" + id);
+          window.__nonTextProbe[id] = [];
+          for (const type of ["input", "change"]) {
+            el.addEventListener(type, (event) => window.__nonTextProbe[id].push(type + "=" + event.target.value));
+          }
+        }
+        return true;
+      })()\`);
+
+      const targets = [
+        ["checkbox", "checkbox"],
+        ["file-input", "file"],
+        ["range-field", "range"],
+        ["color-field", "color"],
+        ["submit-field", "submit"],
+        ["radio-field", "radio"],
+        ["date-field", "date"],
+        ["month-field", "month"],
+        ["week-field", "week"],
+        ["time-field", "time"],
+        ["datetime-field", "datetime-local"],
+      ];
+      for (const [id, type] of targets) {
+        const before = await page.evaluate("document.querySelector('#" + id + "').value");
+        assertEqual(
+          await page.locator("#" + id).isEditable(),
+          true,
+          "an enabled " + type + " input reports isEditable true"
+        );
+        await assertRejects(
+          () => page.locator("#" + id).fill("2026-12-25", { timeout: 3000 }),
+          'Input of type "' + type + '" cannot be filled',
+          "fill rejects an enabled " + type + " input"
+        );
+        assertEqual(
+          await page.evaluate("document.querySelector('#" + id + "').value"),
+          before,
+          "fill preserves the " + type + " input value"
+        );
+        assertEqual(
+          await page.evaluate("window.__nonTextProbe['" + id + "'].join(',')"),
+          "",
+          "fill fires no input or change events on an enabled " + type + " input"
+        );
+      }
+    `),
+  },
+  {
+    name: "fill writes a field its focus handler makes editable",
+    body: homeCase(`
+      await page.evaluate(\`(() => {
+        const el = document.querySelector("#text-input");
+        el.value = "locked";
+        el.readOnly = true;
+        el.addEventListener("focus", () => { el.readOnly = false; }, { once: true });
+        return true;
+      })()\`);
+
+      assertEqual(
+        await page.locator("#text-input").isEditable(),
+        false,
+        "the field is not editable before it is focused"
+      );
+      await page.locator("#text-input").fill("unlocked", { timeout: 3000 });
+      assertEqual(
+        await page.locator("#text-input").inputValue(),
+        "unlocked",
+        "fill writes a field unlocked by its own focus handler"
+      );
+    `),
+  },
 ];
