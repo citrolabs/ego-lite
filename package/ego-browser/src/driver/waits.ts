@@ -36,6 +36,17 @@ let networkEventUsers = 0;
 let networkEventsOwnDomain = false;
 let networkEnableInFlight: Promise<void> | null = null;
 
+// Responses that stream (headers + partial chunks, never finishing) must not
+// hold waitForResponse hostage. Body priming is best-effort: give the body a
+// bounded grace to complete, then give up. Accessors rethrow the stored
+// "unavailable" error instead of blocking.
+const BODY_PRIME_GRACE_MS = 250;
+
+// Body primes kicked off by waitForResponse. release() waits for these
+// (bounded by BODY_PRIME_GRACE_MS) before disabling the Network domain so the
+// body is cached while the domain is still enabled.
+const pendingBodyPrimes: Set<Promise<void>> = new Set();
+
 /**
  * Sleep for a fixed number of milliseconds.
  * @param {number} [ms=1000] Milliseconds to wait.
@@ -266,9 +277,15 @@ async function waitForNetworkMatch(
     // Prime the matched facade before release() so later .body()/.text()/.json()
     // calls do not race Network.disable. Do this while we still hold the domain
     // refcount — never defer release to the body accessor (that leaks if the
-    // caller never reads the body).
+    // caller never reads the body). The prime is bounded by BODY_PRIME_GRACE_MS:
+    // a streaming response (headers + partial chunks, never finishing) must not
+    // make waitForResponse block for the full caller timeout.
     if (kind === "response" && matched) {
-      await primeResponseBody(matched);
+      const prime = primeResponseBody(matched);
+      pendingBodyPrimes.add(prime);
+      prime.finally(() => {
+        pendingBodyPrimes.delete(prime);
+      });
     }
     return matched;
   } catch (error) {
@@ -484,12 +501,19 @@ async function readResponseBody(requestId, timeout) {
   try {
     return await cdp("Network.getResponseBody", { requestId });
   } catch (firstError) {
+    // Bound how long we wait for the body to finish: a response that streams
+    // (headers + partial chunks, never finishing) would otherwise stall the
+    // prime for the full timeout — or forever when timeout is 0.
+    const bodyWait =
+      timeout === 0
+        ? BODY_PRIME_GRACE_MS
+        : Math.min(timeout, BODY_PRIME_GRACE_MS);
     await waitForBrowserEvent(
       (event) =>
         (event?.method === "Network.loadingFinished" ||
           event?.method === "Network.loadingFailed") &&
         event?.params?.requestId === requestId,
-      browserEventTimeout(timeout),
+      bodyWait,
     ).catch(() => null);
     try {
       return await cdp("Network.getResponseBody", { requestId });
@@ -548,6 +572,12 @@ function acquireNetworkEvents() {
         await networkEnableInFlight;
       }
       if (networkEventsOwnDomain) {
+        // Body primes are only useful while the Network domain is enabled.
+        // Wait (bounded — each prime gives up after BODY_PRIME_GRACE_MS) so a
+        // quickly-available body is cached before the domain goes away.
+        if (pendingBodyPrimes.size > 0) {
+          await Promise.allSettled([...pendingBodyPrimes]);
+        }
         networkEventsOwnDomain = false;
         await cdp("Network.disable").catch(() => {
           // Best-effort cleanup; the next wait can enable the domain again.

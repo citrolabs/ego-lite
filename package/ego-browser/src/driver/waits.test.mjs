@@ -700,6 +700,112 @@ test("waitForResponse still releases Network domain when body is never read", as
   );
 });
 
+test("waitForResponse resolves promptly for a stream that never finishes", async () => {
+  // A response that sends headers + a partial chunk and then never ends must
+  // not make waitForResponse block for the full caller timeout (or forever
+  // when timeout is 0). The body prime gives up after a bounded grace and the
+  // accessors fail fast with the stored "unavailable" error.
+  let bodyAttempts = 0;
+  installAutoEgo((call) => {
+    if (call.method === "Network.getResponseBody") {
+      bodyAttempts += 1;
+      return {
+        error: { message: "No resource with given identifier found" },
+      };
+    }
+    return {};
+  });
+  try {
+    const start = Date.now();
+    const promise = waitForResponse("https://example.com/api/stream", {
+      timeout: 5000,
+    });
+    setTimeout(() => {
+      fireEvent("Network.requestWillBeSent", {
+        requestId: "req-stream",
+        type: "Fetch",
+        request: {
+          url: "https://example.com/api/stream",
+          method: "GET",
+          headers: {},
+        },
+      });
+      fireEvent("Network.responseReceived", {
+        requestId: "req-stream",
+        type: "Fetch",
+        response: {
+          url: "https://example.com/api/stream",
+          status: 200,
+          statusText: "OK",
+          headers: { "Content-Type": "text/event-stream" },
+        },
+      });
+    }, 20);
+    const response = await promise;
+    const elapsed = Date.now() - start;
+    assert.ok(
+      elapsed < 2000,
+      `waitForResponse must not block on the never-ending stream body (took ${elapsed}ms)`,
+    );
+    assert.equal(response.status(), 200);
+    assert.ok(bodyAttempts >= 1, "body prime was attempted");
+    await assert.rejects(
+      response.text(),
+      /response body is unavailable/,
+      "body accessors must fail fast for a stream that never finishes",
+    );
+  } finally {
+    cleanupBrowserRuntime();
+  }
+});
+
+test("waitForResponse with timeout 0 does not hang on a never-ending stream", async () => {
+  installAutoEgo((call) => {
+    if (call.method === "Network.getResponseBody") {
+      return {
+        error: { message: "No resource with given identifier found" },
+      };
+    }
+    return {};
+  });
+  try {
+    const start = Date.now();
+    const promise = waitForResponse("https://example.com/api/stream-forever", {
+      timeout: 0,
+    });
+    setTimeout(() => {
+      fireEvent("Network.requestWillBeSent", {
+        requestId: "req-stream-forever",
+        type: "Fetch",
+        request: {
+          url: "https://example.com/api/stream-forever",
+          method: "GET",
+          headers: {},
+        },
+      });
+      fireEvent("Network.responseReceived", {
+        requestId: "req-stream-forever",
+        type: "Fetch",
+        response: {
+          url: "https://example.com/api/stream-forever",
+          status: 200,
+          statusText: "OK",
+          headers: { "Content-Type": "text/event-stream" },
+        },
+      });
+    }, 20);
+    const response = await promise;
+    const elapsed = Date.now() - start;
+    assert.ok(
+      elapsed < 2000,
+      `timeout 0 must not mean "wait for the body forever" (took ${elapsed}ms)`,
+    );
+    assert.equal(response.status(), 200);
+  } finally {
+    cleanupBrowserRuntime();
+  }
+});
+
 test("waitForRequest supports synchronous request predicates", async () => {
   installAutoEgo();
   try {
