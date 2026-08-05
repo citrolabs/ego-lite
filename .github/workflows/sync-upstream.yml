@@ -1,0 +1,85 @@
+name: Sync upstream
+
+# Keeps this fork's main up to date with citrolabs/ego-lite.
+# Clean merge -> pushed straight to main. Conflict -> main is left alone and a
+# PR is opened so the merge can be resolved by hand.
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    # Do not run in further forks of this fork.
+    if: github.repository == 'opencue/ego-lite-linux'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/citrolabs/ego-lite.git
+          git fetch upstream main
+
+      - name: Merge upstream, or open a PR on conflict
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "main already contains upstream/main — nothing to do."
+            exit 0
+          fi
+
+          SHA=$(git rev-parse upstream/main)
+          SHORT=$(git rev-parse --short upstream/main)
+
+          if git merge --no-edit -m "Merge upstream citrolabs/ego-lite@${SHORT} into main" upstream/main; then
+            git push origin HEAD:main
+            echo "Merged upstream@${SHORT} into main." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git merge --abort
+          BRANCH="sync/upstream-${SHORT}"
+          echo "Merge conflicts — main left untouched."
+
+          git push --quiet origin "${SHA}:refs/heads/${BRANCH}" || true
+
+          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq 'length')" = "0" ]; then
+            gh pr create --base main --head "$BRANCH" \
+              --title "Sync upstream citrolabs/ego-lite@${SHORT} (conflicts)" \
+              --body "$(printf '%s\n' \
+                "Automatic upstream sync hit merge conflicts, so \`main\` was left untouched." \
+                "" \
+                "Resolve locally:" \
+                "" \
+                '```' \
+                "git fetch origin" \
+                "git checkout main && git pull" \
+                "git merge origin/${BRANCH}" \
+                "# fix conflicts, then:" \
+                "git commit && git push" \
+                '```' \
+                "" \
+                "Opened by \`.github/workflows/sync-upstream.yml\`.")"
+          fi
+
+          echo "Conflicts syncing upstream@${SHORT} — see the open sync PR." >> "$GITHUB_STEP_SUMMARY"
+          exit 1

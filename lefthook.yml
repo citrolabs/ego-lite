@@ -12,14 +12,20 @@
 pre-commit:
   parallel: false
   commands:
+    # Fork change: upstream checks against origin/dev, its integration branch.
+    # This fork is cut from upstream main and publishes to origin/linux-port, so
+    # it is permanently "behind" dev and that check blocked every commit here.
+    # Checking against the branch we actually publish to keeps the intent —
+    # don't commit onto a stale branch — without the false positive.
     branch-up-to-date:
       run: |
-        git fetch --quiet origin dev 2>/dev/null || { echo "⚠ skip branch-freshness check: cannot fetch origin/dev (offline?)"; exit 0; }
+        base="${EGO_FORK_BASE_BRANCH:-linux-port}"
+        git fetch --quiet origin "$base" 2>/dev/null || { echo "⚠ skip branch-freshness check: cannot fetch origin/$base (offline?)"; exit 0; }
         if git merge-base --is-ancestor FETCH_HEAD HEAD; then
           exit 0
         fi
-        echo "✗ Your branch is behind origin/dev — sync before committing:"
-        echo "    git fetch origin dev && git rebase origin/dev   # or: git merge origin/dev"
+        echo "✗ Your branch is behind origin/$base — sync before committing:"
+        echo "    git fetch origin $base && git rebase origin/$base   # or: git merge origin/$base"
         exit 1
     style-check:
       run: |
