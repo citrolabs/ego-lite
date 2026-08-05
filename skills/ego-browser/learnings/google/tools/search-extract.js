@@ -15,20 +15,24 @@ export async function searchAndExtract(ctx, args = {}) {
   );
   await ctx.page.waitForLoadState("load");
 
+  // Anchor on the result link, not on a container class. Google's container
+  // classes rotate — div.g stopped matching anything — while an <a> wrapping an
+  // <h3> inside #search has stayed the stable shape of an organic hit.
   const results = await ctx.page
-    .locator("div.g")
-    .evaluateAll((items, limit) => {
-      return items
+    .locator("#search a:has(h3)")
+    .evaluateAll((links, limit) => {
+      return links
         .slice(0, limit)
-        .map((el) => ({
-          title: el.querySelector("h3")?.innerText?.trim() || "",
-          url: el.querySelector("a")?.getAttribute("href") || "",
-          snippet:
-            el.querySelector("[data-sncf]")?.innerText?.trim() ||
-            el.querySelector("span")?.innerText?.trim() ||
-            "",
-        }))
-        .filter((r) => r.title);
+        .map((a) => {
+          const block = a.closest("div[data-hveid]") || a.parentElement;
+          return {
+            title: a.querySelector("h3")?.innerText?.trim() || "",
+            url: a.getAttribute("href") || "",
+            snippet:
+              block?.querySelector("[data-sncf]")?.innerText?.trim() || "",
+          };
+        })
+        .filter((r) => r.title && r.url);
     }, maxResults);
 
   return results;
