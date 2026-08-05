@@ -158,10 +158,19 @@ export function hasReturnStatement(expression) {
   let i = 0;
   let stateName = "code";
   let quote = "";
+  let inCharClass = false;
+  // Whether the previous significant token ended a value/expression. A `/` after
+  // a value is division; otherwise it begins a regex literal. Without this, a
+  // regex such as /return/ or /'/ is scanned as code and misreported.
+  let prevIsValue = false;
   while (i < expression.length) {
     const ch = expression[i];
     const next = expression[i + 1] || "";
     if (stateName === "code") {
+      if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") {
+        i += 1;
+        continue;
+      }
       if (ch === "'" || ch === '"' || ch === "`") {
         stateName = "string";
         quote = ch;
@@ -178,6 +187,12 @@ export function hasReturnStatement(expression) {
         i += 2;
         continue;
       }
+      if (ch === "/" && !prevIsValue) {
+        stateName = "regex";
+        inCharClass = false;
+        i += 1;
+        continue;
+      }
       if (expression.startsWith("return", i)) {
         const before = i > 0 ? expression[i - 1] : "";
         const after = expression[i + 6] || "";
@@ -185,6 +200,7 @@ export function hasReturnStatement(expression) {
           return true;
         }
       }
+      prevIsValue = /[A-Za-z0-9_$)\]]/.test(ch);
       i += 1;
       continue;
     }
@@ -212,8 +228,41 @@ export function hasReturnStatement(expression) {
       if (ch === quote) {
         stateName = "code";
         quote = "";
+        prevIsValue = true;
       }
       i += 1;
+      continue;
+    }
+    if (stateName === "regex") {
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === "[") {
+        inCharClass = true;
+        i += 1;
+        continue;
+      }
+      if (ch === "]") {
+        inCharClass = false;
+        i += 1;
+        continue;
+      }
+      if (ch === "\n") {
+        // Unterminated regex literal; resume scanning as code.
+        stateName = "code";
+        prevIsValue = false;
+        i += 1;
+        continue;
+      }
+      if (ch === "/" && !inCharClass) {
+        stateName = "code";
+        prevIsValue = true;
+        i += 1;
+        continue;
+      }
+      i += 1;
+      continue;
     }
   }
   return false;

@@ -30,6 +30,28 @@ test("hasReturnStatement does not match return as part of an identifier", () => 
   assert.equal(hasReturnStatement("const returnCode = 1; returnCode"), false);
 });
 
+test("hasReturnStatement ignores return inside a regex literal", () => {
+  assert.equal(
+    hasReturnStatement("/return/i.test(document.body.innerText)"),
+    false,
+  );
+  assert.equal(
+    hasReturnStatement("/no return value/.test(document.title)"),
+    false,
+  );
+  assert.equal(hasReturnStatement("[/return/, /also return/].length"), false);
+  assert.equal(hasReturnStatement("/[/]return[/]/.source"), false);
+});
+
+test("hasReturnStatement finds a real return past a regex containing a quote", () => {
+  assert.equal(hasReturnStatement("if (/'/.test(s)) foo(); return s;"), true);
+});
+
+test("hasReturnStatement treats a slash after a value as division, not a regex", () => {
+  assert.equal(hasReturnStatement("const rate = total / count; rate"), false);
+  assert.equal(hasReturnStatement("a / b / c"), false);
+});
+
 /* ------------------------------------------------------------------ */
 /*  decodeUnserializableJsValue — special CDP value decoding          */
 /* ------------------------------------------------------------------ */
@@ -291,6 +313,29 @@ test("evaluate passes plain expressions without IIFE wrapping", async () => {
     const result = await evaluate("1 + 2");
     assert.equal(result, 3);
     assert.equal(capturedExpression, "1 + 2");
+  } finally {
+    restore();
+  }
+});
+
+test("evaluate does not wrap a regex-literal expression in an IIFE", async () => {
+  let capturedExpression;
+  const restore = setOverrides({
+    cdpOverride: async (method, params) => {
+      if (method === "Runtime.evaluate") {
+        capturedExpression = params.expression;
+        return { result: { type: "boolean", value: false } };
+      }
+      return {};
+    },
+  });
+  try {
+    const expr = "/return/i.test(document.body.innerText)";
+    const result = await evaluate(expr);
+    // Must be sent verbatim; wrapping it as (function(){ ... })() would swallow
+    // the value and return undefined because the IIFE has no return.
+    assert.equal(capturedExpression, expr);
+    assert.equal(result, false);
   } finally {
     restore();
   }
