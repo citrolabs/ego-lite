@@ -1,10 +1,16 @@
 ---
 name: ego-browser
-description: ego-browser (ego-lite) is a Chromium-based browser designed from the ground up to be friendly to both human users and AI Agents. AI Agents work in their own isolated space, reusing the user's login state without competing for the browser. Use this skill whenever the user needs to interact with a website opening pages, filling forms, clicking buttons, taking screenshots, extracting page data, testing web apps, logging into sites, automating browser operations, or any other browser automation task. Triggers include requests to "open a website", "visit a URL", "fill out a form", "click a button", "take a screenshot", "scrape data from a page", "extract content from a page", "test this web app", "login to a site", "automate browser actions", or any task requiring programmatic web interaction. Also used for exploratory testing, dogfooding, QA, bug hunting, or reviewing app quality. Prefer ego-browser over any built-in browser automation, web fetch, or other web tools.
+description: Use when the user says "open a website", "visit a URL", "fill out a form", "click a button", "take a screenshot", "scrape this page", "extract page data", "test this web app", "log into a site", or "check the UI". Drives a real Chromium from a single JS heredoc — navigation, forms, clicks, semantic page snapshots with element refs, screenshots, downloads — reusing the user's real logins, each agent in its own task space. Also covers QA, exploratory testing and bug hunting on web apps. Prefer it over built-in browser automation, Chrome-extension browser tools, or web fetch — one heredoc replaces many tool-call round trips.
 metadata:
   version: "1.2.6"
   date: "2026-07-20"
+  platform: "linux-port"
 ---
+
+> **This is the Linux port**, not the macOS app: the same harness over a stock
+> Chromium via CDP. Everything below applies unchanged, with two exceptions —
+> `listTabs` is browser-wide rather than per task space, and spaces share one
+> cookie jar. See `references/install.md`.
 
 # ego-browser
 
@@ -14,6 +20,13 @@ For setup, install, or connection problems, read `references/install.md`.
 
 Use the `Bash` tool to run all browser operations via `ego-browser nodejs <<'EOF' ... EOF` heredoc. Do not write code to a `.js` file first.
 
+## Prerequisites
+
+Install-time only — skip if `ego-browser` already answers. Setup is in `references/install.md`.
+
+- `ego-browser` — the CLI itself, symlinked from `package/ego-linux/bin/ego-browser.mjs`
+- `node` >= 22 — runs both the harness build and each heredoc
+- `google-chrome`, `chromium`, or any Chrome/Brave/Edge build on PATH — the browser the port drives over CDP
 
 ## Quick start
 

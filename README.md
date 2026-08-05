@@ -17,6 +17,26 @@
 
 </div>
 
+> ### Unofficial Linux fork
+>
+> This is **[`NagyVikt/ego-lite-linux`](https://github.com/NagyVikt/ego-lite-linux)**,
+> an unofficial community fork of
+> [`citrolabs/ego-lite`](https://github.com/citrolabs/ego-lite). It is **not**
+> affiliated with, endorsed by, or supported by CitroLabs. The download badges
+> above and most of the text below describe the **official macOS app** — on macOS,
+> use that, not this.
+>
+> What this fork adds is `package/ego-linux/`: a CDP shim that supplies the
+> `globalThis.ego` layer natively on Linux, so the *unmodified* upstream harness
+> drives a stock Chromium. It works today —
+> `sh skills/ego-browser/scripts/install.sh`, then
+> [`package/ego-linux/README.md`](package/ego-linux/README.md) for usage, the
+> per-method fidelity table, and the two known upstream-side flakes.
+>
+> **Do not report Linux issues upstream.** Anything you can only reproduce here
+> belongs in this fork's tracker; anything reproducible on the official macOS
+> build belongs [upstream](https://github.com/citrolabs/ego-lite/issues).
+
 ego (lite) is a browser where you and your AI agents work in parallel. Your agents run multiple browser tasks in their own Spaces while your tabs stay yours, and tasks complete faster on fewer tokens.
 
 Existing tools like browser-use and agent-browser are browser automation frameworks: they need a separate browser to drive, logins never carry cleanly, and you and the agent end up fighting for the same tabs. ego lite is one browser designed from the start for the two of you to share. No extra setup, and the agent can always reach your real logins and tabs through `ego-browser`.
@@ -142,6 +162,27 @@ Tutorials, the full tool reference, and integration guides live at [lite.ego.app
  </picture>
 </a>
 
+## Design note: this port ships no MCP server
+
+A recurring request is to wrap `ego-browser` as an MCP server. This fork
+deliberately does not, and the reason is the same one that makes ego-browser
+worth porting at all.
+
+The value here is that **one heredoc replaces many tool-call round trips**. An
+agent writes a single JS block that navigates, waits, snapshots, clicks, and
+reports — one model turn, one process. An MCP server re-decomposes that into
+`navigate` → look → `click` → look → `snapshot` → look: the exact per-call
+overhead the design exists to avoid, paid on every step, in tokens and latency.
+Wrapping it would make the port measurably worse at its one job.
+
+The honest case for an MCP is an agent with no shell tool at all. If that is
+your situation, the shim in `package/ego-linux/src/` is the layer to build on —
+but expect to give up the token advantage, and benchmark it against the heredoc
+path before committing.
+
 ## License
 
-The contents of this repository are released under the [MIT License](LICENSE). The ego lite browser is a separate, free download.
+The contents of this repository are released under the [MIT License](LICENSE),
+retaining upstream's `Copyright (c) 2026 CitroLabs` notice. The official ego lite
+browser is a separate, free download for macOS; this fork drives a stock Chromium
+instead and ships no browser of its own.
