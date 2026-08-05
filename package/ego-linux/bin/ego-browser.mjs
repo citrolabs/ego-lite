@@ -105,7 +105,18 @@ async function main() {
     try {
       const { tabs } = await shim.ego.listTabs();
       // A browser with no page target shows no window; give it one.
-      if (tabs.length === 0) await shim.ego.createTab("about:blank");
+      let targetId = tabs.find((tab) => tab.active)?.targetId ?? tabs[0]?.targetId;
+      if (!targetId) ({ targetId } = await shim.ego.createTab("about:blank"));
+
+      // The window usually already exists — it is just behind everything else.
+      // Clicking a launcher icon has to raise it, not quietly confirm it is
+      // running, which looks identical to nothing happening.
+      await shim.cdp.call("Target.activateTarget", { targetId }).catch(() => {});
+      const { sessionId } = await shim.cdp.call("Target.attachToTarget", {
+        targetId,
+        flatten: true,
+      });
+      await shim.cdp.call("Page.bringToFront", {}, sessionId).catch(() => {});
     } finally {
       shim.close();
     }

@@ -18,6 +18,12 @@ const BINARY_CANDIDATES = [
 // Chrome writes the negotiated port here once the DevTools endpoint is live.
 const PORT_FILE = "DevToolsActivePort";
 
+/** Window class shared with the desktop entry's StartupWMClass. */
+export const WM_CLASS = "ego-lite-linux";
+
+/** Shown in Chrome's profile chip so the agent window is identifiable. */
+const PROFILE_LABEL = "ego lite — agent";
+
 const LAUNCH_FLAGS = [
   "--no-first-run",
   "--no-default-browser-check",
@@ -35,6 +41,11 @@ const LAUNCH_FLAGS = [
   // viewport — a 1280px window lays out as 853px — so page content the agent
   // expects on screen falls below the fold.
   "--force-device-scale-factor=1",
+  // Give the agent browser its own window class. Without it the window carries
+  // Chrome's, so the desktop groups it under the ordinary Chrome icon: it never
+  // appears as its own running app and the launcher icon cannot raise it.
+  // Paired with StartupWMClass in the desktop entry.
+  `--class=${WM_CLASS}`,
 ];
 
 async function exists(path) {
@@ -137,6 +148,14 @@ async function neutralizeZoom(profileDir) {
           changed = true;
         }
       }
+    }
+    // --import-chrome-profile clones the user's real profile, so the agent
+    // browser ends up looking exactly like their everyday Chrome — same
+    // bookmarks, same theme, no way to tell which window an agent is driving.
+    // Naming the profile puts a label in Chrome's own toolbar chip.
+    if (prefs.profile?.name !== PROFILE_LABEL) {
+      prefs.profile = { ...prefs.profile, name: PROFILE_LABEL };
+      changed = true;
     }
     if (changed) await writeFile(path, JSON.stringify(prefs));
     return changed;

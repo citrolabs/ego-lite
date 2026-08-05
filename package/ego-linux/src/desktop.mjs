@@ -4,6 +4,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { WM_CLASS } from "./chrome.mjs";
+
 /**
  * Desktop integration.
  *
@@ -33,6 +35,10 @@ Comment=The browser you and your AI agents share
 Exec=${process.execPath} ${execPath} --open
 Icon=${APP_ID}
 Terminal=false
+# Ties the browser window (launched with --class=ego-lite-linux) to this entry,
+# so the desktop shows it as its own running app under this icon instead of
+# folding it into the ordinary Chrome window group.
+StartupWMClass=${WM_CLASS}
 Categories=Network;WebBrowser;
 Keywords=agent;automation;browser;ego;
 StartupNotify=true

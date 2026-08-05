@@ -61,5 +61,5 @@ export async function createEgoShim({ headless = false } = {}) {
   };
 
   cdp.bind(ego);
-  return { ego, close: () => cdp.close(), port, wsUrl };
+  return { ego, cdp, close: () => cdp.close(), port, wsUrl };
 }
