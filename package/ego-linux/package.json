@@ -1,0 +1,17 @@
+{
+  "name": "ego-browser-linux",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Linux backing layer for the ego-browser harness: backs globalThis.ego with a plain Chromium over CDP.",
+  "type": "module",
+  "bin": {
+    "ego-browser-linux": "./bin/ego-browser.mjs"
+  },
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}

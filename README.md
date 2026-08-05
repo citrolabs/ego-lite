@@ -29,6 +29,13 @@ https://github.com/user-attachments/assets/ffe7954b-58ee-411e-b35d-ec30c58a08bc
 
 ego lite runs on macOS today. Windows and Linux are on the [roadmap](https://lite.ego.app/roadmap).
 
+> **This fork adds Linux support.** `package/ego-linux/` supplies the native
+> `globalThis.ego` layer on top of a stock Chromium over CDP, so the *unmodified*
+> `ego-browser` harness runs on Linux. See
+> [`package/ego-linux/README.md`](package/ego-linux/README.md) for install, usage,
+> and an honest per-method fidelity table. On macOS use upstream — this port
+> exists only because the app is not available for Linux.
+
 ### 1. Install
 
 Pick whichever fits your flow.
