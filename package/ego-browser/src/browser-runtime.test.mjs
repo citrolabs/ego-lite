@@ -396,6 +396,87 @@ test("waitForBrowserEvent ignores events that happened before waiting", async ()
   }
 });
 
+test("waitForBrowserEvent ignores matching events from another session (issue #204)", async () => {
+  installAutoEgo();
+  try {
+    // Prime ego.onCDPMessage (set by rawCdp) so fireEvent can deliver events.
+    await browserCdp("Runtime.evaluate", { expression: "1" });
+    state.sessionId = "sess-active";
+    let resolved = false;
+    const promise = waitForBrowserEvent(
+      (event) => event.method === "Page.downloadWillBegin",
+      500,
+    ).then((event) => {
+      resolved = true;
+      return event;
+    });
+
+    // An event from a different page session must not resolve the waiter.
+    fireEvent("Page.downloadWillBegin", { guid: "other-session" }, "sess-b");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(
+      resolved,
+      false,
+      "waiter must ignore an event from another session",
+    );
+
+    // The active session's event resolves it.
+    fireEvent("Page.downloadWillBegin", { guid: "my-session" }, "sess-active");
+    const event = await promise;
+    assert.equal(event.params.guid, "my-session");
+  } finally {
+    cleanup();
+  }
+});
+
+test("waitForBrowserEvent honors an explicit sessionId scope", async () => {
+  installAutoEgo();
+  try {
+    // Prime ego.onCDPMessage (set by rawCdp) so fireEvent can deliver events.
+    await browserCdp("Runtime.evaluate", { expression: "1" });
+    state.sessionId = "sess-active";
+    let resolved = false;
+    const promise = waitForBrowserEvent(
+      (event) => event.method === "Page.downloadWillBegin",
+      500,
+      "sess-explicit",
+    ).then((event) => {
+      resolved = true;
+      return event;
+    });
+
+    // Even the active session's event is ignored when a different scope is set.
+    fireEvent("Page.downloadWillBegin", { guid: "active" }, "sess-active");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(resolved, false, "explicit scope must exclude other sessions");
+
+    fireEvent("Page.downloadWillBegin", { guid: "scoped" }, "sess-explicit");
+    const event = await promise;
+    assert.equal(event.params.guid, "scoped");
+  } finally {
+    cleanup();
+  }
+});
+
+test("waitForBrowserEvent still delivers events that carry no sessionId", async () => {
+  installAutoEgo();
+  try {
+    // Prime ego.onCDPMessage (set by rawCdp) so fireEvent can deliver events.
+    await browserCdp("Runtime.evaluate", { expression: "1" });
+    state.sessionId = "sess-active";
+    const promise = waitForBrowserEvent(
+      (event) => event.method === "Page.downloadWillBegin",
+      500,
+    );
+    // Browser-level / untagged events (no sessionId) stay unfiltered.
+    fireEvent("Page.downloadWillBegin", { guid: "untagged" });
+    const event = await promise;
+    assert.equal(event.params.guid, "untagged");
+  } finally {
+    cleanup();
+  }
+});
+
 test("drainBrowserEvents caps at MAX_BUFFERED_EVENTS (10000)", async () => {
   const calls = installManualEgo();
   try {
