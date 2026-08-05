@@ -17,13 +17,20 @@ const APP_ID = "ego-lite-linux";
 const ICON_SOURCE = new URL("../assets/ego-lite-linux.svg", import.meta.url);
 const LAUNCHER = new URL("../bin/ego-browser.mjs", import.meta.url);
 
+/**
+ * The desktop session's PATH is not your shell's. A node installed by nvm, fnm
+ * or asdf lives outside it, so a `#!/usr/bin/env node` shebang resolves to
+ * nothing and clicking the icon fails silently. Pin the interpreter that is
+ * running this installer — re-run --install-desktop-entry after switching node
+ * versions.
+ */
 function desktopEntry(execPath) {
   return `[Desktop Entry]
 Type=Application
 Name=ego lite (Linux port)
 GenericName=Agent Browser
 Comment=The browser you and your AI agents share
-Exec=${execPath} --open
+Exec=${process.execPath} ${execPath} --open
 Icon=${APP_ID}
 Terminal=false
 Categories=Network;WebBrowser;

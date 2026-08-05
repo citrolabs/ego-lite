@@ -67,6 +67,15 @@ the desktop and icon caches. Launching it runs `--open`, which brings up the
 shared agent browser window. The icon is upstream's mark with a badge, so a
 Linux-port window is never mistaken for an upstream build.
 
+The entry pins the **absolute path of the node that installed it**, rather than
+relying on a `#!/usr/bin/env node` shebang. A desktop session's PATH is not your
+shell's, so a node from nvm / fnm / asdf is invisible to it and clicking the
+icon would fail silently, with no terminal to show the error. Re-run
+`--install-desktop-entry` after switching node versions.
+
+`--open` also replaces a headless backing browser with a visible one instead of
+refusing, for the same reason: an icon has to work, not explain.
+
 The backing browser is launched once and **persists between invocations** — each
 heredoc is its own short-lived Node process, so the browser, not the process, is
 what has to survive. It uses a dedicated profile under

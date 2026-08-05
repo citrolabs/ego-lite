@@ -93,13 +93,13 @@ async function main() {
     return 0;
   }
   if (argv[0] === "--open") {
+    // Launched from a desktop icon there is no terminal to read an error in, so
+    // this has to succeed rather than explain. A headless browser has no window
+    // to show, so trade it for a visible one.
     const status = await browserStatus();
     if (status.running && status.headless) {
-      process.stderr.write(
-        "the backing browser is running headless, so it has no window.\n" +
-          "run `ego-browser --stop` first to reopen it with a visible window.\n",
-      );
-      return 1;
+      process.stderr.write("replacing the headless browser with a visible one\n");
+      await stopBrowser();
     }
     const shim = await createEgoShim({ headless: false });
     try {
