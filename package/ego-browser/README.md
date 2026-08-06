@@ -32,7 +32,14 @@ console.log(await page.info())
 JS
 ```
 
-Flags: `-h | --help`, `--doctor`, `--reload`, `--debug-clicks`.
+A script file or inline `-e` code runs through the same path, for shells without heredocs (PowerShell, cmd):
+
+```bash
+node dist/out/index.js task.js
+node dist/out/index.js -e 'console.log(await page.info())'
+```
+
+Flags: `-h | --help`, `--doctor`, `--reload`, `--debug-clicks`, `-e | --eval <code>`.
 
 ## Skill workspace
 
@@ -60,7 +67,7 @@ npm run validate:site-skills    # alias: validate:learnings
 
 ```
 src/
-  run.ts                 CLI entry; reads stdin, injects helpers, executes
+  run.ts                 CLI entry; reads stdin, a script file, or -e code; injects helpers, executes
   helpers.ts             public Playwright-style facades plus internal helper glue
   browser-runtime.ts     bridge to globalThis.ego (CDP, sessions, events)
   element-resolver.ts    resolves @eN / CSS / XPath / ARIA targets

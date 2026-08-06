@@ -128,6 +128,12 @@ JS
 - `--reload`: force-rebuild the CDP connection on next call
 - `--debug-clicks`: equivalent to `EGO_BROWSER_DEBUG_CLICKS=1`
 
+**CLI input forms** (all three run through the same execution path):
+
+- stdin (the heredoc form above) — the default
+- `<script.js>`: run JavaScript from a file, for shells without heredocs (PowerShell, cmd)
+- `-e <code>` / `--eval <code>`: run inline JavaScript
+
 **Key environment variables**:
 
 | Variable | Purpose |
@@ -192,7 +198,7 @@ Control (`agent` ↔ `user`) is handed off via the `handOffTaskSpace` / `takeOve
 | File | Responsibility |
 | --- | --- |
 | `src/index.ts` | SDK injection (`installEgoSdk`); decides whether to run as CLI or be imported as a library |
-| `src/run.ts` | Reads stdin, builds an `AsyncFunction`, and invokes it with helpers as named arguments |
+| `src/run.ts` | Reads stdin, a script file, or inline `-e` code, builds an `AsyncFunction`, and invokes it with helpers as named arguments |
 | `src/helpers.ts` | Composes and exports the helper set exposed to heredocs |
 | `src/browser-runtime.ts` | Maintains the CDP connection, session cache, and event buffer for the browser's ego runtime |
 | `src/element-resolver.ts` | Resolves `@eN` refs, CSS, XPath, and ARIA/role to backend nodeIds |

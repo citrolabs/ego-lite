@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import {
   stdin as processStdin,
   stdout as processStdout,
@@ -48,7 +49,12 @@ Typical usage:
 
 Helpers are pre-imported and the browser connection is prepared automatically.
 
+On shells without heredocs (PowerShell, cmd), pass a script file or -e instead;
+all three forms run through the same execution path.
+
 Commands:
+  ego-browser <script.js>      run JavaScript from a file
+  ego-browser -e <code>        run inline JavaScript (alias: --eval)
   ego-browser --doctor         inspect browser and connection state
   ego-browser --reload         reset the browser connection on next call
 `;
@@ -57,6 +63,9 @@ export const USAGE = `Usage:
   ego-browser <<'JS'
   console.log(await page.info())
   JS
+
+  ego-browser <script.js>
+  ego-browser -e <code>
 `;
 
 export async function runMain(options: RunMainOptions = {}) {
@@ -87,15 +96,37 @@ export async function runMain(options: RunMainOptions = {}) {
     env.EGO_BROWSER_DEBUG_CLICKS = "1";
     argv.shift();
   }
-  if (argv.length > 0) {
+
+  // Three input forms feed the same execution path: inline -e code, a script
+  // file named by the one positional argument, and stdin (the default). The
+  // file and -e forms exist for shells without heredocs (PowerShell, cmd),
+  // where piping into stdin re-encodes the script through the shell.
+  let code: string;
+  if (argv[0] === "-e" || argv[0] === "--eval") {
+    if (argv.length !== 2) {
+      write(stderr, USAGE);
+      return 2;
+    }
+    code = argv[1];
+  } else if (argv.length === 1 && !argv[0].startsWith("-")) {
+    try {
+      code = await readFile(argv[0], "utf8");
+    } catch (error) {
+      write(
+        stderr,
+        `cannot read script file ${JSON.stringify(argv[0])}: ${error?.message || error}\n`,
+      );
+      return 1;
+    }
+  } else if (argv.length > 0) {
     write(stderr, USAGE);
     return 2;
+  } else {
+    code =
+      options.stdinText !== undefined
+        ? options.stdinText
+        : await readAll(options.stdin || processStdin);
   }
-
-  const code =
-    options.stdinText !== undefined
-      ? options.stdinText
-      : await readAll(options.stdin || processStdin);
   if (!code.trim()) {
     write(stderr, USAGE);
     return 2;
