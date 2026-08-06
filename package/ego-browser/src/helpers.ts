@@ -639,8 +639,12 @@ function textSelector(prefix, text, options: any = {}) {
 }
 
 function roleSelector(role, options: any = {}) {
+  // A nullish name (e.g. getByRole("button", { name: label }) with an undefined
+  // label) means "no name filter", matching all elements of the role, as in
+  // Playwright. Gating on key presence would instead filter on the literal
+  // string "undefined"/"null" and match nothing.
   const name =
-    options && Object.prototype.hasOwnProperty.call(options, "name")
+    options && options.name != null
       ? `[name=${JSON.stringify(roleNameMatcher(options.name))}]`
       : "";
   return `loc=role:${role}${name}`;
@@ -651,17 +655,20 @@ function testIdSelector(testId) {
 }
 
 function filterSelector(base, options: any = {}) {
+  // Gate every filter on the value being present, not just the key, so a nullish
+  // option (a computed value that came out undefined) is treated as "no filter"
+  // instead of matching the literal string "undefined"/"null".
   const data: any = { base };
-  if (Object.prototype.hasOwnProperty.call(options, "hasText")) {
+  if (options.hasText != null) {
     data.hasText = textMatcher(options.hasText);
   }
-  if (Object.prototype.hasOwnProperty.call(options, "hasNotText")) {
+  if (options.hasNotText != null) {
     data.hasNotText = textMatcher(options.hasNotText);
   }
-  if (options.has !== undefined) {
+  if (options.has != null) {
     data.has = locatorSelector(options.has);
   }
-  if (options.hasNot !== undefined) {
+  if (options.hasNot != null) {
     data.hasNot = locatorSelector(options.hasNot);
   }
   return internalSelector("filter", data);
