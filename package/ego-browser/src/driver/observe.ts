@@ -62,7 +62,11 @@ export async function snapshotRaw(options: SnapshotOptions = {}) {
   return result;
 }
 
-registerSnapshotForRefRefresh(() => snapshotRaw());
+// Rebuild an empty ref map (new heredoc / process) under the same scope agents
+// use to mint refs via snapshot() below. Using the bridge's default scope here
+// would only re-register refs for in-viewport elements, so an @ref for an
+// off-viewport element could never be recovered.
+registerSnapshotForRefRefresh(() => snapshotRaw({ scope: "full_page" }));
 
 /**
  * Return snapshot content with agent-friendly defaults. The text surface most

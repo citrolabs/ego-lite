@@ -9,6 +9,7 @@ import {
   invalidateSession,
 } from "../../dist/src/browser-runtime.js";
 import { drainEvents, screenshot } from "../../dist/src/driver/observe.js";
+import { browserRefMap, ensureRefMapForRef } from "../../dist/src/ref-state.js";
 import { setOverrides } from "../../dist/src/state.js";
 
 function withCdpRuntime(fn) {
@@ -114,4 +115,36 @@ test("screenshot creates a missing parent directory", async () => {
 
 test("drainEvents returns the current event array synchronously", () => {
   assert.ok(Array.isArray(drainEvents()));
+});
+
+test("ref-map recovery snapshots with the same scope agents use to mint refs", async () => {
+  const previous = globalThis.ego;
+  let recoveryOptions;
+  globalThis.ego = {
+    async snapshot(options) {
+      recoveryOptions = options;
+      return {
+        content: "",
+        refs: [{ backendNodeId: 500, role: "button", name: "Off screen" }],
+      };
+    },
+  };
+  browserRefMap.clear();
+  try {
+    // Empty ref map + an @ref triggers the recovery snapshot (new-heredoc path).
+    await ensureRefMapForRef("@500");
+  } finally {
+    if (previous === undefined) {
+      delete globalThis.ego;
+    } else {
+      globalThis.ego = previous;
+    }
+    browserRefMap.clear();
+  }
+
+  assert.equal(
+    recoveryOptions?.scope,
+    "full_page",
+    "recovery must snapshot full_page, matching snapshot() defaults",
+  );
 });
