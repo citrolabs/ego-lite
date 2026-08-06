@@ -454,3 +454,95 @@ test("click absorbs CDP timeout when probe fallback succeeds", async () => {
     "probe install and finish were called despite CDP timeout",
   );
 });
+
+for (const button of ["right", "middle"]) {
+  test(`click with the ${button} button installs no untrusted-input probe`, async () => {
+    // The probe's only signal is a trusted "click" listener, which the browser
+    // fires only for the primary button — probing a right/middle click would
+    // always miss and dispatch the fallback's phantom button-0 click.
+    const originalEgo = globalThis.ego;
+    globalThis.ego = { sendCDPMessage: () => {} };
+    let probeEvaluateCount = 0;
+    const restore = setOverrides({
+      cdpOverride(method, params, sessionId) {
+        if (method === "Runtime.evaluate") {
+          // Probe calls contain __egoBrowserInputProbes; element resolution does not
+          if (params.expression?.includes("__egoBrowserInputProbes")) {
+            probeEvaluateCount++;
+            return { result: { value: true } };
+          }
+          if (params.objectGroup === "ego-browser") {
+            return { result: { objectId: "object-1" } };
+          }
+          // Element resolution (buildSelectorCenterJs) — return center point
+          return { result: { value: { x: 100, y: 200 } } };
+        }
+        if (method === "Runtime.callFunctionOn") {
+          return { result: { value: true } };
+        }
+        // Input.dispatchMouseEvent calls proceed normally
+        return {};
+      },
+    });
+    try {
+      await click("#target", { button });
+    } finally {
+      restore();
+      if (originalEgo === undefined) delete globalThis.ego;
+      else globalThis.ego = originalEgo;
+    }
+
+    assert.equal(
+      probeEvaluateCount,
+      0,
+      `no probe Runtime.evaluate calls for a ${button}-button click`,
+    );
+  });
+
+  test(`click with the ${button} button rethrows a CDP dispatch timeout`, async () => {
+    // With no probe there is no fallback to absorb the timeout, so the
+    // dispatch failure must surface instead of resolving as a phantom success.
+    const originalEgo = globalThis.ego;
+    globalThis.ego = { sendCDPMessage: () => {} };
+    let probeEvaluateCount = 0;
+    const restore = setOverrides({
+      cdpOverride(method, params, sessionId) {
+        if (method === "Runtime.evaluate") {
+          // Probe calls contain __egoBrowserInputProbes; element resolution does not
+          if (params.expression?.includes("__egoBrowserInputProbes")) {
+            probeEvaluateCount++;
+            if (probeEvaluateCount === 1) {
+              return { result: { value: true } };
+            }
+            // A probe finish (if one ever ran) would report fallback success,
+            // which before the fix absorbed the timeout
+            return { result: { value: { seen: false, fallback: true } } };
+          }
+          if (params.objectGroup === "ego-browser") {
+            return { result: { objectId: "object-1" } };
+          }
+          // Element resolution (buildSelectorCenterJs) — return center point
+          return { result: { value: { x: 100, y: 200 } } };
+        }
+        if (method === "Runtime.callFunctionOn") {
+          return { result: { value: true } };
+        }
+        if (method === "Input.dispatchMouseEvent") {
+          // Simulate CDP timeout — the browser couldn't dispatch the event
+          throw new Error("CDP request timed out: Input.dispatchMouseEvent");
+        }
+        return {};
+      },
+    });
+    try {
+      await assert.rejects(
+        () => click("#target", { button }),
+        /CDP request timed out: Input\.dispatchMouseEvent/,
+      );
+    } finally {
+      restore();
+      if (originalEgo === undefined) delete globalThis.ego;
+      else globalThis.ego = originalEgo;
+    }
+  });
+}
