@@ -410,9 +410,32 @@ async function finishDragProbe(
   button: MouseButton,
 ) {
   if (!id) return false;
-  await inputEventDelay(50);
   const first = points[0];
   const last = points.at(-1);
+  // Trusted mouseup events can land later than one fixed window when the
+  // machine is loaded — and re-synthesising a drag that did arrive delivers it
+  // twice (canvas strokes count double). Peek for evidence a few times before
+  // concluding the input failed; only after the last peek may the fallback
+  // synthesise. Events that land promptly still resolve after the first 50ms.
+  const peek = `(() => {
+    const probe = (window.__egoBrowserInputProbes || {})[${JSON.stringify(id)}];
+    return probe ? probe.seen === true : null;
+  })()`;
+  for (const delay of [50, 100, 150]) {
+    await inputEventDelay(delay);
+    try {
+      const peeked = await cdp(
+        "Runtime.evaluate",
+        { expression: peek, returnByValue: true, awaitPromise: false },
+        last.sessionId ?? first.sessionId,
+      );
+      // true: the trusted mouseup landed; null: the probe is gone (navigation)
+      // — either way there is nothing left to wait for.
+      if (peeked.result?.value !== false) break;
+    } catch {
+      break;
+    }
+  }
   try {
     const result = await cdp(
       "Runtime.evaluate",
