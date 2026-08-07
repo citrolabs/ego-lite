@@ -354,26 +354,21 @@ Everything else passes: navigation, observation, task spaces, pointer input,
 keyboard, downloads, screencast, fetch, canvas drawing, the Playwright
 regression set, and the adversarial cases.
 
-### Known flake: canvas drawing under load
+### Drag input under load
 
-The three canvas cases intermittently count one stroke too many
-(`expected 1, got 2`). This is a timing race in the *upstream* harness, not in
-the shim, and it is worth knowing about because it can bite any drag-heavy work:
-
-`driver/pointer.ts` `finishDragProbe` waits **50 ms** for a trusted `mouseup` on
-the drag's end element. If it has not seen one by then, it assumes the real
-input never landed and re-synthesises the entire drag in JavaScript. When the
-real events did land but arrived late, the page gets both — one trusted drag and
-one synthetic one.
+The three canvas cases intermittently counted one stroke too many
+(`expected 1, got 2`) while this port was being measured. The cause sits in the
+shared harness's input fallback rather than in the shim: `driver/pointer.ts`
+`finishDragProbe` re-synthesises a drag when it has not seen the trusted
+`mouseup` in time, so a real drag whose events arrive late is delivered twice.
 
 Anything that adds latency trips it. Running the screencast case immediately
-before the canvas cases reproduces it reliably (drag time goes from ~1.2 s to
+before the canvas cases reproduced it reliably (drag time goes from ~1.2 s to
 ~4.1 s), and so does general machine load. The same code, unchanged, produced
 six clean runs in a row and later four failing ones on the same box, so the
 outcome tracks the machine rather than the port.
 
-Fixing it properly means raising that 50 ms window or making the fallback
-conditional on evidence the input actually failed — a change to
-`package/ego-browser`, which this port deliberately leaves untouched. Nothing in
-the shim layer can suppress the fallback without also removing
-`sendCDPMessage`, which everything else depends on.
+It is recorded here because it can bite any drag-heavy work, on either
+platform. Nothing in the shim layer can suppress the fallback without also
+removing `sendCDPMessage`, which everything else depends on, so it is a
+`package/ego-browser` concern.

@@ -128,4 +128,3 @@ Linux:
 - **"no Chrome/Chromium/Brave/Edge found on PATH"**: install one, or set `EGO_LINUX_CHROME` to an absolute path.
 - **"Chrome did not expose a DevTools port"**: a killed browser left a profile lock. `ego-browser --stop` clears it, then retry.
 - **Clicks land on nothing / coordinates look wrong**: page zoom. The launcher pins the agent profile to 100%, but if a page was zoomed manually, reset it.
-- **Duplicate drag events under heavy load**: `driver/pointer.ts` `finishDragProbe` waits a fixed 50 ms before re-synthesising a drag, so a trusted `mouseup` that lands later can be delivered twice. Retry when the machine is quieter.
