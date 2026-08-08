@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const SRC_DIR = dirname(fileURLToPath(import.meta.url));
@@ -20,7 +20,11 @@ export function agentWorkspace() {
 
 export function resolvePath(path) {
   if (path.startsWith("~")) {
-    return resolve(process.env.HOME || process.env.USERPROFILE || ".", path.slice(1));
+    // Use join, not resolve: path.slice(1) of "~/ws" is "/ws", which resolve()
+    // would treat as an absolute path and return verbatim, dropping the home
+    // directory. join keeps it relative to home ("~" -> home, "~/ws" -> home/ws).
+    const home = process.env.HOME || process.env.USERPROFILE || ".";
+    return resolve(join(home, path.slice(1)));
   }
   return resolve(path);
 }
@@ -36,7 +40,10 @@ export function loadEnvFile(path) {
     }
     const index = line.indexOf("=");
     const key = line.slice(0, index).trim();
-    const value = line.slice(index + 1).trim().replace(/^['"]|['"]$/g, "");
+    const value = line
+      .slice(index + 1)
+      .trim()
+      .replace(/^['"]|['"]$/g, "");
     if (key && process.env[key] === undefined) {
       process.env[key] = value;
     }
