@@ -10,6 +10,7 @@ INSTALL_DIR="$USER_DATA_DIR/GpuModeController"
 MANIFEST_PATH="$NATIVE_HOST_DIR/$HOST_NAME.json"
 LOCAL_STATE_PATH="$USER_DATA_DIR/Local State"
 CONTROLLER_STATE_PATH="$USER_DATA_DIR/gpu_mode.json"
+WATCHDOG_PATH="$SCRIPT_DIR/native-host/low-power-watchdog.mjs"
 NODE_PATH=$(command -v node || true)
 
 if [ -z "$NODE_PATH" ]; then
@@ -50,6 +51,10 @@ if [ "$CURRENT_MODE" != "normal" ]; then
 	exit 1
 fi
 
+if [ -f "$WATCHDOG_PATH" ]; then
+	"$NODE_PATH" "$WATCHDOG_PATH" stop
+fi
+
 if [ -f "$MANIFEST_PATH" ]; then
 	rm "$MANIFEST_PATH"
 fi
@@ -72,7 +77,10 @@ fi
 for state_file in \
 	"$CONTROLLER_STATE_PATH" \
 	"$USER_DATA_DIR/gpu_mode_error.log" \
-	"$USER_DATA_DIR/gpu_mode_restart.lock"; do
+	"$USER_DATA_DIR/gpu_mode_restart.lock" \
+	"$USER_DATA_DIR/gpu_mode_low_power.pid" \
+	"$USER_DATA_DIR/gpu_mode_watchdog_error.log" \
+	"$USER_DATA_DIR/gpu_mode_watchdog_start.lock"; do
 	if [ -f "$state_file" ]; then
 		rm "$state_file"
 	fi

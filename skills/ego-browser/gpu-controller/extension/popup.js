@@ -10,6 +10,8 @@ const currentMode = document.querySelector("#current-mode");
 const status = document.querySelector("#status");
 const buttons = [...document.querySelectorAll("[data-mode]")];
 let renderedMode = null;
+let busy = false;
+let unsupportedModes = new Set(["software"]);
 
 function send(message) {
   return new Promise((resolve, reject) => {
@@ -36,18 +38,25 @@ function renderMode(mode) {
   }
 }
 
-function setBusy(busy) {
+function setBusy(nextBusy) {
+  busy = nextBusy;
   for (const button of buttons) {
-    button.disabled = busy;
+    button.disabled = nextBusy || unsupportedModes.has(button.dataset.mode);
   }
+}
+
+function setUnsupportedModes(modes) {
+  unsupportedModes = new Set(modes);
+  setBusy(busy);
 }
 
 async function loadStatus() {
   try {
     const response = await send({ action: "status" });
+    setUnsupportedModes(response.unsupportedModes || []);
     renderMode(response.mode);
     if (response.mode === "low-power" && !response.active) {
-      status.textContent = "低功耗参数尚未生效，正在自动重启。";
+      status.textContent = "低功耗后台服务尚未生效，正在自动修复。";
       await send({ action: "ensureMode" });
     }
   } catch (error) {

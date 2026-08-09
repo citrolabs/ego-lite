@@ -18,6 +18,8 @@ async function createFixture({ running = false } = {}) {
   const bin = join(root, "bin");
   const appPath = join(root, "ego lite.app");
   const capturePath = join(root, "open-args.txt");
+  const watchdogCapturePath = join(root, "watchdog-args.txt");
+  const watchdogPath = join(root, "watchdog.mjs");
   await mkdir(bin);
   await mkdir(appPath);
   await writeExecutable(join(bin, "uname"), "#!/bin/sh\nprintf 'Darwin\\n'\n");
@@ -29,13 +31,20 @@ async function createFixture({ running = false } = {}) {
     join(bin, "open"),
     '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$OPEN_CAPTURE"\n',
   );
+  await writeFile(
+    watchdogPath,
+    'import { appendFileSync } from "node:fs"; appendFileSync(process.env.WATCHDOG_CAPTURE, `${process.argv[2]}\\n`);\n',
+  );
   return {
     appPath,
     capturePath,
+    watchdogCapturePath,
     env: {
       ...process.env,
       EGO_LITE_APP_PATH: appPath,
+      EGO_LITE_WATCHDOG_PATH: watchdogPath,
       OPEN_CAPTURE: capturePath,
+      WATCHDOG_CAPTURE: watchdogCapturePath,
       PATH: `${bin}:${process.env.PATH}`,
     },
   };
@@ -53,15 +62,20 @@ async function runLauncher(mode, options) {
     encoding: "utf8",
   });
   let args = [];
+  let watchdogArgs = [];
   try {
     args = (await readFile(fixture.capturePath, "utf8")).trim().split(/\r?\n/);
   } catch {}
-  return { ...fixture, result, args };
+  try {
+    watchdogArgs = (await readFile(fixture.watchdogCapturePath, "utf8"))
+      .trim()
+      .split(/\r?\n/);
+  } catch {}
+  return { ...fixture, result, args, watchdogArgs };
 }
 
 for (const [mode, flag] of [
   ["balanced", "--disable-features=SkiaGraphite"],
-  ["low-power", "--disable-webgl"],
   ["software", "--disable-gpu"],
 ]) {
   test(`${mode} launches ego lite with the expected Chromium flag`, async () => {
@@ -70,6 +84,14 @@ for (const [mode, flag] of [
     assert.deepEqual(args, ["-n", appPath, "--args", flag]);
   });
 }
+
+test("low-power launches normally and starts the background watchdog", async () => {
+  const { appPath, result, args, watchdogArgs } =
+    await runLauncher("low-power");
+  assert.equal(result.status, 0);
+  assert.deepEqual(args, ["-n", appPath]);
+  assert.deepEqual(watchdogArgs, ["stop", "start"]);
+});
 
 test("normal launches ego lite without Chromium flags", async () => {
   const { appPath, result, args } = await runLauncher("normal");

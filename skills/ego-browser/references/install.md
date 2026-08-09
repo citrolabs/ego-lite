@@ -65,4 +65,4 @@ Once the environment is ready, return to the user's original task and continue w
 - **Download failed**: the script retries 3 times automatically; if it still fails, it's usually a network issue — have the user check their network and retry.
 - **Gatekeeper still blocks it**: the script already tries to strip quarantine; if the first launch is still blocked, have the user allow ego lite manually under System Settings → Privacy & Security.
 - **Command still unavailable after onboarding**: confirm `~/.local/bin` is on the PATH (see above); or have the user reopen ego lite, finish onboarding, and retry.
-- **Sustained high GPU usage on macOS**: read [`gpu.md`](gpu.md) and use the opt-in compatibility launcher. Do not silently relaunch the browser because the low-power modes disable graphics features.
+- **Sustained high GPU usage on macOS**: read [`gpu.md`](gpu.md) and use the opt-in controller or compatibility launcher. Low-power mode hides ego lite after it loses focus, so explain that behavior before enabling it.

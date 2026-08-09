@@ -3,11 +3,13 @@
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readFile, rename, unlink, writeFile } from "node:fs/promises";
 import {
   applyModeToLocalState,
   assertGpuMode,
   launchArguments,
+  unsupportedModesForAppVersion,
 } from "./mode-state.mjs";
 
 const mode = assertGpuMode(process.argv[2]);
@@ -24,10 +26,18 @@ const localStatePath = join(userDataDirectory, "Local State");
 const controllerStatePath = join(userDataDirectory, "gpu_mode.json");
 const restartLockPath = join(userDataDirectory, "gpu_mode_restart.lock");
 const errorPath = join(userDataDirectory, "gpu_mode_error.log");
+const watchdogPath =
+  process.env.EGO_LITE_WATCHDOG_PATH ||
+  join(dirname(fileURLToPath(import.meta.url)), "low-power-watchdog.mjs");
+const plutilPath = process.env.EGO_LITE_PLUTIL_PATH || "/usr/bin/plutil";
 let browserLaunched = false;
+let browserRestartStarted = false;
 
 try {
+  await assertModeIsSupported();
   await delay(350);
+  browserRestartStarted = true;
+  await stopWatchdog();
   await quitBrowser();
   await waitForBrowserExit();
   await updateLocalState();
@@ -38,6 +48,10 @@ try {
   );
   await launchBrowser();
   browserLaunched = true;
+  if (mode === "low-power") {
+    await delay(2_000);
+    await startWatchdog();
+  }
   await unlinkIfPresent(errorPath);
 } catch (error) {
   await writeFile(
@@ -45,7 +59,7 @@ try {
     `${new Date().toISOString()} ${error.stack || error.message}\n`,
     { mode: 0o600 },
   );
-  if (!browserLaunched) {
+  if (browserRestartStarted && !browserLaunched) {
     try {
       await launchBrowser();
       browserLaunched = true;
@@ -110,6 +124,35 @@ async function launchBrowser() {
   await execFilePromise(openPath, args);
 }
 
+async function assertModeIsSupported() {
+  let version = process.env.EGO_LITE_APP_VERSION || "";
+  if (!version) {
+    try {
+      version = (
+        await execFileText(plutilPath, [
+          "-extract",
+          "CFBundleShortVersionString",
+          "raw",
+          join(appPath, "Contents", "Info.plist"),
+        ])
+      ).trim();
+    } catch {}
+  }
+  if (unsupportedModesForAppVersion(version).includes(mode)) {
+    throw new Error(
+      `GPU mode ${JSON.stringify(mode)} is disabled for ego lite ${version} because it causes the browser to exit`,
+    );
+  }
+}
+
+async function startWatchdog() {
+  await execFilePromise(process.execPath, [watchdogPath, "start"]);
+}
+
+async function stopWatchdog() {
+  await execFilePromise(process.execPath, [watchdogPath, "stop"]);
+}
+
 async function readLocalState() {
   const value = JSON.parse(await readFile(localStatePath, "utf8"));
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -126,6 +169,18 @@ function execFilePromise(command, args, options = {}) {
         return;
       }
       resolve();
+    });
+  });
+}
+
+function execFileText(command, args) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { encoding: "utf8" }, (error, stdout) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(stdout);
     });
   });
 }

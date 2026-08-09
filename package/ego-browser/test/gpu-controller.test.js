@@ -12,12 +12,14 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import {
   GRAPHITE_DISABLED_EXPERIMENT,
   applyModeToLocalState,
   detectMode,
   launchArguments,
+  unsupportedModesForAppVersion,
 } from "../../../skills/ego-browser/gpu-controller/native-host/mode-state.mjs";
 import { acquireRestartLock } from "../../../skills/ego-browser/gpu-controller/native-host/restart-lock.mjs";
 
@@ -48,6 +50,12 @@ const uninstallPath = fileURLToPath(
 const hostScriptPath = fileURLToPath(
   new URL(
     "../../../skills/ego-browser/gpu-controller/native-host/host.mjs",
+    import.meta.url,
+  ),
+);
+const watchdogScriptPath = fileURLToPath(
+  new URL(
+    "../../../skills/ego-browser/gpu-controller/native-host/low-power-watchdog.mjs",
     import.meta.url,
   ),
 );
@@ -97,7 +105,12 @@ test("normal and low-power use the expected persistent and launch settings", () 
   assert.equal(detectMode(normal), "normal");
   assert.equal(lowPower.hardware_acceleration_mode.enabled, true);
   assert.deepEqual(launchArguments("normal"), []);
-  assert.deepEqual(launchArguments("low-power"), ["--disable-webgl"]);
+  assert.deepEqual(launchArguments("low-power"), []);
+});
+
+test("software mode is blocked on the ego lite version that crashes", () => {
+  assert.deepEqual(unsupportedModesForAppVersion("0.4.6.12"), ["software"]);
+  assert.deepEqual(unsupportedModesForAppVersion("0.4.6.13"), []);
 });
 
 test("saved low-power mode takes precedence over Local State inference", () => {
@@ -153,6 +166,60 @@ test("restart lock allows only one concurrent scheduler", async () => {
   ]);
 
   assert.deepEqual(results.sort(), [false, true]);
+});
+
+test("low-power watchdog hides ego lite after it loses focus", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ego-gpu-watchdog-"));
+  const osascript = join(root, "osascript");
+  const pidPath = join(root, "watchdog.pid");
+  const errorPath = join(root, "watchdog-error.log");
+  const startLockPath = join(root, "watchdog-start.lock");
+  const restartLockPath = join(root, "restart.lock");
+  const eventsPath = join(root, "events.txt");
+  await writeExecutable(
+    osascript,
+    `#!/bin/sh
+case "$*" in
+  *'return "running|"'*) printf 'running|true|false\\n' ;;
+  *) printf 'hide\\n' >> "$WATCHDOG_EVENTS" ;;
+esac
+`,
+  );
+  const env = {
+    ...process.env,
+    EGO_LITE_OSASCRIPT_PATH: osascript,
+    EGO_LITE_WATCHDOG_PID_PATH: pidPath,
+    EGO_LITE_WATCHDOG_ERROR_PATH: errorPath,
+    EGO_LITE_WATCHDOG_START_LOCK_PATH: startLockPath,
+    EGO_LITE_RESTART_LOCK_PATH: restartLockPath,
+    EGO_LITE_WATCHDOG_POLL_MS: "20",
+    EGO_LITE_WATCHDOG_UNFOCUSED_MS: "30",
+    WATCHDOG_EVENTS: eventsPath,
+  };
+
+  try {
+    const start = spawnSync(process.execPath, [watchdogScriptPath, "start"], {
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(start.status, 0, start.stderr);
+    for (let attempt = 0; attempt < 50; attempt++) {
+      try {
+        await access(eventsPath);
+        break;
+      } catch {
+        await delay(40);
+      }
+    }
+    assert.match(await readFile(eventsPath, "utf8"), /hide/);
+    const status = spawnSync(process.execPath, [watchdogScriptPath, "status"], {
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(status.stdout.trim(), "running");
+  } finally {
+    spawnSync(process.execPath, [watchdogScriptPath, "stop"], { env });
+  }
 });
 
 test("installer writes the native host to the configured compatibility directory", async () => {
@@ -276,6 +343,25 @@ test("apply script updates Local State atomically and launches balanced mode", a
     (await readFile(fixture.openCapture, "utf8")).trim().split(/\r?\n/),
     ["-na", fixture.appPath],
   );
+  assert.equal(
+    (await readFile(fixture.watchdogCapture, "utf8")).trim(),
+    "stop",
+  );
+});
+
+test("apply script starts the background watchdog for low-power mode", async () => {
+  const fixture = await createApplyFixture({ localState: {} });
+  const result = runApplyScript(fixture, "low-power");
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    (await readFile(fixture.openCapture, "utf8")).trim().split(/\r?\n/),
+    ["-na", fixture.appPath],
+  );
+  assert.deepEqual(
+    (await readFile(fixture.watchdogCapture, "utf8")).trim().split(/\r?\n/),
+    ["stop", "start"],
+  );
 });
 
 test("apply script preserves malformed Local State and still reopens ego lite", async () => {
@@ -302,6 +388,8 @@ async function createApplyFixture({ localState }) {
   const bin = join(root, "bin");
   const userData = join(root, "user-data");
   const openCapture = join(root, "open-args.txt");
+  const watchdogCapture = join(root, "watchdog-args.txt");
+  const watchdogPath = join(root, "watchdog.mjs");
   const appPath = join(root, "ego lite.app");
   await mkdir(bin);
   await mkdir(userData);
@@ -317,7 +405,19 @@ async function createApplyFixture({ localState }) {
     join(bin, "open"),
     '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$OPEN_CAPTURE"\n',
   );
-  return { appPath, bin, openCapture, root, userData };
+  await writeFile(
+    watchdogPath,
+    'import { appendFileSync } from "node:fs"; appendFileSync(process.env.WATCHDOG_CAPTURE, `${process.argv[2]}\\n`);\n',
+  );
+  return {
+    appPath,
+    bin,
+    openCapture,
+    root,
+    userData,
+    watchdogCapture,
+    watchdogPath,
+  };
 }
 
 function runApplyScript(fixture, mode) {
@@ -331,7 +431,10 @@ function runApplyScript(fixture, mode) {
       EGO_LITE_PGREP_PATH: join(fixture.bin, "pgrep"),
       EGO_LITE_PKILL_PATH: join(fixture.bin, "pkill"),
       EGO_LITE_USER_DATA_DIR: fixture.userData,
+      EGO_LITE_APP_VERSION: "test",
+      EGO_LITE_WATCHDOG_PATH: fixture.watchdogPath,
       OPEN_CAPTURE: fixture.openCapture,
+      WATCHDOG_CAPTURE: fixture.watchdogCapture,
     },
   });
 }

@@ -5,7 +5,15 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFile } from "node:fs/promises";
-import { GPU_MODES, detectMode } from "./mode-state.mjs";
+import {
+  GPU_MODES,
+  detectMode,
+  unsupportedModesForAppVersion,
+} from "./mode-state.mjs";
+import {
+  startWatchdog,
+  watchdogIsRunning,
+} from "./low-power-watchdog.mjs";
 import { acquireRestartLock } from "./restart-lock.mjs";
 
 const MAX_NATIVE_MESSAGE_BYTES = 64 * 1024;
@@ -18,6 +26,7 @@ const localStatePath = join(userDataDirectory, "Local State");
 const controllerStatePath = join(userDataDirectory, "gpu_mode.json");
 const restartLockPath = join(userDataDirectory, "gpu_mode_restart.lock");
 const applyScriptPath = join(hostDirectory, "apply-and-restart.mjs");
+const plutilPath = process.env.EGO_LITE_PLUTIL_PATH || "/usr/bin/plutil";
 
 let input = Buffer.alloc(0);
 
@@ -70,21 +79,34 @@ async function handleMessage(message) {
 }
 
 async function status() {
-  const [localState, controllerState] = await Promise.all([
+  const [localState, controllerState, appVersion] = await Promise.all([
     readJson(localStatePath),
     readJson(controllerStatePath),
+    readAppVersion(),
   ]);
   const mode = detectMode(localState, controllerState?.mode);
+  const unsupportedModes = unsupportedModesForAppVersion(appVersion);
   return {
     ok: true,
     mode,
-    active: mode !== "low-power" || (await browserHasSwitch("disable-webgl")),
+    active:
+      !unsupportedModes.includes(mode) &&
+      (mode !== "low-power" || (await watchdogIsRunning())),
+    unsupportedModes,
   };
 }
 
 async function setMode(mode) {
   if (!GPU_MODES.includes(mode)) {
     throw new Error(`unsupported GPU mode: ${JSON.stringify(mode)}`);
+  }
+  const unsupportedModes = unsupportedModesForAppVersion(
+    await readAppVersion(),
+  );
+  if (unsupportedModes.includes(mode)) {
+    throw new Error(
+      `GPU mode ${JSON.stringify(mode)} is disabled for this ego lite version because it causes the browser to exit`,
+    );
   }
   const scheduled = await scheduleRestart(mode);
   return { ok: true, mode, restarting: true, scheduled };
@@ -94,6 +116,15 @@ async function ensureMode() {
   const current = await status();
   if (current.mode !== "low-power" || current.active) {
     return { ...current, restarting: false };
+  }
+  if (!(await browserHasSwitch("disable-webgl"))) {
+    const started = await startWatchdog();
+    return {
+      ...current,
+      active: await watchdogIsRunning(),
+      restarting: false,
+      started,
+    };
   }
   const scheduled = await scheduleRestart(current.mode);
   return { ...current, restarting: true, scheduled };
@@ -123,6 +154,24 @@ async function browserHasSwitch(name) {
         !line.includes("--user-data-dir=") &&
         line.includes(`--${name}`),
     );
+}
+
+async function readAppVersion() {
+  if (process.env.EGO_LITE_APP_VERSION) {
+    return process.env.EGO_LITE_APP_VERSION;
+  }
+  try {
+    return (
+      await execFileText(plutilPath, [
+        "-extract",
+        "CFBundleShortVersionString",
+        "raw",
+        join(appPath, "Contents", "Info.plist"),
+      ])
+    ).trim();
+  } catch {
+    return "";
+  }
 }
 
 async function readJson(path) {

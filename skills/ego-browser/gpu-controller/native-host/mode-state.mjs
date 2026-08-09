@@ -6,6 +6,7 @@ export const GPU_MODES = Object.freeze([
 ]);
 
 export const GRAPHITE_DISABLED_EXPERIMENT = "skia-graphite@5";
+export const SOFTWARE_MODE_BLOCKED_VERSIONS = Object.freeze(["0.4.6.12"]);
 
 export function assertGpuMode(mode) {
   if (!GPU_MODES.includes(mode)) {
@@ -60,7 +61,11 @@ export function detectMode(localState, savedMode) {
 
 export function launchArguments(mode) {
   assertGpuMode(mode);
-  return mode === "low-power" ? ["--disable-webgl"] : [];
+  return [];
+}
+
+export function unsupportedModesForAppVersion(version) {
+  return SOFTWARE_MODE_BLOCKED_VERSIONS.includes(version) ? ["software"] : [];
 }
 
 function cloneJsonObject(value) {
