@@ -121,6 +121,8 @@ We benchmarked ego lite against Vercel's agent-browser on four complex browser a
 
 Tutorials, the full tool reference, and integration guides live at [lite.ego.app/document/](https://lite.ego.app/document/).
 
+- [macOS GPU compatibility modes](skills/ego-browser/references/gpu.md)
+
 ## Community
 
 - [Discord](https://discord.gg/5eGZVvHbTq), questions, setup help, and skill sharing

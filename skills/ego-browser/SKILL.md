@@ -194,8 +194,10 @@ Combine the paths within the same Bash invocation whenever their next inputs are
 - `page.snapshot()` defaults to full-page. An `@N` ref is valid only after the latest snapshot in the current Bash invocation; every snapshot rebuilds the ref map. If the command ends, re-snapshot next time or use a semantic/stable locator.
 - `page.evaluate(fn, arg)` runs in the page and returns the value directly; do not `JSON.parse` it or pass a function body as a string. Heredoc code runs in Node.js; `document` and `window` exist only inside page evaluation.
 - If `page.info()` returns `{ dialog: ... }`, handle it with `cdp('Page.handleJavaScriptDialog', { accept: true })` or `accept: false` before page JavaScript. If it reports `w: 0` or `h: 0`, stop screenshot/coordinate work until the real tab or viewport is restored and re-verified.
+- If the user reports sustained high GPU usage on macOS, read `references/gpu.md`. The compatibility launcher changes Chromium graphics features, so explain the trade-off and obtain approval before relaunching ego lite.
 - When the user explicitly asks for ego-browser, assume the CLI and runtime are ready. Do not preflight `which`, Node versions, package metadata, or help. Investigate only after the first real command errors; for a missing install, read `references/install.md`.
 
 # References:
 - [screencast video recording](references/video.md)
 - [install](references/install.md)
+- [macOS GPU compatibility modes](references/gpu.md)
