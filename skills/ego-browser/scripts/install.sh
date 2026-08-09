@@ -1,7 +1,7 @@
 #!/bin/sh
 #v1.5 2026.06.04 17:16
 
-set -eu
+set -euo pipefail
 
 # Default package URL and installation paths.
 DMG_URL_ARM64="https://cdn.ego.app/channel/egobrowser_npx_referral/setup/macos/arm64/egolite.dmg"
@@ -273,9 +273,12 @@ main_linux() {
 
 	# CI=true is required, not cosmetic: the harness's prepare script runs
 	# `lefthook install`, which fails on any machine with a global core.hooksPath.
+	log "Installing harness dependencies in $harness_dir ..."
+	(cd "$harness_dir" && CI=true npm ci) ||
+		die "npm ci failed in $harness_dir"
 	log "Building the harness in $harness_dir ..."
-	(cd "$harness_dir" && CI=true npm ci && CI=true npm run build) ||
-		die "harness build failed"
+	(cd "$harness_dir" && CI=true npm run build) ||
+		die "npm run build failed in $harness_dir"
 
 	mkdir -p "$LINUX_BIN_DIR"
 	ln -sf "$shim_bin" "$link_path"

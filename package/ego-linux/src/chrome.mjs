@@ -401,7 +401,26 @@ async function launch({ headless }) {
  */
 export async function ensureBrowser({ headless = false } = {}) {
   if (process.env.EGO_LINUX_CDP_URL) {
-    return { wsUrl: process.env.EGO_LINUX_CDP_URL, launched: false };
+    const wsUrl = process.env.EGO_LINUX_CDP_URL;
+    // The DevTools HTTP endpoint lives at the same host:port as the websocket,
+    // and tabs.list's MRU ordering (the closest thing to a "which tab is
+    // focused" answer) is what we get from there. The URL tells us the port;
+    // a best-effort probe is enough to surface a dead endpoint instead of
+    // handing the caller one whose every call will hang.
+    let port = null;
+    try {
+      const url = new URL(wsUrl);
+      if (url.protocol === "ws:" || url.protocol === "wss:") {
+        port = Number(url.port) || (url.protocol === "wss:" ? 443 : 80);
+      }
+    } catch {
+      // not a URL we can parse — leave port null and let the caller fall back
+    }
+    if (port) {
+      const probed = await probe(port);
+      if (!probed) throw new Error(`EGO_LINUX_CDP_URL set but port ${port} does not answer`);
+    }
+    return { wsUrl, port, launched: false };
   }
 
   const state = await readBrowserState();

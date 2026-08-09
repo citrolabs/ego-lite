@@ -92,13 +92,24 @@ async function liveSpacesServer() {
   }
 }
 
+/** Spawn a detached, unref'd process without letting its errors kill us. */
+function spawnDetached(command, args) {
+  const child = spawn(command, args, { detached: true, stdio: "ignore" });
+  // Detached + unref'd, so the parent cannot react through the child's exit.
+  // An unhandled 'error' on a child process kills Node, which is exactly what
+  // --spaces and --spaces-daemon are trying to avoid — swallow it instead.
+  child.on("error", () => {});
+  child.unref();
+  return child;
+}
+
 /** Open the panel as a chrome-less app window on the shared browser. */
 async function openPanelWindow(url) {
   const status = await browserStatus();
-  spawn(status.binary || "google-chrome", [`--user-data-dir=${PROFILE_DIR}`, `--app=${url}`], {
-    detached: true,
-    stdio: "ignore",
-  }).unref();
+  spawnDetached(status.binary || "google-chrome", [
+    `--user-data-dir=${PROFILE_DIR}`,
+    `--app=${url}`,
+  ]);
 }
 
 /**
@@ -161,15 +172,12 @@ async function runSpacesDaemon() {
     }, 2500);
   });
 
-  spaces.close();
+  await spaces.close();
   shim.close();
   await rm(SPACES_STATE_FILE, { force: true });
 
   if (outcome === "browser-gone") {
-    spawn(process.execPath, [fileURLToPath(import.meta.url), "--spaces-daemon"], {
-      detached: true,
-      stdio: "ignore",
-    }).unref();
+    spawnDetached(process.execPath, [fileURLToPath(import.meta.url), "--spaces-daemon"]);
   }
   return 0;
 }
@@ -192,10 +200,7 @@ async function openSpaces() {
     return 0;
   }
 
-  spawn(process.execPath, [fileURLToPath(import.meta.url), "--spaces-daemon"], {
-    detached: true,
-    stdio: "ignore",
-  }).unref();
+  spawnDetached(process.execPath, [fileURLToPath(import.meta.url), "--spaces-daemon"]);
 
   let port = null;
   const deadline = Date.now() + 30000;

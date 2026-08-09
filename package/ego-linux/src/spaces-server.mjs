@@ -85,6 +85,10 @@ function followClip(cursor) {
  */
 const CAST = { format: "jpeg", quality: 55, maxWidth: 960, maxHeight: 600 };
 
+// Exported under a test-only name so the close/open race has a unit test that
+// does not need a real browser. Renaming this is a breaking change for the
+// internal probe, not for any caller of startSpacesServer.
+export const __createCastPoolForTest = createCastPool;
 function createCastPool(cdp) {
   const casts = new Map();
   // Opening is async, so two concurrent polls for the same tab would each find
@@ -116,7 +120,11 @@ function createCastPool(cdp) {
       // The pool was torn down while this attach was in flight. Registering it
       // now would leave a claimed session that nothing will ever detach.
       cdp.releaseSession(sessionId);
-      cdp.call("Target.detachFromTarget", { sessionId }).catch(() => {});
+      try {
+        await cdp.call("Target.detachFromTarget", { sessionId });
+      } catch {
+        // already detached
+      }
       throw new Error("cast pool is closed");
     }
     const cast = { sessionId, frame: null, seq: 0 };
@@ -129,7 +137,11 @@ function createCastPool(cdp) {
       // is not running.
       casts.delete(targetId);
       cdp.releaseSession(sessionId);
-      cdp.call("Target.detachFromTarget", { sessionId }).catch(() => {});
+      try {
+        await cdp.call("Target.detachFromTarget", { sessionId });
+      } catch {
+        // already detached
+      }
       throw error;
     }
     // The first frame only arrives once the page next paints, which on a static
@@ -169,24 +181,36 @@ function createCastPool(cdp) {
 
     /** Tabs that went away take their stream with them. */
     async retain(liveTargetIds) {
-      for (const [targetId, cast] of [...casts.entries()]) {
-        if (liveTargetIds.has(targetId)) continue;
-        casts.delete(targetId);
-        cdp.releaseSession(cast.sessionId);
-        await cdp.call("Target.detachFromTarget", { sessionId: cast.sessionId }).catch(() => {});
-      }
+      const stale = [...casts.entries()].filter(([targetId]) => !liveTargetIds.has(targetId));
+      for (const [targetId] of stale) casts.delete(targetId);
+      await Promise.all(
+        stale.map(async ([, cast]) => {
+          try {
+            await cdp.call("Target.detachFromTarget", { sessionId: cast.sessionId });
+          } catch {
+            // the browser is already gone, or the session was never attached
+          }
+          cdp.releaseSession(cast.sessionId);
+        }),
+      );
     },
 
-    closeAll() {
+    async closeAll() {
       closed = true;
-      // Detach first. Releasing alone stops the shim claiming the session while
-      // Chrome is still streaming to it, so every frame in flight is forwarded
-      // to the harness — into the buffer drainEvents() hands to agents, which is
-      // the exact leak the claim exists to prevent.
-      for (const cast of casts.values()) {
-        cdp.call("Target.detachFromTarget", { sessionId: cast.sessionId }).catch(() => {});
-        cdp.releaseSession(cast.sessionId);
-      }
+      // Detach first, then release. Releasing alone stops the shim claiming the
+      // session while Chrome is still streaming to it, so every frame in flight
+      // is forwarded to the harness — into the buffer drainEvents() hands to
+      // agents, which is the exact leak the claim exists to prevent.
+      await Promise.all(
+        [...casts.values()].map(async (cast) => {
+          try {
+            await cdp.call("Target.detachFromTarget", { sessionId: cast.sessionId });
+          } catch {
+            // the browser is already gone, or the session was never attached
+          }
+          cdp.releaseSession(cast.sessionId);
+        }),
+      );
       casts.clear();
     },
   };
@@ -219,24 +243,49 @@ async function captureCard(cdp, targetId, pool) {
   }
 }
 
-function json(response, status, body) {
+function json(response, status, body, { close = false } = {}) {
   const payload = JSON.stringify(body);
   response.writeHead(status, {
     "content-type": "application/json",
     "content-length": Buffer.byteLength(payload),
     "cache-control": "no-store",
+    ...(close ? { connection: "close" } : {}),
   });
   response.end(payload);
 }
 
+// The server is loopback, but a page in the agent's own browser can reach it,
+// so any caller can stream as much as it likes unless we bound it. 1 MiB is
+// enough for a generous space name; anything bigger is a misuse.
+const MAX_BODY_BYTES = 1 * 1024 * 1024;
+
 async function readBody(request) {
   const chunks = [];
-  for await (const chunk of request) chunks.push(chunk);
+  let total = 0;
+  for await (const chunk of request) {
+    total += chunk.length;
+    if (total > MAX_BODY_BYTES) {
+      // Stop consuming the rest. The connection stays open until the client
+      // finishes sending — once the response is written and the client has
+      // nothing more to say, server.close() can finish. Do NOT destroy()
+      // here: that resets the TCP connection before the 413 has been
+      // delivered, and undici reads it as a transport error.
+      throw new ResponseError(413, "request body too large");
+    }
+    chunks.push(chunk);
+  }
   if (chunks.length === 0) return {};
   try {
     return JSON.parse(Buffer.concat(chunks).toString("utf8"));
   } catch {
     return {};
+  }
+}
+
+class ResponseError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
   }
 }
 
@@ -250,6 +299,21 @@ export async function startSpacesServer(shim) {
   const pool = createCastPool(cdp);
 
   const server = createServer(async (request, response) => {
+    try {
+      await route(request, response);
+    } catch (error) {
+      if (error instanceof ResponseError) {
+        // 413 leaves a request body the client may still be sending. Telling
+        // the client to close keeps server.close() from waiting on a half-open
+        // socket until the client's keep-alive timeout fires.
+        json(response, error.status, { error: error.message }, { close: error.status === 413 });
+        return;
+      }
+      json(response, 500, { error: "internal error" });
+    }
+  });
+
+  async function route(request, response) {
     // Bound to loopback, but a page in the agent's own browser can still reach
     // it, so only same-origin callers get to act.
     const origin = request.headers.origin;
@@ -342,14 +406,14 @@ export async function startSpacesServer(shim) {
     }
 
     json(response, 404, { error: "not found" });
-  });
+  }
 
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   return {
     port: server.address().port,
-    close: () => {
-      pool.closeAll();
-      server.close();
+    close: async () => {
+      await pool.closeAll();
+      await new Promise((resolve) => server.close(resolve));
     },
   };
 }

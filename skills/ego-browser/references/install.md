@@ -75,7 +75,7 @@ The browser persists between invocations — each heredoc is its own short-lived
 
 #### How Linux differs from the macOS app
 
-- **`listTabs` is browser-wide**, not per task space. Task spaces still work (own tabs, ownership, `switch` / `claim` / `handOff` / `complete`), but CDP cannot place a tab in a chosen window, so per-space tab lists are not reproducible.
+- **`listTabs` is scoped to the selected space** — each task space reports only its own tabs, the way the macOS app does. (The Spaces overview deliberately reads `Target.getTargets` directly, since it needs every space's tabs.)
 - **Spaces are isolated, but their login state is a copy.** Each space gets its own cookie jar, seeded from yours when the space is created — so your logins are there, but a login made inside one space does not appear in the others, and `localStorage` / IndexedDB / service workers are not carried at all.
 - **Snapshot content is rebuilt** from `DOMSnapshot.captureSnapshot`. Refs (`@N`) are exact — they are real CDP `backendNodeId`s — but the tree's wording differs from the native snapshot.
 
@@ -99,9 +99,9 @@ command -v ego-browser
 Once the command exists, verify the runtime with a minimal heredoc:
 
 ```bash
-ego-browser nodejs <<'EOF'
+ego-browser <<'JS'
 console.log('ego-browser ready')
-EOF
+JS
 ```
 
 Printing `ego-browser ready` means the environment is ready.
