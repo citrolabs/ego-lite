@@ -79,7 +79,7 @@ case "$mode" in
 		;;
 	balanced)
 		log "Launching ego lite with Skia Graphite disabled; WebGL remains available."
-		set -- --disable-skia-graphite
+		set -- --disable-features=SkiaGraphite
 		;;
 	low-power)
 		log "Launching ego lite with WebGL disabled; WebGL pages and visual agent overlays may be unavailable."

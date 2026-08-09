@@ -17,7 +17,7 @@ Available modes:
 | Mode | Chromium flag | Trade-off |
 |---|---|---|
 | `normal` | none | Normal ego lite behavior |
-| `balanced` | `--disable-skia-graphite` | Keeps WebGL available but falls back from the Graphite renderer |
+| `balanced` | `--disable-features=SkiaGraphite` | Keeps WebGL available but falls back from the Graphite renderer |
 | `low-power` | `--disable-webgl` | Largest measured GPU reduction; WebGL pages and ego lite visual agent overlays may be unavailable |
 | `software` | `--disable-gpu` | Troubleshooting only; shifts rendering work to the CPU and disables hardware video acceleration |
 
@@ -32,7 +32,7 @@ The following 12-sample averages were recorded on ego lite `0.4.6.12`, Chromium 
 | Mode | Average GPU utilization |
 |---|---:|
 | `normal` | `77.7%` |
-| `balanced` | `52.8%` |
+| `balanced` | `46.9%` |
 | `low-power` | `24.2%` |
 | `software` | `33.9%` |
 

@@ -60,7 +60,7 @@ async function runLauncher(mode, options) {
 }
 
 for (const [mode, flag] of [
-  ["balanced", "--disable-skia-graphite"],
+  ["balanced", "--disable-features=SkiaGraphite"],
   ["low-power", "--disable-webgl"],
   ["software", "--disable-gpu"],
 ]) {
