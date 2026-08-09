@@ -1,0 +1,150 @@
+:root {
+  color-scheme: light dark;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  width: 330px;
+  margin: 0;
+  color: #16181d;
+  background: #f5f6f8;
+}
+
+main {
+  padding: 18px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+h1,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.eyebrow {
+  margin-bottom: 2px;
+  color: #6b7280;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.badge {
+  flex: none;
+  padding: 5px 9px;
+  border-radius: 999px;
+  color: #2459b3;
+  background: #e6efff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.intro {
+  margin: 12px 0 14px;
+  color: #626975;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+#modes {
+  display: grid;
+  gap: 8px;
+}
+
+button {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 3px 12px;
+  padding: 11px 12px;
+  border: 1px solid #d9dde5;
+  border-radius: 12px;
+  color: inherit;
+  background: #ffffff;
+  text-align: left;
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: #8fb4f4;
+  background: #f7faff;
+}
+
+button[aria-pressed="true"] {
+  border-color: #3977dd;
+  box-shadow: 0 0 0 1px #3977dd;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.mode-name {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.mode-detail {
+  grid-column: 1 / -1;
+  color: #69717e;
+  font-size: 12px;
+}
+
+.mode-result {
+  align-self: center;
+  color: #3977dd;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+#status {
+  min-height: 18px;
+  margin-top: 12px;
+  color: #626975;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+#status.error {
+  color: #b42318;
+}
+
+@media (prefers-color-scheme: dark) {
+  body {
+    color: #f4f6f8;
+    background: #181a1f;
+  }
+
+  .eyebrow,
+  .intro,
+  .mode-detail,
+  #status {
+    color: #aeb4bf;
+  }
+
+  .badge {
+    color: #b9d2ff;
+    background: #263b61;
+  }
+
+  button {
+    border-color: #3b3f48;
+    background: #24272d;
+  }
+
+  button:hover {
+    border-color: #5f8edc;
+    background: #292e37;
+  }
+}

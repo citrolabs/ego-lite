@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ego GPU Mode</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">ego lite</p>
+          <h1>GPU 模式</h1>
+        </div>
+        <span id="current-mode" class="badge">读取中</span>
+      </header>
+
+      <p class="intro">
+        选择后会结束正在运行的 Agent 任务，保存设置并自动重启浏览器。
+      </p>
+
+      <section id="modes" aria-label="GPU 模式">
+        <button type="button" data-mode="normal">
+          <span class="mode-name">正常</span>
+          <span class="mode-detail">原始渲染配置</span>
+        </button>
+        <button type="button" data-mode="balanced">
+          <span class="mode-name">均衡</span>
+          <span class="mode-detail">关闭 Graphite，保留 WebGL</span>
+          <span class="mode-result">实测约 46.9%</span>
+        </button>
+        <button type="button" data-mode="low-power">
+          <span class="mode-name">低功耗</span>
+          <span class="mode-detail">关闭 WebGL，部分视觉功能不可用</span>
+          <span class="mode-result">实测约 24.2%</span>
+        </button>
+        <button type="button" data-mode="software">
+          <span class="mode-name">软件渲染</span>
+          <span class="mode-detail">排障用，会增加 CPU 负载</span>
+          <span class="mode-result">实测约 33.9%</span>
+        </button>
+      </section>
+
+      <p id="status" role="status"></p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

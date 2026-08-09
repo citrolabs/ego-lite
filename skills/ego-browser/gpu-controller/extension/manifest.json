@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "ego GPU Mode",
+  "version": "0.1.0",
+  "description": "Switch ego lite graphics compatibility modes from the browser toolbar.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAqW4a2IVMuVH1LK/arPNdBDXFOBbJfsV9nNEu3JAYNcPXTIy7zUOBKKubezuCVy5/1JTYIkIg4fwbbCO9NMh/i2Gl1jqshat02qWhw9uPeJ6YHjN8XZ1tkBjYIxb/qShtVWrUiXYgFBBD9z6tmPXj4KCFigj+l10pR3oxkzPYPmpJMCz7jK94PEsF/ze/+wVmjxYvutaZwPuY1PI3MKciVy0CqQneWSAuG5bmEsv8aExVKqW1w9mvfUuV1iaSrq2kxtP4JD4hRHNuBINQbfZwhmUggNsTPOr3g+5Q9o0jvqNoGBPsD0dmwYGp1tXfPjfZZdpRfOJ1AShEkqOanxq27wIDAQAB",
+  "permissions": ["nativeMessaging"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "ego GPU Mode",
+    "default_popup": "popup.html"
+  }
+}
