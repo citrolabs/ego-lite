@@ -15,6 +15,31 @@ type VideoRecorderOptions = {
 
 const FPS = 25;
 const MAX_STDERR_LENGTH = 64 * 1024;
+const BATCH_SHIM = /\.(?:cmd|bat)$/i;
+
+/**
+ * Map a spawn failure to guidance the caller can act on. ENOENT means nothing
+ * was found at the path; EINVAL on a .cmd/.bat means the file exists but
+ * Windows will not launch a batch shim directly (Node refuses it since the
+ * CVE-2024-27980 mitigation), which is easy to hit because package managers
+ * install ffmpeg that way and the ENOENT message points users at this path.
+ */
+function startupError(error: unknown, ffmpegPath: string) {
+  const code = (error as any)?.code;
+  if (code === "ENOENT") {
+    return new Error(
+      "FFmpeg executable was not found. Install ffmpeg or set EGO_BROWSER_FFMPEG_PATH.",
+      { cause: error },
+    );
+  }
+  if (code === "EINVAL" && BATCH_SHIM.test(ffmpegPath)) {
+    return new Error(
+      `FFmpeg path ${JSON.stringify(ffmpegPath)} is a batch shim, which cannot be launched directly. Point EGO_BROWSER_FFMPEG_PATH at the ffmpeg executable itself.`,
+      { cause: error },
+    );
+  }
+  return error;
+}
 
 export class VideoRecorder {
   private _options: VideoRecorderOptions;
@@ -83,13 +108,19 @@ export class VideoRecorder {
       this._tempOutputPath,
     ];
     const spawnProcess = this._options.spawnProcess ?? spawn;
-    this._process = spawnProcess(
+    const ffmpegPath =
       this._options.ffmpegPath ??
-        process.env.EGO_BROWSER_FFMPEG_PATH ??
-        "ffmpeg",
-      args,
-      { stdio: ["pipe", "ignore", "pipe"] },
-    );
+      process.env.EGO_BROWSER_FFMPEG_PATH ??
+      "ffmpeg";
+    try {
+      this._process = spawnProcess(ffmpegPath, args, {
+        stdio: ["pipe", "ignore", "pipe"],
+      });
+    } catch (error) {
+      // Windows refuses to launch a .cmd/.bat shim directly and reports EINVAL
+      // synchronously, so this never reaches the "error" event handled below.
+      throw startupError(error, ffmpegPath);
+    }
     this._exitPromise = new Promise((resolve) => {
       this._process.once("close", (code, signal) => resolve({ code, signal }));
       this._process.once("error", (error) => resolve({ error }));
@@ -108,13 +139,7 @@ export class VideoRecorder {
         this._process.once("error", reject);
       });
     } catch (error) {
-      if ((error as any)?.code === "ENOENT") {
-        throw new Error(
-          "FFmpeg executable was not found. Install ffmpeg or set EGO_BROWSER_FFMPEG_PATH.",
-          { cause: error },
-        );
-      }
-      throw error;
+      throw startupError(error, ffmpegPath);
     }
   }
 
@@ -142,6 +167,13 @@ export class VideoRecorder {
   }
 
   private async _stop() {
+    // start() never produced a process (it threw, and already reported why).
+    // Without this guard the missing stdin/exit promise would surface as a
+    // second, misleading "ffmpeg exited with code undefined".
+    if (!this._process) {
+      await this._removeTempOutput();
+      return;
+    }
     if (this._lastFrame && this._firstFrameTimestamp !== undefined) {
       const elapsed = Math.max(this._now() - this._lastFrameReceivedAt, 1000);
       const finalFrameNumber = Math.floor(

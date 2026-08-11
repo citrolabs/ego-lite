@@ -387,3 +387,69 @@ test("VideoRecorder explains how to configure a missing ffmpeg executable", asyn
     /FFmpeg executable was not found.*EGO_BROWSER_FFMPEG_PATH/,
   );
 });
+
+test("VideoRecorder explains a batch shim ffmpeg path rejected by the OS", async () => {
+  const { VideoRecorder } = await import("../dist/src/video-recorder.js");
+  const recorder = new VideoRecorder({
+    outputPath: "/tmp/recording.webm",
+    size: { width: 640, height: 480 },
+    ffmpegPath: "C:\\tools\\ffmpeg.cmd",
+    // Windows throws EINVAL synchronously out of spawn() for a .cmd/.bat
+    // target, so it never reaches the process "error" event.
+    spawnProcess() {
+      throw Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
+    },
+  });
+
+  await assert.rejects(
+    () => recorder.start(),
+    /ffmpeg\.cmd.*batch shim.*EGO_BROWSER_FFMPEG_PATH at the ffmpeg executable/s,
+  );
+});
+
+test("VideoRecorder reports a missing executable thrown synchronously", async () => {
+  const { VideoRecorder } = await import("../dist/src/video-recorder.js");
+  const recorder = new VideoRecorder({
+    outputPath: "/tmp/recording.webm",
+    size: { width: 640, height: 480 },
+    spawnProcess() {
+      throw Object.assign(new Error("spawn ffmpeg ENOENT"), { code: "ENOENT" });
+    },
+  });
+
+  await assert.rejects(
+    () => recorder.start(),
+    /FFmpeg executable was not found.*EGO_BROWSER_FFMPEG_PATH/,
+  );
+});
+
+test("VideoRecorder passes through an unrecognized spawn failure", async () => {
+  const { VideoRecorder } = await import("../dist/src/video-recorder.js");
+  const recorder = new VideoRecorder({
+    outputPath: "/tmp/recording.webm",
+    size: { width: 640, height: 480 },
+    ffmpegPath: "/usr/bin/ffmpeg",
+    spawnProcess() {
+      throw Object.assign(new Error("spawn EACCES"), { code: "EACCES" });
+    },
+  });
+
+  await assert.rejects(() => recorder.start(), /spawn EACCES/);
+});
+
+test("VideoRecorder stop after a failed start does not invent an exit code", async () => {
+  const { VideoRecorder } = await import("../dist/src/video-recorder.js");
+  const recorder = new VideoRecorder({
+    outputPath: "/tmp/recording.webm",
+    size: { width: 640, height: 480 },
+    ffmpegPath: "C:\\tools\\ffmpeg.cmd",
+    spawnProcess() {
+      throw Object.assign(new Error("spawn EINVAL"), { code: "EINVAL" });
+    },
+  });
+
+  await assert.rejects(() => recorder.start(), /batch shim/);
+  // The startup failure is the only error worth reporting; stopping a recorder
+  // that never started must not raise "ffmpeg exited with code undefined".
+  await recorder.stop();
+});
