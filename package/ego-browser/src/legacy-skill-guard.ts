@@ -6,7 +6,7 @@ type InstallTarget = Record<string, unknown>;
  * Globals removed when the agent-facing API moved to Playwright-style facades.
  * Keep this list as the single cleanup source for both embedded and direct-CLI runs.
  */
-const LEGACY_GLOBAL_HELPERS = [
+export const LEGACY_GLOBAL_HELPERS = [
   "click",
   "dblclick",
   "hover",

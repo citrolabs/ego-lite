@@ -126,8 +126,8 @@ EOF
 
 ## Runtime map
 
-- `page`: navigation and state (`goto`, `reload`, `url`, `title`, `info`), semantic locators, waits, `snapshot`, `screenshot`, `screencast`, `evaluate`, `keyboard`, `mouse`, downloads, and event draining.
-- `page.locator(selector)`: chaining and filtering; `first` / `nth` / `last`; click, hover, `dragTo`, `scrollIntoViewIfNeeded`, form, keyboard, upload, state-read, collection, element-evaluate, screenshot, and wait methods.
+- `page`: navigation and state (`goto`, `reload`, `url`, `title`, `info`), semantic locators, waits, `snapshot`, `screenshot`, `screencast`, `evaluate`, keyboard (`press`, `down`, `up`, `insertText`, `type`), mouse, downloads, and event draining.
+- `page.locator(selector)`: chaining and filtering; `first` / `nth` / `last`; click, hover, `dragTo`, `scrollIntoViewIfNeeded`, form, keyboard (`press`, `pressSequentially`), upload, state-read, collection, element-evaluate, screenshot, and wait methods.
 - `browser`: `listTabs`, `currentTab`, `switchTab`, `openOrReuseTab`, `closeTab`, `ensureRealTab`, `iframeTarget`.
 - `taskSpaces`: `list`, `switch`, `new`, `useOrCreate`, `claim`, `complete`, `handOff`, `takeOver`, `waitForAgentControl`.
 - `fetch.server` performs Node-side requests; `fetch.browser` performs requests in the current page origin. Use `cdp` only as an escape hatch.
