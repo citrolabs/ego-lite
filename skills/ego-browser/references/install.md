@@ -65,3 +65,36 @@ Once the environment is ready, return to the user's original task and continue w
 - **Download failed**: the script retries 3 times automatically; if it still fails, it's usually a network issue — have the user check their network and retry.
 - **Gatekeeper still blocks it**: the script already tries to strip quarantine; if the first launch is still blocked, have the user allow ego lite manually under System Settings → Privacy & Security.
 - **Command still unavailable after onboarding**: confirm `~/.local/bin` is on the PATH (see above); or have the user reopen ego lite, finish onboarding, and retry.
+
+### Chrome is detected but no profiles are importable
+
+If onboarding says **No importable browser data right now**, inspect the
+browser discovery result before deleting or resetting any ego lite data:
+
+```bash
+ego-browser import list
+```
+
+When the output detects Chrome but returns an empty profile list, for example
+`{"browser_source":"chrome",...,"profiles":[]}`, ego lite may not have
+permission to read Chrome's profile directory.
+
+On macOS:
+
+1. Open **System Settings → Privacy & Security → Full Disk Access**.
+2. Enable **ego lite**. If it is not listed, add
+   `/Applications/ego lite.app` with the `+` button.
+3. Fully quit Chrome and ego lite, then reopen ego lite so the permission takes
+   effect.
+4. Run `ego-browser import list` again. Continue only after the intended Chrome
+   profile appears in the result.
+
+Import one profile by its source directory name, such as `Default`:
+
+```bash
+ego-browser import --browser chrome --profile Default --no-default
+```
+
+Use `--overwrite` only when the user explicitly wants to replace an existing
+ego profile. A successful import returns `"success":true` and
+`"failure_reason":0`.
