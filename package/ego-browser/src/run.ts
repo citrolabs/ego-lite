@@ -7,6 +7,7 @@ import {
 import { formatCliLogValue } from "./format.js";
 import * as helpers from "./helpers.js";
 import { bufferOutput, flushSink, resetSink } from "./output-sink.js";
+import { reclaimIdleTaskSpaces } from "./taskspace-reclaim.js";
 
 type WritableLike = {
   write(chunk: string): unknown;
@@ -109,6 +110,13 @@ async function execute(code: string, stdout: WritableLike) {
   resetSink();
   const context = await executionContext();
   Object.assign(globalThis, context);
+  try {
+    await reclaimIdleTaskSpaces();
+  } catch (error) {
+    console.log(
+      `[ego-reclaim] warning: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   const names = Object.keys(context);
   const values = Object.values(context);
