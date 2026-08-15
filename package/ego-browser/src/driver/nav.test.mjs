@@ -16,6 +16,8 @@ import {
   switchTab,
 } from "../../dist/src/driver/nav.js";
 import { setOverrides, state } from "../../dist/src/state.js";
+import { waitForDocumentLoad } from "../../dist/src/driver/load.js";
+import { NavigationTimeoutError } from "../../dist/src/ego-errors.js";
 
 function withEgo(ego, fn) {
   const previous = globalThis.ego;
@@ -92,6 +94,41 @@ function withCdpRuntime(fn) {
       }
     });
 }
+
+
+test("waitForDocumentLoad constructs redacted NavigationTimeoutError on navigation timeout", async () => {
+  let now = 0;
+  const restore = setOverrides({
+    now: () => now,
+    sleep: async (ms) => { now += ms; },
+    cdpOverride: async (method) => {
+      if (method === "Page.getFrameTree") {
+        return { frameTree: { frame: { url: "https://example.com/loading" } } };
+      }
+      if (method === "Runtime.evaluate") {
+        return { result: { value: "loading" } };
+      }
+      return {};
+    },
+  });
+  try {
+    await assert.rejects(
+      () => waitForDocumentLoad({
+        timeout: 500,
+        navigationUrl: "https://example.com/next?token=secret#fragment",
+      }),
+      (error) => {
+        assert.ok(error instanceof NavigationTimeoutError);
+        assert.equal(error.code, "NAVIGATION_TIMEOUT");
+        assert.equal(error.context.url, "https://example.com/next");
+        assert.doesNotMatch(error.message, /secret|fragment/);
+        return true;
+      },
+    );
+  } finally {
+    restore();
+  }
+});
 
 test("listTabs throws on ego binding error objects", async () => {
   await withEgo(

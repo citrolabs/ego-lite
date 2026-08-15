@@ -1,7 +1,7 @@
 import { state } from "../state.js";
 import { cdp, runtimeValue } from "../cdp-eval.js";
 import { resolveHandle, releaseHandle } from "./element-ops.js";
-import { ElementResolutionError } from "../element-resolver.js";
+import { ElementResolutionError } from "../ego-errors.js";
 import { waitForDocumentLoad } from "./load.js";
 import { drainEvents } from "./observe.js";
 import { waitForBrowserEvent } from "../browser-runtime.js";

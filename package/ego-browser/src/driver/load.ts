@@ -1,9 +1,11 @@
 import { cdp, evaluate } from "../cdp-eval.js";
 import { state } from "../state.js";
+import { createNavigationTimeoutError } from "../ego-errors.js";
 
 export type WaitForLoadOptions = {
   timeout?: number;
   until?: "load" | "domcontentloaded";
+  navigationUrl?: string;
 };
 
 export async function waitForDocumentLoad(options: WaitForLoadOptions = {}) {
@@ -26,6 +28,9 @@ export async function waitForDocumentLoad(options: WaitForLoadOptions = {}) {
       return true;
     }
     await state.sleep(300);
+  }
+  if (options.navigationUrl !== undefined) {
+    throw createNavigationTimeoutError(options.navigationUrl, timeout);
   }
   return false;
 }

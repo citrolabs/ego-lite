@@ -64,6 +64,7 @@ src/
   helpers.ts             public Playwright-style facades plus internal helper glue
   browser-runtime.ts     bridge to globalThis.ego (CDP, sessions, events)
   element-resolver.ts    resolves @eN / CSS / XPath / ARIA targets
+  ego-errors.ts          typed error taxonomy (EgoError, mapCdpError, redactUrl)
   driver/
     pointer.ts           click, hover, drag, wheel, scrollIntoViewIfNeeded
     observe.ts           snapshot, screenshot, elementCenter

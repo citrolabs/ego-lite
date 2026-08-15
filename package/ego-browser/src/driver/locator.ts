@@ -1,8 +1,6 @@
 import { cdp, runtimeValue } from "../cdp-eval.js";
-import {
-  ElementResolutionError,
-  queryRoleLocatorBackendNodeIds,
-} from "../element-resolver.js";
+import { queryRoleLocatorBackendNodeIds } from "../element-resolver.js";
+import { ElementResolutionError } from "../ego-errors.js";
 import { queryAllExpression as buildQueryAllExpression } from "../locator-query.js";
 import { parseRef } from "../ref-map.js";
 import { state } from "../state.js";
