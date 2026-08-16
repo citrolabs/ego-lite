@@ -93,6 +93,15 @@ When passing a string that may create a new task space, the string should reflec
 
 **If the task space needs to be preserved after the task ends, keep only the tabs that need to be shown to the user.** Keep loose awareness of how many tabs are open — a quick `(await listTabs()).length` is enough; there's no need to spend a dedicated round just to check. When scratch tabs (search-result pages, cross-check pages, and other one-off pages) pile up, close them as you go rather than letting them all accumulate for the end. When finishing with `{ keep: true }` to leave pages for the user, clear out the remaining scratch tabs so only the pages worth showing stay open. Close a single tab with `await closeTab(targetId)` (`targetId` comes from `listTabs()` or an `openOrReuseTab` return value).
 
+**Browser profiles** — a user may have multiple ego lite browser profiles (e.g. work vs personal accounts), each with its own separate login state. A new task space defaults to the default profile. To target a specific profile:
+
+1. `const profiles = await ego.listProfiles()` — returns `{ profiles: [{ id, name, isDefault }, ...] }`. Match the user's requested profile by `name`.
+2. `const task = await ego.createTaskSpace(name, profileId)` — takes **positional** args, not an options object; `profileId` is the `id` from `listProfiles()` (e.g. `'Profile 7'`, or `'Default'`). `useOrCreateTaskSpace(name, { profileId })` does **not** support profile selection — it silently ignores a `profileId` option and always uses the default profile, so don't use it to target a non-default profile.
+3. Immediately select it — `await useOrCreateTaskSpace(task.id)` — so it becomes the active/visible space. Skipping this leaves whatever space was previously active shown to the user, even though the new space's backend record is already bound to the requested profile.
+4. Verify with `await listTaskSpaces()` that the space's `profileId`/`profileName` match what the user asked for before telling them it's ready.
+
+If the user asks to see or use a browser profile "already open" or a login state that isn't showing up, check `await ego.listProfiles()` and `await listTaskSpaces()` first — the tabs they mean are very likely sitting in a different profile than the task space currently in use.
+
 
 ### Control handoff
 
