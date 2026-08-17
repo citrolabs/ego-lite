@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { help, formatHelp } from "../dist/src/help-runtime.js";
+import { help, formatHelp, __setDocsForTests } from "../dist/src/help-runtime.js";
 
 // Regression test for GitHub issue #84: the runtime used to build its docs map
 // by reading its own source, which produced an empty map whenever the SDK was
@@ -40,6 +40,41 @@ test("formatHelp renders the signature for an embedded doc", () => {
   const doc = help({ click: () => {} }, "click");
   const text = formatHelp(doc);
   assert.ok(text.includes("click("), `expected signature in:\n${text}`);
+});
+
+test("help(name) falls back to the live function when embedded docs miss it", () => {
+  const live = async (selector, key = "Enter") => ({ selector, key });
+  const doc = help({ live }, "live");
+  assert.equal(typeof doc, "object");
+  assert.equal(doc.name, "live");
+  assert.ok(doc.signature.includes("live("));
+  assert.ok(doc.async);
+  assert.notEqual(doc, "Unknown helper: live");
+});
+
+test("help() lists live helpers when the embedded catalog is empty", () => {
+  __setDocsForTests("[]");
+  try {
+    const list = help({ click: () => {}, waitFor: async () => {} });
+    assert.ok(Array.isArray(list));
+    assert.equal(list.length, 2);
+    assert.ok(list.some((d) => d.name === "click"));
+    assert.ok(list.some((d) => d.name === "waitFor"));
+  } finally {
+    __setDocsForTests(null);
+  }
+});
+
+test("help(name) still reports unknown when the helper is not live", () => {
+  __setDocsForTests("[]");
+  try {
+    assert.equal(
+      help({}, "definitelyNotAHelper"),
+      "Unknown helper: definitelyNotAHelper",
+    );
+  } finally {
+    __setDocsForTests(null);
+  }
 });
 
 test("help works when the shipped bundle runs as an eval module", () => {

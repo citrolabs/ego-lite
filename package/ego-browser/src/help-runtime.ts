@@ -33,25 +33,17 @@ export function help(
 ): HelperDoc | HelperDoc[] | string {
   const docs = getDocsMap();
   if (names.length === 0) {
-    const all = [...docs.values()].filter((d) => d.name in helpers);
-    return all;
+    const fromDocs = [...docs.values()].filter((d) => d.name in helpers);
+    if (fromDocs.length > 0) return fromDocs;
+    return listFallbackDocs(helpers);
   }
   if (names.length === 1) {
-    const doc = docs.get(names[0]);
-    if (!doc) return `Unknown helper: ${names[0]}`;
+    const name = names[0];
+    const doc = docs.get(name) || fallbackDoc(name, helpers[name]);
+    if (!doc) return `Unknown helper: ${name}`;
     return doc;
   }
-  return names.map(
-    (n) =>
-      docs.get(n) || {
-        name: n,
-        signature: n,
-        description: null,
-        params: [],
-        returns: null,
-        async: false,
-      },
-  );
+  return names.map((n) => docs.get(n) || fallbackDoc(n, helpers[n]) || emptyDoc(n));
 }
 
 export function formatHelp(doc: HelperDoc): string {
@@ -93,5 +85,70 @@ function parseEmbeddedDocs(raw: string): HelperDoc[] {
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
+  }
+}
+
+function listFallbackDocs(helpers: Record<string, unknown>): HelperDoc[] {
+  return Object.keys(helpers)
+    .filter((name) => name !== "help" && typeof helpers[name] === "function")
+    .sort()
+    .map((name) => fallbackDoc(name, helpers[name]))
+    .filter((doc): doc is HelperDoc => Boolean(doc));
+}
+
+function fallbackDoc(name: string, value: unknown): HelperDoc | null {
+  if (typeof value !== "function") return null;
+  const src = Function.prototype.toString.call(value);
+  const isAsync = /^\s*async\b/.test(src);
+  const paramMatch =
+    src.match(/^(?:async\s+)?(?:function[\s\w$]*)?\s*\(([^)]*)\)/) ||
+    src.match(/^(?:async\s*)?\(([^)]*)\)\s*=>/);
+  const rawParams = paramMatch?.[1]?.trim() ?? "";
+  const paramNames = rawParams
+    ? rawParams
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean)
+    : [];
+  const params: ParamInfo[] = paramNames.map((part) => ({
+    name: part.replace(/^\.\.\./, "").replace(/\s*=[\s\S]*$/, "") || part,
+    type: null,
+    description: null,
+    optional: part.includes("=") || part.startsWith("..."),
+    rest: part.startsWith("..."),
+    default: null,
+  }));
+  const paramSig = paramNames.join(", ");
+  const returns = isAsync ? "Promise<...>" : null;
+  return {
+    name,
+    signature: `${name}(${paramSig})${returns ? ` → ${returns}` : ""}`,
+    description:
+      "Available helper. Embedded help docs were empty, so this signature was recovered from the live function.",
+    params,
+    returns,
+    async: isAsync,
+  };
+}
+
+function emptyDoc(name: string): HelperDoc {
+  return {
+    name,
+    signature: name,
+    description: null,
+    params: [],
+    returns: null,
+    async: false,
+  };
+}
+
+export function __setDocsForTests(raw: string | null): void {
+  if (raw === null) {
+    cache = null;
+    return;
+  }
+  cache = new Map();
+  for (const doc of parseEmbeddedDocs(raw)) {
+    cache.set(doc.name, doc);
   }
 }
