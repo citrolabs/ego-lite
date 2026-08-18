@@ -51,17 +51,45 @@ function shouldActivate(): boolean {
   return hasChrome();
 }
 
+function onBridgeMessage(data: string): void {
+  const cb = (globalThis.ego as Record<string, unknown>)?.onCDPMessage as
+    | ((msg: string) => void)
+    | undefined;
+  if (typeof cb === "function") cb(data);
+}
+
+function onBridgeClose(): void {
+  // The WS died (crash, kill, network blip). Drop both handles so the next
+  // ensureBridge() call respawns cleanly instead of reusing a dead bridge
+  // forever or leaking the old Chrome process.
+  bridge = null;
+  try {
+    instance?.process.kill("SIGTERM");
+  } catch {}
+  instance = null;
+}
+
 async function ensureBridge(): Promise<{ send: (m: string) => void }> {
   if (bridge) return bridge;
   try {
-    bridge = await connectLinuxBridge({ port: WS_PORT, timeoutMs: 1500 });
+    bridge = await connectLinuxBridge({
+      port: WS_PORT,
+      timeoutMs: 1500,
+      onMessage: onBridgeMessage,
+      onClose: onBridgeClose,
+    });
     return bridge;
   } catch {
     // No daemon — launch one
   }
   instance = await launchChrome({ headless: true });
   await new Promise((r) => setTimeout(r, 600));
-  bridge = await connectLinuxBridge({ port: instance.port, timeoutMs: 5000 });
+  bridge = await connectLinuxBridge({
+    port: instance.port,
+    timeoutMs: 5000,
+    onMessage: onBridgeMessage,
+    onClose: onBridgeClose,
+  });
   const cleanup = () => {
     try {
       bridge?.close();

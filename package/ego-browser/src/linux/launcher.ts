@@ -7,7 +7,7 @@
  * linux/ modules into globalThis.ego.
  */
 import { type ChildProcess, spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readlink, rm } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,12 +29,6 @@ export interface LauncherOptions {
   executablePath?: string;
   /** Extra CLI args passed to Chrome. */
   args?: string[];
-}
-
-export interface BrowserContext {
-  browserContextId: string;
-  name: string;
-  ownership: "agent" | "user";
 }
 
 export interface ChromeInstance {
@@ -65,12 +59,40 @@ function extractPort(stderr: string): number | null {
   return Number.isFinite(port) && port > 0 ? port : null;
 }
 
-/** Find a free ephemeral port by asking the kernel. */
-async function ephemeralPort(): Promise<number> {
-  // On Linux, --remote-debugging-port=0 tells Chrome to pick a free port and
-  // write it to stderr as `DevTools listening on ws://127.0.0.1:<PORT>/...`.
-  // We pass 0 to let Chrome choose.
-  return 0;
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Chrome's `--user-data-dir` uses a `SingletonLock` symlink (target
+ * `<hostname>-<pid>`) to detect a running instance for that profile. If a
+ * prior daemon was killed uncleanly (e.g. SIGKILL, or the parent process
+ * dying before its exit handlers ran), the lock can outlive it — the next
+ * launch against the same daemonised profile dir then stalls waiting on a
+ * process that no longer exists, tripping SPAWN_TIMEOUT_MS. Clear the lock
+ * up front when the pid it names is no longer alive.
+ */
+async function clearStaleSingletonLock(profileDir: string): Promise<void> {
+  const lockPath = join(profileDir, "SingletonLock");
+  let target: string;
+  try {
+    target = await readlink(lockPath);
+  } catch {
+    return;
+  }
+  const match = /-(\d+)$/.exec(target);
+  const pid = match ? Number(match[1]) : NaN;
+  if (Number.isFinite(pid) && isProcessAlive(pid)) return;
+  await Promise.all(
+    ["SingletonLock", "SingletonCookie", "SingletonSocket"].map((name) =>
+      rm(join(profileDir, name), { force: true }).catch(() => {}),
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -92,15 +114,18 @@ export async function launchChrome(
   await mkdir(CACHE_DIR, { recursive: true });
 
   const executable = options.executablePath ?? DEFAULT_EXECUTABLE;
-  const port = await ephemeralPort();
+  const profileDir = join(CACHE_DIR, "chrome-profile");
+  await clearStaleSingletonLock(profileDir);
 
+  // --remote-debugging-port=0 tells Chrome to pick a free ephemeral port
+  // itself and write it to stderr as `DevTools listening on ws://host:<PORT>/...`.
   const args: string[] = [
-    `--remote-debugging-port=${port}`,
+    `--remote-debugging-port=0`,
     "--ozone-platform-hint=auto",
     "--enable-features=UseOzonePlatform",
     "--no-first-run",
     "--disable-dev-shm-usage",
-    `--user-data-dir=${join(CACHE_DIR, "chrome-profile")}`,
+    `--user-data-dir=${profileDir}`,
     "--disable-gpu-sandbox", // common CI/Linux compat
     "--no-sandbox", // required in many container/CI envs
     ...(options.args ?? []),
@@ -169,31 +194,6 @@ export async function launchChrome(
       );
     });
   });
-}
-
-/**
- * Create a browser context (TaskSpace) via CDP `Target.createBrowserContext`.
- * Each context gets its own cookie jar and storage partition.
- */
-export async function createBrowserContext(
-  port: number,
-  name: string,
-): Promise<BrowserContext> {
-  const wsUrl = `ws://127.0.0.1:${port}/devtools/browser`;
-  // We use raw fetch to talk to the HTTP endpoint CDP provides.
-  // `Target.createBrowserContext` returns `{ browserContextId }`.
-  const resp = await fetch(`http://127.0.0.1:${port}/json/version`);
-  const version = (await resp.json()) as { webSocketDebuggerUrl?: string };
-  if (!version.webSocketDebuggerUrl) {
-    throw new Error(
-      `Chrome at port ${port} did not expose a browser-level WS endpoint`,
-    );
-  }
-  return {
-    browserContextId: name, // opaque id stored locally
-    name,
-    ownership: "agent",
-  };
 }
 
 /**

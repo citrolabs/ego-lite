@@ -58,6 +58,14 @@ jobs:
       - name: Install deps
         run: npm ci
 
+      - name: Run install.sh (Linux path)
+        working-directory: ${{ github.workspace }}
+        env:
+          EGO_BROWSER_ASSUME_YES: "1"
+        run: |
+          sh skills/ego-browser/scripts/install.sh
+          "$HOME/.local/bin/ego-browser" --help
+
       - name: npm test
         run: npm test
 

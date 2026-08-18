@@ -13,6 +13,10 @@ export interface LinuxBridgeTarget {
 export interface LinuxBridgeOptions {
   port?: number;
   timeoutMs?: number;
+  /** Called with each raw CDP message received on the WebSocket. */
+  onMessage?: (data: string) => void;
+  /** Called once when the WebSocket closes or errors after connecting. */
+  onClose?: () => void;
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
@@ -51,6 +55,12 @@ export async function connectLinuxBridge(
   }
 
   const ws = await connectWithTimeout(page.webSocketDebuggerUrl, timeoutMs);
+
+  ws.on("message", (data) => {
+    options.onMessage?.(data.toString());
+  });
+  ws.on("close", () => options.onClose?.());
+  ws.on("error", () => options.onClose?.());
 
   const send = (message: string): void => {
     if (ws.readyState !== ws.OPEN) {

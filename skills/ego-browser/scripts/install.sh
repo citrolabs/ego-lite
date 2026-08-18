@@ -319,12 +319,12 @@ warn_wayland() {
 
 ensure_chrome_linux() {
 	chrome_bin=$(find_chrome_binary || true)
-	if [ -n "$chrome_bin" ]; then
+	if [ -n "$chrome_bin" ] && "$chrome_bin" --version >/dev/null 2>&1; then
 		log "Found browser: $chrome_bin"
 		return 0
 	fi
 
-	log "No google-chrome, chromium-browser, or chromium binary found."
+	log "No working google-chrome, chromium-browser, or chromium binary found."
 	pkg_manager=$(detect_linux_pkg_manager || true)
 	if [ -z "$pkg_manager" ]; then
 		die "no supported package manager (apt/dnf/pacman/zypper) found; install Chrome or Chromium manually and re-run"
@@ -337,8 +337,9 @@ ensure_chrome_linux() {
 	install_chrome_linux "$pkg_manager"
 
 	chrome_bin=$(find_chrome_binary || true)
-	[ -n "$chrome_bin" ] ||
-		die "chromium install completed, but no browser binary was found on PATH"
+	if [ -z "$chrome_bin" ] || ! "$chrome_bin" --version >/dev/null 2>&1; then
+		die "chromium install completed, but no working browser binary was found on PATH (on Ubuntu, 'apt install chromium' may only provide a snap-forwarding stub; install Google Chrome from https://www.google.com/chrome/ or 'sudo snap install chromium' instead)"
+	fi
 	log "Found browser: $chrome_bin"
 }
 

@@ -36,6 +36,8 @@ EOF
 
 ### Linux (new)
 
+The CLI is built from source, so this requires a full clone of the `ego-lite` repo (not just the skill installed via `npx skills add`) — `package/ego-browser` must exist alongside `skills/`.
+
 The install script (Linux branch):
 
 - Detects your distro (`apt`/`dnf`/`pacman`/`zypper`).

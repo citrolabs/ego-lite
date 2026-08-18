@@ -56,7 +56,7 @@ npx skills add citrolabs/ego-lite
 
 The first time your agent runs a browser task, it walks you through installing the ego lite app.
 
-**Linux:** run `sh skills/ego-browser/scripts/install.sh` — it auto-detects `apt`/`dnf`/`pacman`/`zypper`, installs or finds Chrome/Chromium, builds the CLI, and creates `~/.local/bin/ego-browser`. Then:
+**Linux:** the CLI is built from source, so this needs a full clone of the repo (not just the skill added via `npx`): `git clone https://github.com/citrolabs/ego-lite && cd ego-lite`. Then run `sh skills/ego-browser/scripts/install.sh` — it auto-detects `apt`/`dnf`/`pacman`/`zypper`, installs or finds Chrome/Chromium, builds the CLI, and creates `~/.local/bin/ego-browser`. Then:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"

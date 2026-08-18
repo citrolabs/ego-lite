@@ -15,6 +15,9 @@ type TaskSpace = {
   createdBy?: string;
 };
 
+/** Resolved (not thrown) error shape consumed by helpers.ts' assertNoEgoError. */
+type EgoError = { error: string; error_code: string };
+
 let nextId = 1;
 const spaces = new Map<number, TaskSpace>();
 let activeId: number | null = null;
@@ -50,28 +53,28 @@ export class LinuxTaskSpaces {
     return space;
   }
 
-  async useTaskSpace(id: number): Promise<void> {
+  async useTaskSpace(id: number): Promise<void | EgoError> {
     const s = spaces.get(id);
     if (!s)
       return {
         error: `task space not found: ${id}`,
         error_code: "EGO_TASK_SPACE_NOT_FOUND",
-      } as unknown as void;
+      };
     if (s.ownership === "user") {
       return {
         error: "user control",
         error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
-      } as unknown as void;
+      };
     }
     activeId = id;
   }
 
-  async closeTaskSpace(): Promise<void> {
+  async closeTaskSpace(): Promise<void | EgoError> {
     if (activeId == null)
       return {
         error: "no active task space",
         error_code: "EGO_TASK_SPACE_NOT_SELECTED",
-      } as unknown as void;
+      };
     const s = spaces.get(activeId);
     if (s?.browserContextId) {
       try {
@@ -84,13 +87,13 @@ export class LinuxTaskSpaces {
     activeId = spaces.size ? [...spaces.keys()][0] : null;
   }
 
-  async claimTaskSpace(id: number, _name?: string): Promise<TaskSpace> {
+  async claimTaskSpace(id: number, _name?: string): Promise<TaskSpace | EgoError> {
     const s = spaces.get(id);
     if (!s)
       return {
         error: `task space not found: ${id}`,
         error_code: "EGO_TASK_SPACE_NOT_FOUND",
-      } as unknown as TaskSpace;
+      };
     s.ownership = "agent";
     activeId = id;
     return s;
