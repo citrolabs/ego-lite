@@ -34,7 +34,11 @@ export class LinuxTaskSpaces {
   async createTaskSpace(name: string): Promise<TaskSpace> {
     const id = nextId++;
     const taskId = name;
-    // Try to create a real BrowserContext; on failure fall back to in-memory
+    // Try to create a real BrowserContext; on failure fall back to in-memory.
+    // Note: true per-BrowserContext cookie isolation via Target.createBrowserContext
+    // is deferred — all task spaces currently share the daemon's default profile
+    // (same as macOS's current helper behavior where spaces are in-memory).
+    // Callers needing strict isolation should await a future CDP-backed impl.
     try {
       const bridge = await this.getBridge();
       void bridge;

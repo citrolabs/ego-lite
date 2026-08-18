@@ -359,7 +359,15 @@ build_ego_browser_package() {
 	require_command node
 	require_command npm
 
+	needs_build=0
 	if [ ! -f "$pkg_dir/dist/out/index.js" ]; then
+		needs_build=1
+	elif [ "$pkg_dir/src" -nt "$pkg_dir/dist/out/index.js" ] 2>/dev/null; then
+		needs_build=1
+	elif [ "$pkg_dir/package.json" -nt "$pkg_dir/dist/out/index.js" ] 2>/dev/null; then
+		needs_build=1
+	fi
+	if [ "$needs_build" -eq 1 ]; then
 		log "Building the ego-browser CLI (one-time) ..."
 		if [ ! -d "$pkg_dir/node_modules" ]; then
 			(cd "$pkg_dir" && npm ci) || die "npm ci failed in $pkg_dir"

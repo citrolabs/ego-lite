@@ -24,7 +24,6 @@ export class LinuxSnapshot {
   ) {}
 
   async snapshot(opts: SnapshotOptions = {}): Promise<SnapshotResult> {
-    void opts;
     void this.getBridge;
     const { cdp } = await import("../cdp-eval.js");
 
@@ -54,7 +53,11 @@ export class LinuxSnapshot {
             lines.push(`${role}${name ? ` "${name}"` : ""}`);
           }
         }
-        return { content: lines.join("\n"), refs };
+        let content = lines.join("\n");
+        if (opts.maxResultLength != null && content.length > opts.maxResultLength) {
+          content = content.slice(0, opts.maxResultLength);
+        }
+        return { content, refs };
       }
     } catch {}
 
@@ -68,7 +71,11 @@ export class LinuxSnapshot {
       }).then(
         (r: { result?: { value?: string } }) => r?.result?.value ?? "",
       )) as string;
-      return { content: html || "(empty page)", refs: [] };
+      let content = html || "(empty page)";
+      if (opts.maxResultLength != null && content.length > opts.maxResultLength) {
+        content = content.slice(0, opts.maxResultLength);
+      }
+      return { content, refs: [] };
     } catch {
       return { content: "(snapshot unavailable)", refs: [] };
     }

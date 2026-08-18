@@ -27,6 +27,7 @@ const WS_PORT = Number(process.env.EGO_LINUX_PORT ?? 9222);
 
 let instance: ChromeInstance | null = null;
 let bridge: { send: (m: string) => void; close: () => void } | null = null;
+let bridgePromise: Promise<{ send: (m: string) => void }> | null = null;
 let installed = false;
 
 function hasChrome(): boolean {
@@ -63,6 +64,7 @@ function onBridgeClose(): void {
   // ensureBridge() call respawns cleanly instead of reusing a dead bridge
   // forever or leaking the old Chrome process.
   bridge = null;
+  bridgePromise = null;
   try {
     instance?.process.kill("SIGTERM");
   } catch {}
@@ -71,43 +73,50 @@ function onBridgeClose(): void {
 
 async function ensureBridge(): Promise<{ send: (m: string) => void }> {
   if (bridge) return bridge;
-  try {
+  if (bridgePromise) return bridgePromise;
+  bridgePromise = (async (): Promise<{ send: (m: string) => void }> => {
+    try {
+      bridge = await connectLinuxBridge({
+        port: WS_PORT,
+        timeoutMs: 1500,
+        onMessage: onBridgeMessage,
+        onClose: onBridgeClose,
+      });
+      return bridge;
+    } catch {}
+    instance = await launchChrome({ headless: true });
+    await new Promise((r) => setTimeout(r, 600));
     bridge = await connectLinuxBridge({
-      port: WS_PORT,
-      timeoutMs: 1500,
+      port: instance.port,
+      timeoutMs: 5000,
       onMessage: onBridgeMessage,
       onClose: onBridgeClose,
     });
+    const cleanup = () => {
+      try {
+        bridge?.close();
+      } catch {}
+      try {
+        instance?.process.kill("SIGTERM");
+      } catch {}
+    };
+    process.once("exit", cleanup);
+    process.once("SIGINT", () => {
+      cleanup();
+      process.exit(130);
+    });
+    process.once("SIGTERM", () => {
+      cleanup();
+      process.exit(143);
+    });
     return bridge;
-  } catch {
-    // No daemon — launch one
+  })();
+  try {
+    return await bridgePromise;
+  } catch (e) {
+    bridgePromise = null;
+    throw e;
   }
-  instance = await launchChrome({ headless: true });
-  await new Promise((r) => setTimeout(r, 600));
-  bridge = await connectLinuxBridge({
-    port: instance.port,
-    timeoutMs: 5000,
-    onMessage: onBridgeMessage,
-    onClose: onBridgeClose,
-  });
-  const cleanup = () => {
-    try {
-      bridge?.close();
-    } catch {}
-    try {
-      instance?.process.kill("SIGTERM");
-    } catch {}
-  };
-  process.once("exit", cleanup);
-  process.once("SIGINT", () => {
-    cleanup();
-    process.exit(130);
-  });
-  process.once("SIGTERM", () => {
-    cleanup();
-    process.exit(143);
-  });
-  return bridge;
 }
 
 export async function installEgoLinux(): Promise<void> {
