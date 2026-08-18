@@ -1,4 +1,4 @@
-import { describe, it, afterEach } from "node:test";
+import { describe, it, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
@@ -8,17 +8,24 @@ describe("linux bridge", () => {
   let httpServer = null;
   let wss = null;
   let connections = [];
-  const PORT = 19223;
+  let PORT = 19223 + Math.floor(Math.random() * 8000);
 
   afterEach(async () => {
     for (const c of connections) c.close();
     connections.length = 0;
-    wss?.close();
-    wss = null;
+    if (wss) {
+      await new Promise((resolve) => wss.close(() => resolve()));
+      wss = null;
+    }
     if (httpServer) {
       await new Promise((resolve) => httpServer.close(() => resolve()));
       httpServer = null;
     }
+    await new Promise((r) => setTimeout(r, 50));
+  });
+
+  beforeEach(() => {
+    PORT = 19223 + Math.floor(Math.random() * 8000);
   });
 
   it("connects to a DevTools-like WebSocket target", async () => {
@@ -47,7 +54,6 @@ describe("linux bridge", () => {
     const bridge = await connectLinuxBridge({ port: PORT });
     bridge.send("hello");
 
-    // Give the message time to arrive
     await new Promise((r) => setTimeout(r, 100));
 
     assert.ok(received.includes("hello"));

@@ -91,7 +91,16 @@ export async function installEgoLinux(): Promise<void> {
 
   const ego: Record<string, unknown> = {
     sendCDPMessage(payload: string) {
-      void ensureBridge().then((b) => b.send(payload));
+      void ensureBridge()
+        .then((b) => b.send(payload))
+        .catch((e) => {
+          const cb = (globalThis.ego as Record<string, unknown>)
+            ?.onSendCDPMessageError as
+            | ((msg: string, code?: string) => void)
+            | undefined;
+          if (typeof cb === "function")
+            cb(e.message ?? String(e), "EGO_CDP_SEND_FAILED");
+        });
     },
     onCDPMessage: null as unknown as (msg: string) => void,
     onSendCDPMessageError: null as unknown as (
@@ -100,14 +109,79 @@ export async function installEgoLinux(): Promise<void> {
     ) => void,
 
     async listTabs() {
-      const b = await ensureBridge();
-      void b;
+      try {
+        await ensureBridge();
+      } catch {}
+      try {
+        const { request } = await import("node:http");
+        const port = instance?.port ?? WS_PORT;
+        const tabs: Array<{ targetId: string; title?: string; url?: string }> =
+          await new Promise((resolve, reject) => {
+            const req = request(`http://127.0.0.1:${port}/json`, (res) => {
+              let d = "";
+              res.on("data", (c: Buffer) => (d += c.toString()));
+              res.on("end", () => {
+                try {
+                  const arr = JSON.parse(d) as Array<{
+                    id?: string;
+                    targetId?: string;
+                    title?: string;
+                    url?: string;
+                    type?: string;
+                  }>;
+                  resolve(
+                    arr
+                      .filter((t) => t.type === "page" || !t.type)
+                      .map((t) => ({
+                        targetId: t.id ?? t.targetId ?? "",
+                        title: t.title ?? "",
+                        url: t.url ?? "",
+                      })),
+                  );
+                } catch (e) {
+                  reject(e);
+                }
+              });
+            });
+            req.on("error", () => resolve([]));
+            req.end();
+          });
+        if (tabs.length) return { tabs };
+      } catch {}
       return { tabs: [] };
     },
     async createTab(url: string) {
-      void url;
+      const { request } = await import("node:http");
+      const port = instance?.port ?? WS_PORT;
+      const qs = url ? `?${new URLSearchParams({ url }).toString()}` : "";
+      const tid: string = await new Promise<string>((resolve, reject) => {
+        const req = request(
+          {
+            hostname: "127.0.0.1",
+            port,
+            path: `/json/new${qs}`,
+            method: "PUT",
+          },
+          (res) => {
+            let d = "";
+            res.on("data", (c: Buffer) => (d += c.toString()));
+            res.on("end", () => {
+              try {
+                const j = JSON.parse(d) as { id?: string; targetId?: string };
+                resolve(j.id ?? j.targetId ?? "");
+              } catch (e) {
+                reject(e);
+              }
+            });
+          },
+        );
+        req.on("error", reject);
+        req.end();
+      }).catch(() => "");
+      if (tid) return { targetId: tid };
       const b = await ensureBridge();
       void b;
+      void url;
       return { targetId: "" };
     },
     async snapshot(opts: unknown) {
