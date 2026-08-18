@@ -19,15 +19,15 @@ export interface SnapshotResult {
 }
 
 export class LinuxSnapshot {
-  constructor(
-    private getBridge: () => Promise<{ send: (m: string) => void }>,
-  ) {}
+  constructor() {}
 
   async snapshot(opts: SnapshotOptions = {}): Promise<SnapshotResult> {
-    void this.getBridge;
     const { cdp } = await import("../cdp-eval.js");
 
     try {
+      try {
+        await cdp("Accessibility.enable", {});
+      } catch {}
       const ax = (await cdp("Accessibility.getFullAXTree", {})) as {
         nodes?: Array<{
           backendDOMNodeId?: number;
@@ -63,18 +63,18 @@ export class LinuxSnapshot {
 
     try {
       await cdp("DOM.getDocument", { depth: -1, pierce: true });
+      // Use maxResultLength as the single truncation budget (default to 250k to
+      // avoid unbounded pages when caller does not pass a limit).
+      const limit = opts.maxResultLength ?? 250_000;
       const html: string = (await cdp("Runtime.evaluate", {
-        expression:
-          "document.documentElement ? document.documentElement.outerHTML.slice(0, 4000) : ''",
+        expression: `document.documentElement ? document.documentElement.outerHTML.slice(0, ${limit}) : ''`,
         returnByValue: true,
         awaitPromise: false,
       }).then(
         (r: { result?: { value?: string } }) => r?.result?.value ?? "",
       )) as string;
       let content = html || "(empty page)";
-      if (opts.maxResultLength != null && content.length > opts.maxResultLength) {
-        content = content.slice(0, opts.maxResultLength);
-      }
+      if (content.length > limit) content = content.slice(0, limit);
       return { content, refs: [] };
     } catch {
       return { content: "(snapshot unavailable)", refs: [] };

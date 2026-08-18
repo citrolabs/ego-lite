@@ -63,7 +63,7 @@ export async function connectLinuxBridge(
   ws.on("error", () => options.onClose?.());
 
   const send = (message: string): void => {
-    if (ws.readyState !== ws.OPEN) {
+    if (ws.readyState !== 1) {
       throw new Error("WebSocket is not open");
     }
     ws.send(message);

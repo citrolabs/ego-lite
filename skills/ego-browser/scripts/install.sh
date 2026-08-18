@@ -362,7 +362,7 @@ build_ego_browser_package() {
 	needs_build=0
 	if [ ! -f "$pkg_dir/dist/out/index.js" ]; then
 		needs_build=1
-	elif [ "$pkg_dir/src" -nt "$pkg_dir/dist/out/index.js" ] 2>/dev/null; then
+	elif find "$pkg_dir/src" -type f -newer "$pkg_dir/dist/out/index.js" -print -quit 2>/dev/null | grep -q .; then
 		needs_build=1
 	elif [ "$pkg_dir/package.json" -nt "$pkg_dir/dist/out/index.js" ] 2>/dev/null; then
 		needs_build=1

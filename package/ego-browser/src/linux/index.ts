@@ -31,9 +31,13 @@ let bridgePromise: Promise<{ send: (m: string) => void }> | null = null;
 let installed = false;
 
 function hasChrome(): boolean {
-  const bin = process.env.EGO_CHROME_BIN ?? "/usr/bin/google-chrome";
+  const envBin = process.env.EGO_CHROME_BIN;
+  if (envBin && existsSync(envBin)) return true;
+  const bin = "/usr/bin/google-chrome";
   if (existsSync(bin)) return true;
+  // Google's .deb installs as google-chrome-stable; npx installs via skills use PATH
   for (const p of [
+    "/usr/bin/google-chrome-stable",
     "/usr/bin/chromium-browser",
     "/usr/bin/chromium",
     "/snap/bin/chromium",
@@ -47,7 +51,7 @@ function shouldActivate(): boolean {
   if (process.env.EGO_LINUX === "0") return false;
   if (process.env.EGO_LINUX === "1") return true;
   // Suppress during unit tests — helpers.test.mjs uses cdpOverride
-  if (process.env.CI === "1" && process.env.EGO_LINUX !== "1") return false;
+  if (process.env.CI && process.env.EGO_LINUX !== "1") return false;
   if (process.platform !== "linux") return false;
   return hasChrome();
 }
@@ -59,12 +63,20 @@ function onBridgeMessage(data: string): void {
   if (typeof cb === "function") cb(data);
 }
 
+let shutdownCleanup: (() => void) | null = null;
+
 function onBridgeClose(): void {
   // The WS died (crash, kill, network blip). Drop both handles so the next
   // ensureBridge() call respawns cleanly instead of reusing a dead bridge
   // forever or leaking the old Chrome process.
   bridge = null;
   bridgePromise = null;
+  if (shutdownCleanup) {
+    process.removeListener("exit", shutdownCleanup);
+    process.removeListener("SIGINT", shutdownCleanup as unknown as NodeJS.SignalsListener);
+    process.removeListener("SIGTERM", shutdownCleanup as unknown as NodeJS.SignalsListener);
+    shutdownCleanup = null;
+  }
   try {
     instance?.process.kill("SIGTERM");
   } catch {}
@@ -100,6 +112,7 @@ async function ensureBridge(): Promise<{ send: (m: string) => void }> {
         instance?.process.kill("SIGTERM");
       } catch {}
     };
+    shutdownCleanup = cleanup;
     process.once("exit", cleanup);
     process.once("SIGINT", () => {
       cleanup();
@@ -124,7 +137,7 @@ export async function installEgoLinux(): Promise<void> {
   if (!shouldActivate()) return;
 
   const taskSpaces = new LinuxTaskSpaces(() => ensureBridge());
-  const snapshot = new LinuxSnapshot(() => ensureBridge());
+  const snapshot = new LinuxSnapshot();
 
   const ego: Record<string, unknown> = {
     sendCDPMessage(payload: string) {
