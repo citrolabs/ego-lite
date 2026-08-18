@@ -193,7 +193,14 @@ export async function installEgoLinux(): Promise<void> {
                 }
               });
             });
-            req.on("error", () => resolve([]));
+            req.on("error", (err) => {
+              // Distinguish "no daemon" (ECONNREFUSED) from empty response;
+              // caller sees {tabs:[]} but stderr log aids doctor-linux triage.
+              if ((err as NodeJS.ErrnoException)?.code === "ECONNREFUSED") {
+                console.error(`[ego-linux] listTabs: no daemon on :${port} (${(err as Error).message})`);
+              }
+              resolve([]);
+            });
             req.end();
           });
         if (tabs.length) return { tabs };
