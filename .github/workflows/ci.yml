@@ -26,9 +26,47 @@ jobs:
       - run: npm test
       - run: npm run validate:site-skills
 
+  linux-headless:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: package/ego-browser
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package/ego-browser/package-lock.json
+
+      - name: Install Chrome
+        run: |
+          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] https://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq google-chrome-stable
+
+      - name: Verify Chrome
+        run: |
+          google-chrome-stable --version
+          which google-chrome-stable
+
+      - name: Run doctor-linux
+        run: node scripts/doctor-linux.mjs
+
+      - name: Install deps
+        run: npm ci
+
+      - name: npm test
+        run: npm test
+
+      - name: Validate site skills
+        run: npm run validate:site-skills
+
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: test
+    needs: [test, linux-headless]
     runs-on: ubuntu-latest
     permissions:
       contents: write

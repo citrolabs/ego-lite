@@ -3,6 +3,10 @@ import { writeFile } from "node:fs/promises";
 import { agentWorkspace, loadEnv } from "./env.js";
 import { browserCdp } from "./browser-runtime.js";
 
+// Linux polyfill: auto-installs globalThis.ego on Linux when Chrome is available.
+// Noop on macOS; safe to import unconditionally.
+import "./linux/index.js";
+
 loadEnv();
 
 export const NAME = process.env.EGO_BROWSER_NAME || "default";
