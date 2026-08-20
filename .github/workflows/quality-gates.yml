@@ -6,6 +6,7 @@ on:
       - ".github/workflows/quality-gates.yml"
       - "lefthook.yml"
       - "package/ego-browser/**"
+      - "skills/ego-browser/SKILL.md"
       - "skills/ego-browser/learnings/**"
   push:
     branches:
@@ -15,6 +16,7 @@ on:
       - ".github/workflows/quality-gates.yml"
       - "lefthook.yml"
       - "package/ego-browser/**"
+      - "skills/ego-browser/SKILL.md"
       - "skills/ego-browser/learnings/**"
 
 jobs:
@@ -72,4 +74,3 @@ jobs:
       - name: Validate site skills
         working-directory: package/ego-browser
         run: npm run validate:site-skills
-

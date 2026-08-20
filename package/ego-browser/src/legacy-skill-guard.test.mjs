@@ -1,12 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import {
+  LEGACY_GLOBAL_HELPERS,
   LEGACY_TASK_SPACE_REPLACEMENTS,
   STALE_SKILL_PREFIX,
   installLegacySkillGuards,
 } from "../dist/src/legacy-skill-guard.js";
 import { resetSink } from "../dist/src/output-sink.js";
+
+const SKILL_URL = new URL(
+  "../../../skills/ego-browser/SKILL.md",
+  import.meta.url,
+);
 
 const EXPECTED_TASK_SPACE_REPLACEMENTS = {
   listTaskSpaces: "taskSpaces.list()",
@@ -65,3 +73,36 @@ test("legacy skill guards cover only the removed task-space global surface", () 
   }
   resetSink();
 });
+
+test("the current skill examples do not call removed global helpers", () => {
+  const skill = readFileSync(fileURLToPath(SKILL_URL), "utf8");
+  const examples = executableCodeBlocks(skill);
+
+  assert.notEqual(examples, "", "SKILL.md must contain executable examples");
+
+  for (const helper of LEGACY_GLOBAL_HELPERS) {
+    const unqualifiedCall = new RegExp(
+      `(?<![\\w.])${escapeRegExp(helper)}(?=\\s*\\()`,
+      "g",
+    );
+    assert.doesNotMatch(
+      examples,
+      unqualifiedCall,
+      `SKILL.md must use the current facade instead of ${helper}(...)`,
+    );
+  }
+});
+
+function executableCodeBlocks(markdown) {
+  return [
+    ...markdown.matchAll(
+      /```(?:bash|js|javascript|ts|typescript)\n([\s\S]*?)```/g,
+    ),
+  ]
+    .map((match) => match[1])
+    .join("\n");
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
