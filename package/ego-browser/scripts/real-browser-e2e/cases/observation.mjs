@@ -82,12 +82,19 @@ export function observationCase() {
       "elementCenter reports missing elements"
     );
 
+    await page.setViewportSize({ width: 390, height: 844 });
+    const viewportInfo = await page.info();
+    assertEqual(viewportInfo.w, 390, "setViewportSize sets the exact CSS viewport width");
+    assertEqual(viewportInfo.h, 844, "setViewportSize sets the exact CSS viewport height");
+
     const screenshotPath = await page.screenshot({ path: undefined, fullPage: false });
     const screenshotStat = await stat(screenshotPath);
     assert(screenshotStat.size > 100, "screenshot writes a non-trivial png");
     const screenshotBuf = await readFile(screenshotPath);
     assertEqual(screenshotBuf[0], 137, "screenshot starts with PNG magic byte 137");
     assertEqual(screenshotBuf[1], 80, "screenshot has PNG header byte P (80)");
+    assertEqual(screenshotBuf.readUInt32BE(16), 390, "screenshot PNG width matches the CSS viewport");
+    assertEqual(screenshotBuf.readUInt32BE(20), 844, "screenshot PNG height matches the CSS viewport");
 
     const explicitPath = await page.screenshot({ path: explicitScreenshotPath, fullPage: false });
     assertEqual(explicitPath, explicitScreenshotPath, "screenshot returns explicit path");

@@ -54,6 +54,20 @@ test("formatCliLogValue documents page.url as asynchronous", () => {
   assert.match(parsed.helpers.page.url.example, /await page\.url\(\)/);
 });
 
+test("formatCliLogValue documents deterministic CSS viewport sizing", () => {
+  const formatted = formatCliLogValue({
+    helpers: { page: { setViewportSize() {} } },
+  });
+
+  const parsed = JSON.parse(formatted);
+  assert.equal(
+    parsed.helpers.page.setViewportSize.signature,
+    "page.setViewportSize(viewport) => Promise<void>",
+  );
+  assert.match(parsed.helpers.page.setViewportSize.description, /CSS pixels/);
+  assert.match(parsed.helpers.page.setViewportSize.example, /390.*844/);
+});
+
 test("formatCliLogValue documents ego.learnings as the site facade alias", () => {
   const formatted = formatCliLogValue({
     learnings: {

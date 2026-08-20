@@ -49,6 +49,15 @@ type OpenOrReuseTabOptions = {
 
 type TabTarget = string | { targetId: string };
 
+type ViewportSize = {
+  width: number;
+  height: number;
+};
+
+type ViewportObservation = ViewportSize & {
+  dpr: number;
+};
+
 /**
  * Navigate the current tab to a URL and, by default, wait for it to load.
  * @param {string} url Absolute or browser-supported URL to load.
@@ -102,6 +111,69 @@ export async function pageInfo() {
     });
   })()`;
   return JSON.parse(await evaluate(expression));
+}
+
+/**
+ * Set the current page viewport to exact CSS-pixel dimensions. Compensates for
+ * host display scaling when Chromium applies device metrics in device pixels.
+ * @param {{width:number,height:number}} viewport Positive integer CSS-pixel dimensions.
+ * @returns {Promise<void>}
+ */
+export async function setViewportSize(viewport: ViewportSize) {
+  const width = viewport?.width;
+  const height = viewport?.height;
+  if (
+    !Number.isInteger(width) ||
+    width <= 0 ||
+    !Number.isInteger(height) ||
+    height <= 0
+  ) {
+    throw new Error(
+      "page.setViewportSize requires positive integer width and height",
+    );
+  }
+
+  const requested = { width, height };
+  let metrics = requested;
+  let observed = await applyViewportMetrics(metrics);
+  if (viewportMatches(requested, observed)) return;
+
+  if (observed.width > 0 && observed.height > 0) {
+    metrics = {
+      width: Math.round((metrics.width * requested.width) / observed.width),
+      height: Math.round((metrics.height * requested.height) / observed.height),
+    };
+    observed = await applyViewportMetrics(metrics);
+    if (viewportMatches(requested, observed)) return;
+  }
+
+  throw new Error(
+    `page.setViewportSize requested ${width}x${height} CSS pixels but observed ${observed.width}x${observed.height} with devicePixelRatio ${observed.dpr}`,
+  );
+}
+
+async function applyViewportMetrics(metrics: ViewportSize) {
+  await cdp("Emulation.setDeviceMetricsOverride", {
+    ...metrics,
+    deviceScaleFactor: 1,
+    mobile: false,
+  });
+  return JSON.parse(
+    await evaluate(`JSON.stringify({
+      width: innerWidth,
+      height: innerHeight,
+      dpr: devicePixelRatio,
+    })`),
+  );
+}
+
+function viewportMatches(
+  requested: ViewportSize,
+  observed: ViewportObservation,
+) {
+  return (
+    observed.width === requested.width && observed.height === requested.height
+  );
 }
 
 /**

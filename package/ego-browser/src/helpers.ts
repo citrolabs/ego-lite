@@ -71,6 +71,7 @@ export {
 export {
   INTERNAL_URL_PREFIXES,
   pageInfo,
+  setViewportSize,
   listTabs,
   currentTab,
   switchTab,
@@ -693,6 +694,7 @@ function createPageFacade() {
       state.defaultTimeout = value;
     },
     goto: nav.goto,
+    setViewportSize: nav.setViewportSize,
     reload: async (options: any = {}) => {
       await cdp("Page.reload", { ignoreCache: Boolean(options.ignoreCache) });
       if (options.waitUntil === "commit") {
@@ -807,7 +809,9 @@ function createSiteFacade() {
 }
 
 const FACADE_HELP: Record<string, string> = {
-  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.getByText(text), page.getByLabel(text), page.getByPlaceholder(text), page.getByTestId(testId), page.setDefaultTimeout(ms), page.waitForEvent("download"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). waitForURL predicates receive URL objects and waitUntil defaults to load.',
+  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.setViewportSize({ width, height }) for an exact CSS-pixel viewport, page.locator(selector), page.getByText(text), page.getByLabel(text), page.getByPlaceholder(text), page.getByTestId(testId), page.setDefaultTimeout(ms), page.waitForEvent("download"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). waitForURL predicates receive URL objects and waitUntil defaults to load.',
+  "page.setViewportSize":
+    "page.setViewportSize(viewport): set an exact CSS pixels viewport with { width, height }, compensating for host display scaling. Returns Promise<void>.",
   locator:
     "page.locator(selector): returns a strict, auto-waiting locator facade with locator(), getByRole(), getByText(), filter(), first(), nth(index), last(), click(), hover(), dragTo(target), scrollIntoViewIfNeeded(), fill(value), clear(), press(key), check(), selectOption(value), textContent(), innerText(), innerHTML(), isVisible(), isEnabled(), getAttribute(name), screenshot(), count(), evaluate(fn, arg), evaluateAll(fn, arg), and waitFor(options). Narrow multiple matches; use first()/nth() only for confirmed legitimate duplicates.",
   browser:
