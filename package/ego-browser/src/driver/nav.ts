@@ -210,6 +210,8 @@ export async function openOrReuseTab(
 
 /**
  * Close a browser tab by target id, tab object, or the current tab when omitted.
+ * Refuses to close the last tab because doing so also destroys the task space;
+ * use taskSpaces.complete(..., { keep: false }) for that explicit lifecycle action.
  * @param {string|{targetId:string}} [target] Target id or tab-like object. Defaults to the current tab.
  * @returns {Promise<string>} Closed target id.
  */
@@ -221,6 +223,12 @@ export async function closeTab(target: TabTarget | undefined = undefined) {
       : targetIdFrom(target, "closeTab");
   if (!targetId) throw new Error("closeTab requires a targetId");
   currentTargetFrom(tabs, targetId, "closeTab");
+  if (tabs.length === 1) {
+    throw new Error(
+      "closeTab refuses to close the last tab because that would destroy the task space. " +
+        "Use taskSpaces.complete(nameOrId, { keep: false }) to close the task space explicitly.",
+    );
+  }
   await cdp("Target.closeTarget", { targetId });
   invalidateSession();
   if (state.preferredTargetId === targetId) {

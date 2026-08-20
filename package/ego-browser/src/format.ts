@@ -619,7 +619,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
   "browser.closeTab": {
     signature: "browser.closeTab(target?) => Promise<string>",
     description:
-      "Refresh the current tab list, validate, and close a tab by target id/object, or close the current tab when omitted.",
+      "Refresh the current tab list, validate, and close a tab by target id/object, or close the current tab when omitted. Refuses to close the last tab because that would destroy the task space.",
     params: [
       {
         name: "target",
@@ -714,7 +714,8 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
   },
   "taskSpaces.complete": {
     signature: "taskSpaces.complete(nameOrId, options) => Promise<object>",
-    description: "Finish a task space. options.keep is required.",
+    description:
+      "Finish a task space. options.keep is required; prefer keep:true unless the user explicitly asked to close or delete the space.",
     params: [
       {
         name: "nameOrId",
@@ -730,7 +731,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
       },
     ],
     returns: "Promise<object>",
-    example: "await taskSpaces.complete(task.id, { keep: false })",
+    example: "await taskSpaces.complete(task.id, { keep: true })",
   },
   "taskSpaces.handOff": {
     signature: "taskSpaces.handOff(nameOrId?) => Promise<object>",
