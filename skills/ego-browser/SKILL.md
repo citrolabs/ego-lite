@@ -64,6 +64,15 @@ Closing all tabs in a task space is equivalent to closing that task space.
 
 A task often takes multiple heredoc rounds to complete. Because the Node.js runtime exits after each heredoc and retains no state, normal working heredocs should start with an explicit call to `useOrCreateTaskSpace(nameOrId)` to reuse the same space — this lets you operate continuously and reuse tabs across rounds. The exception is resuming after a handoff: once the user confirms "continue" (through an Ask or in chat), start the next heredoc with `takeOverTaskSpace(nameOrId)` instead.
 
+`useOrCreateTaskSpace()` resolves to a task-space object, so you can read its `id`. `takeOverTaskSpace()` only restores control and resolves no value (`Promise<void>`); do not assign its result or read `task.id` from it. Keep the task-space id from the original task or pass it directly when resuming:
+
+```js
+const taskId = 3
+await takeOverTaskSpace(taskId)
+cliLog('resumed task space: ' + taskId)
+cliLog(await pageInfo())
+```
+
 `nameOrId` can be a task space name, numeric id, or digit-only numeric id string. String values match `name`/`taskId` first, then digit-only strings fall back to numeric id. Number values match existing numeric ids only; if no matching id exists, `useOrCreateTaskSpace` fails instead of creating a new space.
 
 Use a short name for the active user goal when creating a new task space. Keep reusing that task space for follow-up questions, corrections, refinements, re-checks, and result validation, even if you previously thought the task was complete. Choose a new task space only when the user clearly starts a separate, unrelated goal. Prefer using the numeric `id` returned by `useOrCreateTaskSpace` (for example, `task.id`) to resume a known task in later rounds and avoid name collisions.
