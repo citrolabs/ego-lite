@@ -224,6 +224,35 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal("elementEval" in context, false);
 });
 
+test("getByRole treats a nullish name as no name filter", () => {
+  const page = helperContext().page;
+  // A computed name that came out undefined/null must match all elements of the
+  // role (Playwright semantics), not the literal string "undefined"/"null".
+  assert.equal(
+    page.getByRole("button", { name: undefined }).selector,
+    "loc=role:button",
+  );
+  assert.equal(
+    page.getByRole("button", { name: null }).selector,
+    "loc=role:button",
+  );
+  // A real name still filters.
+  assert.equal(
+    page.getByRole("button", { name: "Save" }).selector,
+    'loc=role:button[name="Save"]',
+  );
+});
+
+test("filter treats a nullish hasText as no filter", () => {
+  const filter = helperContext()
+    .page.locator("#target")
+    .filter({ hasText: undefined }).selector;
+  assert.deepEqual(
+    JSON.parse(decodeURIComponent(filter.slice("internal:filter:".length))),
+    { base: "#target" },
+  );
+});
+
 test("page.url reads the current URL asynchronously", async () => {
   const restore = setOverrides({
     cdpOverride: async (method) => {
