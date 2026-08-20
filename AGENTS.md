@@ -27,6 +27,7 @@ Task spaces are isolated browsing contexts with an ownership model (`agent` / `u
 - `useOrCreateTaskSpace(nameOrId)` reuses an agent-owned space or creates a new one; it no longer auto-claims user-owned spaces. Use `claimTaskSpace(nameOrId)` to take ownership of a user-owned space. Ids are numeric; prefer `task.id` over names across rounds.
 - `switchTaskSpace` requires agent ownership; `newTaskSpace` creates; `completeTaskSpace(nameOrId, { keep })` finishes (`keep` is mandatory).
 - Control handoff: `handOffTaskSpace` / `takeOverTaskSpace` / `waitForAgentControl`.
+- Idle reclamation (`src/taskspace-reclaim.ts` + `src/taskspace-activity.ts`): `run.ts` `execute()` runs `reclaimIdleTaskSpaces()` once before the agent script, auto-closing agent-owned task spaces left idle by earlier sessions so their renderer processes don't pile up. `helpers.ts` `selectTaskSpace` touches a per-space timestamp (persisted atomically to `EGO_RECLAIM_STATE_FILE`, default `~/.local/share/ego/reclaim-state.json`). First-sight seeding skips spaces with no record (created before this feature shipped, or in use by a concurrent session) — they only become reclaimable after the idle window elapses. Only `ownership === "agent"` is ever reclaimed. Env: `EGO_RECLAIM_IDLE_S` (default 7200s = 2h), `EGO_RECLAIM_MAX_SPACES` (default 8), `EGO_RECLAIM_DISABLE` (1/true). Tests: `src/taskspace-{activity,reclaim}.test.mjs`.
 
 ## Key Directories
 - `package/ego-browser/src/` — runtime, helpers, resolver, drivers, learning subsystem.

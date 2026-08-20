@@ -23,6 +23,8 @@ import {
   siteSkillsForUrl as siteSkillsForUrlCore,
   wrapBrowserTool,
 } from "./learning/index.js";
+import { reclaimConfig, touchTaskSpace } from "./taskspace-activity.js";
+import { reclaimIdleTaskSpaces } from "./taskspace-reclaim.js";
 
 export { NAME } from "./state.js";
 export { cdp, evaluate } from "./cdp-eval.js";
@@ -191,6 +193,11 @@ export async function newTaskSpace(name) {
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
 export async function useOrCreateTaskSpace(nameOrId) {
+  try {
+    await reclaimIdleTaskSpaces();
+  } catch {
+    // Idle reclamation must never block task-space use.
+  }
   const spaces = await listTaskSpaces();
   const existing = findMatchingTaskSpace(spaces, nameOrId);
   if (!existing) {
@@ -247,6 +254,13 @@ async function selectTaskSpace(ego, space, op: string) {
     throw new Error(`${op} requires ego.useTaskSpace`);
   }
   assertNoEgoError(await ego.useTaskSpace(taskSpaceNumericId(space, op)), op);
+  if (isAgentOwned(space.ownership) && !reclaimConfig().disabled) {
+    try {
+      await touchTaskSpace(taskSpaceNumericId(space, op));
+    } catch {
+      // Activity tracking is best-effort; never block a select.
+    }
+  }
   return space;
 }
 
