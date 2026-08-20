@@ -1,0 +1,12 @@
+# Keep the working tree in LF on every platform. Without this, Git for Windows
+# checks files out as CRLF (core.autocrlf defaults to true), which makes
+# `prettier --check` fail on files the contributor never touched, and would ship
+# CRLF into scripts/install.sh.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.gif binary
+*.ico binary
+*.dmg binary
+*.zip binary

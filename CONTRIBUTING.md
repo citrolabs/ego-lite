@@ -94,6 +94,23 @@ ego-lite/
 
 > All commands run from `package/ego-browser/`.
 
+> **Platforms**: the commands below work on macOS, Linux, and Windows. The
+> `npm run e2e` suite is the exception — it drives the real `ego-browser`
+> command shipped inside the ego lite app, which is macOS-only today, so it
+> skips itself elsewhere. Git hooks are run by lefthook through Git Bash on
+> Windows, which Git for Windows already provides.
+>
+> On Windows, `.claude/skills/ego-browser` and `.codex/skills/ego-browser` are
+> symlinks into `skills/ego-browser`. Git for Windows defaults to
+> `core.symlinks=false` and checks them out as 24-byte text files, so agents
+> discover a file instead of the skill directory. Enable symlinks once, then
+> restore them:
+>
+> ```bash
+> git config core.symlinks true
+> git checkout -- .claude/skills/ego-browser .codex/skills/ego-browser
+> ```
+
 ```bash
 # 1. Install dependencies
 cd package/ego-browser

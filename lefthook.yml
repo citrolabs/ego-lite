@@ -14,12 +14,12 @@ pre-commit:
   commands:
     branch-up-to-date:
       run: |
-        git fetch --quiet origin dev 2>/dev/null || { echo "⚠ skip branch-freshness check: cannot fetch origin/dev (offline?)"; exit 0; }
+        git fetch --quiet origin dev 2>/dev/null || { echo '⚠ skip branch-freshness check: cannot fetch origin/dev (offline?)'; exit 0; }
         if git merge-base --is-ancestor FETCH_HEAD HEAD; then
           exit 0
         fi
-        echo "✗ Your branch is behind origin/dev — sync before committing:"
-        echo "    git fetch origin dev && git rebase origin/dev   # or: git merge origin/dev"
+        echo '✗ Your branch is behind origin/dev — sync before committing:'
+        echo '    git fetch origin dev && git rebase origin/dev   # or: git merge origin/dev'
         exit 1
     style-check:
       run: |
@@ -45,4 +45,5 @@ pre-commit:
     e2e-test:
       run: |
         git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
+        uname -s | grep -q Darwin || { echo 'skip e2e: the real-browser suite needs the macOS ego lite app'; exit 0; }
         cd package/ego-browser && npm run e2e

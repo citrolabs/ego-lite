@@ -20,7 +20,10 @@ export function agentWorkspace() {
 
 export function resolvePath(path) {
   if (path.startsWith("~")) {
-    return resolve(process.env.HOME || process.env.USERPROFILE || ".", path.slice(1));
+    // Strip the leading separator: resolve() treats "/Downloads" as absolute and
+    // would drop the home base entirely (on every platform, not just Windows).
+    const rest = path.slice(1).replace(/^[\\/]+/, "");
+    return resolve(process.env.HOME || process.env.USERPROFILE || ".", rest);
   }
   return resolve(path);
 }
@@ -36,7 +39,10 @@ export function loadEnvFile(path) {
     }
     const index = line.indexOf("=");
     const key = line.slice(0, index).trim();
-    const value = line.slice(index + 1).trim().replace(/^['"]|['"]$/g, "");
+    const value = line
+      .slice(index + 1)
+      .trim()
+      .replace(/^['"]|['"]$/g, "");
     if (key && process.env[key] === undefined) {
       process.env[key] = value;
     }
