@@ -11,7 +11,7 @@ import {
 import { drainEvents, screenshot } from "../../dist/src/driver/observe.js";
 import { setOverrides } from "../../dist/src/state.js";
 
-function withCdpRuntime(fn) {
+function withCdpRuntime(fn, { evaluate } = {}) {
   const previous = globalThis.ego;
   const sent = [];
   const runtime = {
@@ -36,7 +36,9 @@ function withCdpRuntime(fn) {
       } else if (request.method === "Page.captureScreenshot") {
         result = { data: Buffer.from("png").toString("base64") };
       } else if (request.method === "Runtime.evaluate") {
-        result = { result: { value: "1" } };
+        result = {
+          result: { value: evaluate?.(request.params.expression) ?? "1" },
+        };
       }
       queueMicrotask(() =>
         runtime.onCDPMessage(JSON.stringify({ id: request.id, result })),
@@ -61,6 +63,80 @@ function withCdpRuntime(fn) {
       }
     });
 }
+
+// A scrolled page: the viewport sits 1500px down the document, so a clip pinned
+// to 0,0 would ask for content the compositor has not rasterized.
+const scrolledPageInfo = {
+  url: "https://example.com/",
+  title: "Example",
+  w: 800,
+  h: 600,
+  sx: 40,
+  sy: 1500,
+  pw: 800,
+  ph: 3000,
+};
+
+function scrolledPageMetrics(expression) {
+  return expression.includes("devicePixelRatio")
+    ? "1"
+    : JSON.stringify(scrolledPageInfo);
+}
+
+test("screenshot clips the viewport to the current scroll offset", async () => {
+  const restore = setOverrides({ async writeFile() {} });
+  try {
+    await withCdpRuntime(
+      async ({ sent }) => {
+        await screenshot({ path: "/tmp/ego-browser-scrolled-shot.png" });
+
+        const shot = sent.find(
+          (request) => request.method === "Page.captureScreenshot",
+        );
+        assert.equal(shot.params.captureBeyondViewport, false);
+        assert.deepEqual(shot.params.clip, {
+          x: scrolledPageInfo.sx,
+          y: scrolledPageInfo.sy,
+          width: scrolledPageInfo.w,
+          height: scrolledPageInfo.h,
+          scale: 1,
+        });
+      },
+      { evaluate: scrolledPageMetrics },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("screenshot keeps fullPage captures anchored to the document origin", async () => {
+  const restore = setOverrides({ async writeFile() {} });
+  try {
+    await withCdpRuntime(
+      async ({ sent }) => {
+        await screenshot({
+          path: "/tmp/ego-browser-fullpage-shot.png",
+          fullPage: true,
+        });
+
+        const shot = sent.find(
+          (request) => request.method === "Page.captureScreenshot",
+        );
+        assert.equal(shot.params.captureBeyondViewport, true);
+        assert.deepEqual(shot.params.clip, {
+          x: 0,
+          y: 0,
+          width: scrolledPageInfo.pw,
+          height: scrolledPageInfo.ph,
+          scale: 1,
+        });
+      },
+      { evaluate: scrolledPageMetrics },
+    );
+  } finally {
+    restore();
+  }
+});
 
 test("screenshot skips page metric JavaScript while a native dialog is pending", async () => {
   const writes = [];
