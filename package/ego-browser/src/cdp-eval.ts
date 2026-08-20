@@ -10,6 +10,19 @@ class TimeoutError extends Error {}
  * @returns {Promise<object>} CDP result object.
  */
 export async function cdp(method, params: any = {}, sessionId = undefined) {
+  // If sessionId is not passed as the third argument but sits inside params,
+  // extract it so the command routes to the intended target instead of
+  // silently falling back to the page session (issue #199).
+  if (
+    sessionId === undefined &&
+    params &&
+    typeof params === "object" &&
+    "sessionId" in params
+  ) {
+    sessionId = params.sessionId;
+    const { sessionId: _, ...rest } = params;
+    params = rest;
+  }
   const result = state.cdpOverride
     ? await state.cdpOverride(method, params, sessionId)
     : (await send({ method, params, session_id: sessionId })).result || {};

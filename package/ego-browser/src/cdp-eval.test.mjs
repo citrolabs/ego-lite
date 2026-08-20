@@ -252,6 +252,73 @@ test("cdp tracks Network domain state on enable", async () => {
   }
 });
 
+test("cdp extracts sessionId from params when not passed as third argument", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride: async (method, params, sessionId) => {
+      calls.push([method, params, sessionId]);
+      return { value: "ok" };
+    },
+  });
+  try {
+    await cdp("Runtime.evaluate", {
+      expression: "1",
+      returnByValue: true,
+      sessionId: "sess-from-params",
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], "Runtime.evaluate");
+    assert.equal(calls[0][2], "sess-from-params");
+  } finally {
+    restore();
+  }
+});
+
+test("cdp strips sessionId from params when extracted", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride: async (method, params, sessionId) => {
+      calls.push([method, params, sessionId]);
+      return { value: "ok" };
+    },
+  });
+  try {
+    await cdp("Runtime.evaluate", {
+      expression: "1",
+      sessionId: "sess-456",
+    });
+    assert.equal(calls.length, 1);
+    assert.equal("sessionId" in calls[0][1], false);
+    assert.equal(calls[0][1].expression, "1");
+    assert.equal(calls[0][2], "sess-456");
+  } finally {
+    restore();
+  }
+});
+
+test("cdp prefers explicit third-arg sessionId over params.sessionId", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride: async (method, params, sessionId) => {
+      calls.push([method, params, sessionId]);
+      return { value: "ok" };
+    },
+  });
+  try {
+    await cdp(
+      "Runtime.evaluate",
+      { expression: "1", sessionId: "from-params" },
+      "explicit-sess",
+    );
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][2], "explicit-sess");
+    // params.sessionId is left alone when explicit sessionId is provided
+    assert.equal(calls[0][1].sessionId, "from-params");
+  } finally {
+    restore();
+  }
+});
+
 /* ------------------------------------------------------------------ */
 /*  evaluate() — Playwright-style pageFunction evaluation              */
 /* ------------------------------------------------------------------ */
