@@ -8,7 +8,11 @@ import {
   setPreferredTarget,
 } from "../browser-runtime.js";
 import { cdp, evaluate } from "../cdp-eval.js";
-import { assertNoEgoError } from "../ego-errors.js";
+import {
+  assertNoEgoError,
+  NavigationTimeoutError,
+  ConnectionLostError,
+} from "../ego-errors.js";
 import { state } from "../state.js";
 import { waitForDocumentLoad } from "./load.js";
 
@@ -64,6 +68,7 @@ export async function goto(url: string, options: GotoOptions = {}) {
       ? false
       : await waitForDocumentLoad({
           timeout: options.timeout ?? 20000,
+          navigationUrl: url,
           until:
             options.waitUntil === "domcontentloaded"
               ? "domcontentloaded"

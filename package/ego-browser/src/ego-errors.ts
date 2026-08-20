@@ -17,6 +17,238 @@
 
 import { markHardStop } from "./output-sink.js";
 
+/** Error kind classification for retry logic. */
+export type ErrorKind = "transient" | "permanent";
+
+/**
+ * Structured error base class with recovery guidance.
+ * All ego-browser errors extend this for consistent handling.
+ */
+export class EgoError extends Error {
+  kind: ErrorKind;
+  code: string;
+  context: {
+    url?: string;
+    ref?: string;
+    timestamp: number;
+    sessionId?: string;
+  };
+  recoveryHint?: string;
+
+  constructor(
+    message: string,
+    kind: ErrorKind,
+    code: string,
+    context?: Partial<EgoError["context"]>,
+    recoveryHint?: string,
+  ) {
+    super(message);
+    this.name = "EgoError";
+    this.kind = kind;
+    this.code = code;
+    this.context = {
+      timestamp: Date.now(),
+      ...context,
+      ...(context?.url ? { url: redactUrl(context.url) } : {}),
+    };
+    this.recoveryHint = recoveryHint;
+  }
+
+  /** Serialize to JSON-safe object for logging. */
+  toJSON() {
+    return {
+      name: this.name,
+      message: this.message,
+      kind: this.kind,
+      code: this.code,
+      context: { ...this.context },
+      recoveryHint: this.recoveryHint,
+    };
+  }
+}
+
+/** Element not found or stale reference. */
+export class ElementResolutionError extends EgoError {
+  constructor(message: string, kind: ErrorKind = "transient") {
+    super(
+      message,
+      kind,
+      "ELEMENT_NOT_FOUND",
+      undefined,
+      kind === "transient"
+        ? "Element may not have loaded yet. Try waiting with waitForSelector or re-snapshot the page."
+        : "Element not found — check the selector or page state.",
+    );
+    this.name = "ElementResolutionError";
+  }
+}
+
+/** Page navigation timed out. */
+/** Redact query params and fragments from a URL for safe message display. */
+export function redactUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    u.search = "";
+    u.hash = "";
+    return u.toString();
+  } catch {
+    // Not a valid URL — strip everything after the first '?' or '#'
+    return url.split(/[?#]/)[0];
+  }
+}
+
+export class NavigationTimeoutError extends EgoError {
+  constructor(url: string, timeoutMs: number) {
+    super(
+      `Navigation to ${redactUrl(url)} timed out after ${timeoutMs}ms`,
+      "transient",
+      "NAVIGATION_TIMEOUT",
+      { url },
+      "Page may be slow to load. Try increasing timeout or using waitForLoadState with 'networkidle'.",
+    );
+    this.name = "NavigationTimeoutError";
+  }
+}
+
+/** Native dialog blocking JavaScript execution. */
+export class DialogBlockingError extends EgoError {
+  constructor(dialogType: string) {
+    super(
+      `Native ${dialogType} dialog is blocking page JavaScript`,
+      "transient",
+      "DIALOG_BLOCKING",
+      undefined,
+      "Handle the dialog with cdp('Page.handleJavaScriptDialog', {accept: true}) before continuing.",
+    );
+    this.name = "DialogBlockingError";
+  }
+}
+
+/** CDP connection lost during operation. */
+export class TimeoutError extends EgoError {
+  constructor(operation: string, timeoutMs: number) {
+    super(
+      `${operation} timed out after ${timeoutMs}ms`,
+      "transient",
+      "TIMEOUT",
+      undefined,
+      `Increase the timeout for ${operation} or investigate why it is slow.`,
+    );
+    this.name = "TimeoutError";
+  }
+}
+
+export class ConnectionLostError extends EgoError {
+  constructor(previousUrl?: string) {
+    super(
+      "CDP connection lost during operation",
+      "transient",
+      "CONNECTION_LOST",
+      { url: previousUrl },
+      "Attempting automatic reconnect. Retry the operation if it fails again.",
+    );
+    this.name = "ConnectionLostError";
+  }
+}
+
+export type CdpErrorContext = {
+  operation: string;
+  url?: string;
+  timeoutMs?: number;
+  sessionId?: string;
+};
+
+type CdpMappedError = Error & { code?: string };
+
+type ErrorTaxonomyOverrides = {
+  mapCdpError?: (rawError: unknown, context: CdpErrorContext) => CdpMappedError;
+  navigationTimeout?: (url: string, timeoutMs: number) => Error;
+  connectionFailure?: (previousUrl?: string) => Error;
+  operationTimeout?: (operation: string, timeoutMs: number) => Error;
+};
+
+const SESSION_LOST_MESSAGE =
+  /Session (?:with given id )?not found|Target closed|No session/i;
+const TIMEOUT_MESSAGE = /timed? out|timeout/i;
+
+const defaultErrorTaxonomy = {
+  navigationTimeout: (url: string, timeoutMs: number): Error =>
+    new NavigationTimeoutError(url, timeoutMs),
+  connectionFailure: (previousUrl?: string): Error =>
+    new ConnectionLostError(previousUrl),
+  operationTimeout: (operation: string, timeoutMs: number): Error =>
+    new TimeoutError(operation, timeoutMs),
+};
+
+let errorTaxonomyOverrides: ErrorTaxonomyOverrides = {};
+
+function rawErrorMessage(rawError: unknown): string {
+  if (rawError instanceof Error) return rawError.message;
+  return formatEgoError(rawError);
+}
+
+/** Convert a raw CDP rejection into the structured taxonomy. */
+export function mapCdpError(
+  rawError: unknown,
+  context: CdpErrorContext,
+): CdpMappedError {
+  if (errorTaxonomyOverrides.mapCdpError) {
+    return errorTaxonomyOverrides.mapCdpError(rawError, context);
+  }
+  if (rawError instanceof EgoError) return rawError;
+  if (rawError instanceof Error && "error_code" in rawError) {
+    return rawError as CdpMappedError;
+  }
+
+  const message = rawErrorMessage(rawError);
+  if (SESSION_LOST_MESSAGE.test(message)) {
+    return createConnectionLostError(context.url);
+  }
+  if (TIMEOUT_MESSAGE.test(message) && context.operation === "navigate") {
+    return createNavigationTimeoutError(context.url ?? "", context.timeoutMs ?? 0);
+  }
+  if (TIMEOUT_MESSAGE.test(message)) {
+    return createOperationTimeoutError(context.operation, context.timeoutMs ?? 0);
+  }
+  return new EgoError(message, "permanent", "CDP_ERROR", {
+    url: context.url,
+    sessionId: context.sessionId,
+  });
+}
+
+export function createNavigationTimeoutError(url: string, timeoutMs: number) {
+  return (
+    errorTaxonomyOverrides.navigationTimeout ??
+    defaultErrorTaxonomy.navigationTimeout
+  )(url, timeoutMs);
+}
+
+export function createConnectionLostError(previousUrl?: string) {
+  return (
+    errorTaxonomyOverrides.connectionFailure ??
+    defaultErrorTaxonomy.connectionFailure
+  )(previousUrl);
+}
+
+export function createOperationTimeoutError(
+  operation: string,
+  timeoutMs: number,
+) {
+  return (
+    errorTaxonomyOverrides.operationTimeout ??
+    defaultErrorTaxonomy.operationTimeout
+  )(operation, timeoutMs);
+}
+
+/** Install isolated taxonomy mutations for executable wiring checks. */
+export function setErrorTaxonomyOverrides(overrides: ErrorTaxonomyOverrides) {
+  const previous = errorTaxonomyOverrides;
+  errorTaxonomyOverrides = { ...previous, ...overrides };
+  return () => {
+    errorTaxonomyOverrides = previous;
+  };
+}
+
 /** Stable error codes emitted by the native ego bindings. */
 export const EGO_ERROR_CODES = [
   "EGO_BROWSER_UNAVAILABLE",

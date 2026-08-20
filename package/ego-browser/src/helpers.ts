@@ -3,7 +3,16 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { setOverrides, state } from "./state.js";
-import { assertNoEgoError, isEgoUserControlError } from "./ego-errors.js";
+import {
+  assertNoEgoError,
+  isEgoUserControlError,
+  ElementResolutionError,
+  NavigationTimeoutError,
+  ConnectionLostError,
+  DialogBlockingError,
+  mapCdpError,
+  setErrorTaxonomyOverrides,
+} from "./ego-errors.js";
 import { help as helpRuntime, formatHelp } from "./help-runtime.js";
 import { cdp, decodeUnserializableJsValue, evaluate } from "./cdp-eval.js";
 import * as pointer from "./driver/pointer.js";
@@ -830,6 +839,7 @@ export function helperContext(extra: any = {}) {
       browser: browserFetch,
     },
     cdp,
+    mapCdpError,
     ...extra,
   };
   return {
@@ -864,4 +874,9 @@ export async function loadAgentHelpers() {
   return out;
 }
 
-export const __testing = { setOverrides, decodeUnserializableJsValue };
+export const __testing = {
+  setOverrides,
+  setErrorTaxonomyOverrides,
+  mapCdpError,
+  decodeUnserializableJsValue,
+};
