@@ -26,6 +26,21 @@ jobs:
       - run: npm test
       - run: npm run validate:site-skills
 
+  test-linux-host:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: package/ego-linux-host
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package/ego-linux-host/package-lock.json
+      - run: npm ci
+      - run: npm test
+
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: test

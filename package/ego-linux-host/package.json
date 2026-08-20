@@ -1,0 +1,26 @@
+{
+  "name": "ego-linux-host",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "bin": {
+    "ego-browser": "./bin/ego-browser.mjs",
+    "ego-linux-hostd": "./bin/ego-linux-hostd.mjs"
+  },
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && npm run typecheck && node --test \"dist/**/*.test.js\"",
+    "host:run": "node bin/ego-linux-hostd.mjs run",
+    "host:status": "node bin/ego-linux-hostd.mjs status",
+    "host:stop": "node bin/ego-linux-hostd.mjs stop"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.15.29",
+    "esbuild": "^0.28.1",
+    "typescript": "^5.8.3"
+  }
+}
