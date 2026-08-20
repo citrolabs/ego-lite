@@ -67,7 +67,10 @@ export async function click(target: MouseTarget, options: ClickOptions = {}) {
   const buttons = pressedButtons(button);
   const clickCount = options.clickCount ?? 1;
   maybeHighlight(point, options.label);
-  const probeId = await installClickProbe(point);
+  // The probe's only delivery signal is a trusted "click" listener, and the
+  // browser fires "click" only for the primary button — a probed right/middle
+  // click could never be seen and would always dispatch the button-0 fallback.
+  const probeId = button === "left" ? await installClickProbe(point) : null;
   let dispatchError: unknown = null;
   try {
     await dispatchMouse(point, "mouseMoved", {
