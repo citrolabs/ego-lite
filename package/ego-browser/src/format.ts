@@ -357,13 +357,13 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
   },
   "page.waitForEvent": {
     signature: "page.waitForEvent(eventName, options?) => Promise<any>",
-    description: "Wait for a page event. Currently useful for download events.",
+    description: "Wait for a page event. Supports download and dialog events.",
     params: [
       {
         name: "eventName",
         type: "string",
         required: true,
-        description: "Event name, such as download.",
+        description: 'Event name, such as "download" or "dialog".',
       },
       {
         name: "options",
@@ -373,6 +373,46 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     ],
     returns: "Promise<any>",
     example: "const download = await page.waitForEvent('download')",
+  },
+  "page.dialog": {
+    signature: "page.dialog() => Promise<DialogInfo | null>",
+    description:
+      "Return the currently pending JavaScript dialog, if any. Returns null when no dialog is open.",
+    returns: "Promise<{ type, message, url, defaultPrompt? } | null>",
+    example: "const open = await page.dialog()",
+  },
+  "page.acceptDialog": {
+    signature: "page.acceptDialog(promptText?) => Promise<void>",
+    description: "Accept the pending JavaScript dialog.",
+    params: [
+      {
+        name: "promptText",
+        type: "string",
+        description: "Optional input for prompt dialogs.",
+      },
+    ],
+    returns: "Promise<void>",
+    example: "await page.acceptDialog()",
+  },
+  "page.dismissDialog": {
+    signature: "page.dismissDialog() => Promise<void>",
+    description: "Dismiss the pending JavaScript dialog.",
+    returns: "Promise<void>",
+    example: "await page.dismissDialog()",
+  },
+  "page.waitForDialog": {
+    signature: "page.waitForDialog(options?) => Promise<DialogInfo>",
+    description:
+      "Wait for a JavaScript dialog to open. Returns immediately when a dialog is already pending.",
+    params: [
+      {
+        name: "options",
+        type: "{ timeout?: number }",
+        description: "Timeout in milliseconds.",
+      },
+    ],
+    returns: "Promise<{ type, message, url, defaultPrompt? }>",
+    example: "const dialog = await page.waitForDialog({ timeout: 5000 })",
   },
   "page.evaluate": {
     signature: "page.evaluate(expression) => Promise<any>",

@@ -47,7 +47,7 @@ The heredoc body runs as a Node.js script that controls the selected ego-browser
 Notes:
 - `cliLog(value)` — prints to the terminal; it is the only output mechanism inside a heredoc, and all final results must go through it.
 - `await pageInfo()` — normally resolves to `{ url, title, w, h, sx, sy, pw, ph }`; if a native browser dialog is open, resolves to `{ dialog: ... }` instead because page JavaScript is blocked.
-- If `await pageInfo()` resolves to `{ dialog: ... }`, handle the dialog with `await cdp('Page.handleJavaScriptDialog', { accept: true })` or `accept: false` before running page JavaScript.
+- If `await pageInfo()` resolves to `{ dialog: ... }`, handle the dialog with `await page.acceptDialog()` or `await page.dismissDialog()` (or `await page.waitForDialog()` when waiting for one) before running page JavaScript.
 - `await ensureRealTab()` — switches to an existing non-internal page tab if needed and resolves to it; resolves to `null` when none exists. It does not create a tab — use `await openOrReuseTab(...)` for that.
 - `await closeTab(target?)` — closes the given target id / tab object, or the current tab when omitted.
 - `await drainEvents()` — consumes and returns the async event queue produced by the page (navigation events, network events, etc.).
