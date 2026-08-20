@@ -729,3 +729,78 @@ test("stopScreencast surfaces an encoder frame failure and still finalizes", asy
     restore();
   }
 });
+
+test("startScreencast refuses to size a recording while a dialog is open", async () => {
+  const module = await import("../../dist/src/driver/screencast.js");
+  let recorderCreated = false;
+  const restore = module.__testing.setOverrides({
+    ensureSession: async () => "session-1",
+    pageInfo: async () => ({ dialog: { type: "confirm", message: "ok?" } }),
+    subscribeBrowserEvent: () => () => {},
+    browserCdp: async () => ({ result: {} }),
+    createRecorder: () => {
+      recorderCreated = true;
+      return { async start() {}, writeFrame() {}, async stop() {} };
+    },
+  });
+  try {
+    await assert.rejects(
+      () => module.startScreencast({ path: "artifacts/run.webm" }),
+      /JavaScript dialog is open.*explicit size/s,
+    );
+    assert.equal(recorderCreated, false, "no encoder is started");
+  } finally {
+    await module.stopScreencast().catch(() => {});
+    restore();
+  }
+});
+
+test("startScreencast reports an unusable viewport instead of a 0x0 recording", async () => {
+  const module = await import("../../dist/src/driver/screencast.js");
+  const restore = module.__testing.setOverrides({
+    ensureSession: async () => "session-1",
+    pageInfo: async () => ({ w: 0, h: 0 }),
+    subscribeBrowserEvent: () => () => {},
+    browserCdp: async () => ({ result: {} }),
+    createRecorder: () => ({
+      async start() {},
+      writeFrame() {},
+      async stop() {},
+    }),
+  });
+  try {
+    await assert.rejects(
+      () => module.startScreencast({ path: "artifacts/run.webm" }),
+      /could not derive a recordable size.*w: 0, h: 0/s,
+    );
+  } finally {
+    await module.stopScreencast().catch(() => {});
+    restore();
+  }
+});
+
+test("startScreencast rejects a viewport that scales below the encoder minimum", async () => {
+  const module = await import("../../dist/src/driver/screencast.js");
+  const restore = module.__testing.setOverrides({
+    ensureSession: async () => "session-1",
+    // Scaling 1000x2 to fit 800 leaves a height of 1, below the 2-pixel floor
+    // the explicit-size path already enforces.
+    pageInfo: async () => ({ w: 1000, h: 2 }),
+    subscribeBrowserEvent: () => () => {},
+    browserCdp: async () => ({ result: {} }),
+    createRecorder: () => ({
+      async start() {},
+      writeFrame() {},
+      async stop() {},
+    }),
+  });
+  try {
+    await assert.rejects(
+      () => module.startScreencast({ path: "artifacts/run.webm" }),
+      /could not derive a recordable size/,
+    );
+  } finally {
+    await module.stopScreencast().catch(() => {});
+    restore();
+  }
+});

@@ -167,13 +167,29 @@ export async function stopScreencast() {
   if (stopError) throw stopError;
 }
 
+// An explicit size is rejected below 2 pixels, but the derived one used to go
+// through unchecked: page.info() reports { dialog } (no w/h) while a JavaScript
+// dialog is open and w/h of 0 for a tab that is not really there, and both
+// collapse to 0x0 here, which reaches ffmpeg as scale=0:0 and fails with an
+// encoder error that says nothing about the real cause.
 async function defaultSize() {
   const info = await dependencies.pageInfo();
+  if (info && "dialog" in info) {
+    throw new Error(
+      "page.screencast.start cannot measure the page while a JavaScript dialog is open. Handle the dialog first, or pass an explicit size.",
+    );
+  }
   const scale = Math.min(1, 800 / Math.max(info.w, info.h));
-  return evenSize({
+  const size = evenSize({
     width: Math.floor(info.w * scale),
     height: Math.floor(info.h * scale),
   });
+  if (!(size.width >= 2) || !(size.height >= 2)) {
+    throw new Error(
+      `page.screencast.start could not derive a recordable size from the current viewport (w: ${info.w}, h: ${info.h}). Restore the real tab, or pass an explicit size.`,
+    );
+  }
+  return size;
 }
 
 function evenSize(size: Size) {
