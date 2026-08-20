@@ -5,6 +5,7 @@ import { setOverrides } from "../../dist/src/state.js";
 import {
   check,
   down,
+  fill,
   focus,
   press,
   pressOnSelector,
@@ -481,6 +482,65 @@ test("setChecked rejects page-side validation errors", async () => {
   } finally {
     restore();
   }
+});
+
+// fill resolves a handle, focuses the target, then clears it and types. This
+// harness answers the resolution step and makes the focus call report the
+// page-side editability rejection; `calls` records every command fill issued.
+function nonEditableFillHarness() {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride(method, params, sessionId) {
+      calls.push({ method, params, sessionId });
+      if (method === "Runtime.evaluate") {
+        return { result: { objectId: "object-1" } };
+      }
+      if (
+        method === "Runtime.callFunctionOn" &&
+        params.functionDeclaration.includes("this.focus()")
+      ) {
+        return {
+          result: {
+            subtype: "error",
+            description: "Error: fill target is not editable",
+          },
+        };
+      }
+      return {};
+    },
+  });
+  return { calls, restore };
+}
+
+test("fill rejects when the page reports the target is not editable", async () => {
+  const { restore } = nonEditableFillHarness();
+  try {
+    await assert.rejects(
+      () => fill("#readonly-input", "2026-12-25"),
+      /fill target is not editable/,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("fill leaves a non-editable target untouched instead of clearing it", async () => {
+  const { calls, restore } = nonEditableFillHarness();
+  try {
+    await fill("#readonly-input", "2026-12-25").catch(() => {});
+  } finally {
+    restore();
+  }
+
+  assert.equal(
+    calls.filter((entry) => entry.method === "Runtime.callFunctionOn").length,
+    1,
+    "fill stops after the focus call",
+  );
+  assert.ok(
+    !calls.some((entry) => entry.method === "Input.insertText"),
+    "fill does not type into a non-editable target",
+  );
 });
 
 test("pressSequentially focuses a selector then presses characters with delay", async () => {

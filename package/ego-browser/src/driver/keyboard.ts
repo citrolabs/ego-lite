@@ -1,4 +1,4 @@
-import { cdp } from "../cdp-eval.js";
+import { cdp, runtimeValue } from "../cdp-eval.js";
 import { browserCdp } from "../browser-runtime.js";
 import { withHandle, resolveAndCall } from "./element-ops.js";
 import { click } from "./pointer.js";
@@ -46,6 +46,34 @@ const CTRL_MODIFIER = 2;
 const META_MODIFIER = 4;
 const INPUT_EVENT_DELAY_MS = 25;
 const INPUT_DISPATCH_TIMEOUT_MS = 1000;
+
+const NON_TEXT_INPUT_TYPES = [
+  "button",
+  "checkbox",
+  "color",
+  "date",
+  "datetime-local",
+  "file",
+  "hidden",
+  "image",
+  "month",
+  "radio",
+  "range",
+  "reset",
+  "submit",
+  "time",
+  "week",
+];
+
+/** Page-side statement that rejects every target `fill()` cannot type into. */
+const FILL_EDITABILITY_GUARD =
+  "if(this instanceof HTMLSelectElement" +
+  "||((this instanceof HTMLInputElement||this instanceof HTMLTextAreaElement)&&(this.disabled||this.readOnly))" +
+  ") throw new Error('fill target is not editable');" +
+  "if(this instanceof HTMLInputElement){" +
+  "const inputType=String(this.type).toLowerCase();" +
+  `if(${JSON.stringify(NON_TEXT_INPUT_TYPES)}.includes(inputType))` +
+  ` throw new Error('Input of type "'+inputType+'" cannot be filled');}`;
 
 function keyDefinition(key) {
   const special = KEYS[key];
@@ -273,6 +301,11 @@ export async function focus(selector) {
 
 /**
  * Focus an input, optionally clear it, write a value, and fire input/change events.
+ *
+ * Targets that cannot take typed text throw instead of being filled: any
+ * `<select>`, a disabled or readonly input or textarea, and inputs whose type
+ * is not text-like (checkbox, radio, button-like, file, hidden, range, color
+ * and the date and time types).
  * @param {string} selector CSS selector / @ref / loc= / xpath= for the input-like element.
  * @param {string} value Text to write.
  * @param {{clearFirst?: boolean, timeout?: number}} [options] clearFirst defaults to true (Playwright fill always clears); clearFirst:false appends (ego-browser extension). timeout in milliseconds.
@@ -286,9 +319,9 @@ export async function fill(selector, value, options: FillOptions = {}) {
   }
   await withHandle(selector, async ({ objectId, sessionId }) => {
     const focusSource = clearFirst
-      ? "function(){this.focus(); if(this.isContentEditable){const range=document.createRange();range.selectNodeContents(this);const sel=getSelection();sel.removeAllRanges();sel.addRange(range);}else if(typeof this.select==='function') this.select();}"
-      : "function(){this.focus();}";
-    await cdp(
+      ? `function(){this.focus(); ${FILL_EDITABILITY_GUARD} if(this.isContentEditable){const range=document.createRange();range.selectNodeContents(this);const sel=getSelection();sel.removeAllRanges();sel.addRange(range);}else if(typeof this.select==='function') this.select();}`
+      : `function(){this.focus(); ${FILL_EDITABILITY_GUARD}}`;
+    const focusResult = await cdp(
       "Runtime.callFunctionOn",
       {
         functionDeclaration: focusSource,
@@ -298,6 +331,7 @@ export async function fill(selector, value, options: FillOptions = {}) {
       },
       sessionId,
     );
+    runtimeValue(focusResult, focusSource);
     if (clearFirst) {
       await cdp(
         "Runtime.callFunctionOn",
