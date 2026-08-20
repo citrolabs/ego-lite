@@ -52,7 +52,11 @@ function keyDefinition(key) {
   if (special) {
     return special;
   }
-  if (key.length !== 1) {
+  // Count code points, not UTF-16 code units: an astral-plane character such as
+  // an emoji is a surrogate pair (key.length === 2) but a single printable
+  // character. Using key.length here would misclassify it as a named key and
+  // type nothing (text: "").
+  if ([...key].length !== 1) {
     return { vk: 0, key, code: key, text: "" };
   }
   const vk = key.toUpperCase().codePointAt(0);

@@ -553,6 +553,30 @@ test("typeText presses text without focusing a selector", async () => {
   );
 });
 
+test("typeText types an astral-plane character (emoji) instead of dropping it", async () => {
+  const texts = [];
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Input.dispatchKeyEvent" && params.type === "keyDown") {
+        texts.push(params.text);
+      }
+      return {};
+    },
+  });
+  try {
+    await typeText("a😀b");
+  } finally {
+    restore();
+  }
+
+  // The emoji is a surrogate pair; it must still be typed as one character.
+  assert.equal(
+    texts.filter(Boolean).join(""),
+    "a😀b",
+    "emoji must be typed, not dropped",
+  );
+});
+
 test("pressOnSelector focuses a selector then presses a key", async () => {
   const calls = [];
   const restore = setOverrides({
