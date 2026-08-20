@@ -60,7 +60,7 @@ export const USAGE = `Usage:
 `;
 
 export async function runMain(options: RunMainOptions = {}) {
-  const argv = options.argv || process.argv.slice(2);
+  const argv = [...(options.argv || process.argv.slice(2))];
   const stdout = options.stdout || processStdout;
   const stderr = options.stderr || processStderr;
   const env = options.env || process.env;
