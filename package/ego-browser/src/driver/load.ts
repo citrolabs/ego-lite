@@ -22,7 +22,16 @@ export async function waitForDocumentLoad(options: WaitForLoadOptions = {}) {
     } catch {
       // Page.getFrameTree may not be supported in some sessions; fall back to readyState only.
     }
-    if (committed && ready.includes(await evaluate("document.readyState"))) {
+    let readyState = "";
+    try {
+      readyState = await evaluate("document.readyState");
+    } catch {
+      // Runtime.evaluate can reject while the page is committing a navigation
+      // ("Execution context was destroyed"). Like the getFrameTree call above,
+      // treat this as not-ready-yet and keep polling instead of rejecting the
+      // whole wait.
+    }
+    if (committed && ready.includes(readyState)) {
       return true;
     }
     await state.sleep(300);
