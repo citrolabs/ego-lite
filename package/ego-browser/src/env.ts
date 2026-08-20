@@ -19,8 +19,9 @@ export function agentWorkspace() {
 }
 
 export function resolvePath(path) {
-  if (path.startsWith("~")) {
-    return resolve(process.env.HOME || process.env.USERPROFILE || ".", path.slice(1));
+  if (path === "~" || path.startsWith("~/") || path.startsWith("~\\")) {
+    const home = process.env.HOME || process.env.USERPROFILE || ".";
+    return resolve(home, path.slice(1).replace(/^[/\\]/, ""));
   }
   return resolve(path);
 }
