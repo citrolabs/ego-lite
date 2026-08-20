@@ -9,6 +9,7 @@ import {
   handOffTaskSpace,
   newTaskSpace,
   helperContext,
+  listProfiles,
   listTaskSpaces,
   useOrCreateTaskSpace,
   switchTaskSpace,
@@ -340,6 +341,80 @@ test("switchTaskSpace awaits useTaskSpace binding errors", async () => {
   );
 });
 
+test("listProfiles normalizes the profiles binding shape", async () => {
+  await withEgo(
+    {
+      async listProfiles() {
+        return {
+          profiles: [
+            { id: "Default", name: "Projects", isDefault: false },
+            { id: "Profile 7", name: "Deepanshu (Toptal)", isDefault: false },
+          ],
+        };
+      },
+    },
+    async () => {
+      assert.deepEqual(await listProfiles(), [
+        { id: "Default", name: "Projects", isDefault: false },
+        { id: "Profile 7", name: "Deepanshu (Toptal)", isDefault: false },
+      ]);
+    },
+  );
+});
+
+test("listProfiles drops entries without an id and rejects a missing profiles array", async () => {
+  await withEgo(
+    {
+      async listProfiles() {
+        return {
+          profiles: [{ name: "orphaned" }, { id: "Profile 2", name: "Thapar" }],
+        };
+      },
+    },
+    async () => {
+      assert.deepEqual(await listProfiles(), [
+        { id: "Profile 2", name: "Thapar" },
+      ]);
+    },
+  );
+  await withEgo(
+    {
+      async listProfiles() {
+        return {};
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () => listProfiles(),
+        /listProfiles expected \{ profiles: \[\.\.\.\] \}/,
+      );
+    },
+  );
+});
+
+test("newTaskSpace passes the requested profileId through to ego.createTaskSpace", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async createTaskSpace(name, profileId) {
+        calls.push(["createTaskSpace", name, profileId]);
+        return { taskId: name, id: 7, name, ownership: "agent" };
+      },
+      useTaskSpace(taskId) {
+        calls.push(["useTaskSpace", taskId]);
+        return taskId;
+      },
+    },
+    async () => {
+      await newTaskSpace("toptal-work", "Profile 7");
+    },
+  );
+  assert.deepEqual(calls, [
+    ["createTaskSpace", "toptal-work", "Profile 7"],
+    ["useTaskSpace", 7],
+  ]);
+});
+
 test("newTaskSpace creates and selects an agent task space", async () => {
   const calls = [];
   await withEgo(
@@ -597,6 +672,34 @@ test("useOrCreateTaskSpace creates missing spaces", async () => {
   assert.deepEqual(calls, [
     ["listTaskSpaces"],
     ["createTaskSpace", "checkout-flow"],
+    ["useTaskSpace", 7],
+  ]);
+});
+
+test("useOrCreateTaskSpace passes profileId through when creating a missing space", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return { taskSpaces: [] };
+      },
+      async createTaskSpace(name, profileId) {
+        calls.push(["createTaskSpace", name, profileId]);
+        return { taskId: name, id: 7, name, ownership: "agent" };
+      },
+      useTaskSpace(taskId) {
+        calls.push(["useTaskSpace", taskId]);
+        return taskId;
+      },
+    },
+    async () => {
+      await useOrCreateTaskSpace("toptal-work", "Profile 7");
+    },
+  );
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["createTaskSpace", "toptal-work", "Profile 7"],
     ["useTaskSpace", 7],
   ]);
 });

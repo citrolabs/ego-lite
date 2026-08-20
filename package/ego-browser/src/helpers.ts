@@ -114,6 +114,22 @@ export async function listTaskSpaces() {
   );
 }
 
+/**
+ * List the ego lite browser profiles available on this machine (e.g. separate
+ * logins for personal vs. work accounts). Pass a profile's `id` to
+ * newTaskSpace(name, profileId) / useOrCreateTaskSpace to bind a task space to it.
+ * @returns {Promise<Array<{id:string,name:string,isDefault?:boolean}>>}
+ */
+export async function listProfiles() {
+  const ego = globalThis.ego;
+  if (!ego || typeof ego.listProfiles !== "function") {
+    throw new Error("listProfiles requires ego.listProfiles");
+  }
+  return normalizeProfiles(
+    assertNoEgoError(await ego.listProfiles(), "listProfiles"),
+  );
+}
+
 /*
  * Task space ownership policy (`ownership`: "agent" | "agentDelegatedToUser" | "user").
  * "agent" and "agentDelegatedToUser" are both agent-owned (see isAgentOwned) — the
@@ -166,15 +182,23 @@ export async function switchTaskSpace(nameOrId) {
 /**
  * Create an agent-owned task space and select it for the current Node invocation.
  * @param {string} name Task space name.
+ * @param {string} [profileId] Profile id from listProfiles(); omit to use the default profile.
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
-export async function newTaskSpace(name) {
+export async function newTaskSpace(name, profileId) {
   const ego = globalThis.ego;
   if (!ego || typeof ego.createTaskSpace !== "function") {
     throw new Error("newTaskSpace requires ego.createTaskSpace");
   }
   const created = normalizeTaskSpace(
-    assertNoEgoError(await ego.createTaskSpace(name), "newTaskSpace"),
+    assertNoEgoError(
+      // ego.createTaskSpace's validator rejects an explicit `undefined` second
+      // argument, so only pass profileId when the caller actually provided one.
+      profileId === undefined
+        ? await ego.createTaskSpace(name)
+        : await ego.createTaskSpace(name, profileId),
+      "newTaskSpace",
+    ),
   );
   if (!created) {
     throw new Error("newTaskSpace returned an invalid task space");
@@ -188,16 +212,19 @@ export async function newTaskSpace(name) {
  * spaces are selected but not claimed (the EGO_TASK_SPACE_USER_IN_CONTROL error
  * surfaces) — call claimTaskSpace(nameOrId) to take ownership.
  * @param {string|number} nameOrId Task space name or numeric id.
+ * @param {string} [profileId] Profile id from listProfiles(), used only when a new
+ *   space is created (an existing space keeps its own profile). Must be a plain
+ *   string id, not an options object — this helper does not accept `{ profileId }`.
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
-export async function useOrCreateTaskSpace(nameOrId) {
+export async function useOrCreateTaskSpace(nameOrId, profileId) {
   const spaces = await listTaskSpaces();
   const existing = findMatchingTaskSpace(spaces, nameOrId);
   if (!existing) {
     if (typeof nameOrId === "number") {
       throw new Error(`task space not found: ${nameOrId}`);
     }
-    return newTaskSpace(nameOrId);
+    return newTaskSpace(nameOrId, profileId);
   }
   if (isAgentOwned(existing.ownership)) {
     return selectTaskSpace(globalThis.ego, existing, "useOrCreateTaskSpace");
@@ -413,6 +440,13 @@ function normalizeTaskSpaces(raw) {
     return raw.taskSpaces.map(normalizeTaskSpace).filter(Boolean);
   }
   throw new Error("listTaskSpaces expected { taskSpaces: [...] }");
+}
+
+function normalizeProfiles(raw) {
+  if (Array.isArray(raw?.profiles)) {
+    return raw.profiles.filter((profile) => profile?.id);
+  }
+  throw new Error("listProfiles expected { profiles: [...] }");
 }
 
 function normalizeTaskSpace(space) {
@@ -785,6 +819,7 @@ function createBrowserFacade() {
 function createTaskSpacesFacade() {
   return {
     list: listTaskSpaces,
+    listProfiles,
     switch: switchTaskSpace,
     new: newTaskSpace,
     useOrCreate: useOrCreateTaskSpace,
@@ -813,7 +848,7 @@ const FACADE_HELP: Record<string, string> = {
   browser:
     "browser: tab facade. Use browser.listTabs(), browser.currentTab(), browser.switchTab(target), browser.openOrReuseTab(url, options), and browser.closeTab(target). Treat targetId as short-lived: obtain and validate it in the current script; switchTab/closeTab refresh the tab list before acting.",
   taskSpaces:
-    "taskSpaces: task-space facade. Use taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), and taskSpaces.waitForAgentControl(nameOrId, options).",
+    "taskSpaces: task-space facade. Use taskSpaces.useOrCreate(nameOrId, profileId?), taskSpaces.listProfiles(), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), and taskSpaces.waitForAgentControl(nameOrId, options). listProfiles() returns the ego lite browser profiles ({id, name, isDefault}) available on this machine; pass a profile's id as the second argument to useOrCreate/newTaskSpace to bind a new space to it — the space keeps that profile's login state.",
   site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",
   fetch:
     "fetch: network facade. Use fetch.server(url, options) for Node-side fetch and fetch.browser(url, options) for browser-origin fetch.",
