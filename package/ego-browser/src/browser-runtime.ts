@@ -169,10 +169,12 @@ export function drainBrowserEvents() {
 export function waitForBrowserEvent(
   predicate,
   timeoutMs = state.defaultTimeout,
+  sessionId = undefined,
 ) {
   return new Promise((resolve, reject) => {
     const waiter = {
       predicate,
+      sessionId,
       resolve,
       reject,
       timer: setTimeout(() => {
@@ -294,6 +296,20 @@ function handleMessage(message) {
     }
   }
   for (const waiter of [...eventWaiters]) {
+    // Page/network events carry the originating page session id. A waiter is
+    // scoped to a single session (its explicit sessionId, else the active page
+    // session), so ignore events from other sessions; otherwise a waiter on
+    // session A could resolve from a background target's event (issue #204).
+    // Events without a sessionId (browser-level, or bridges that omit it) are
+    // left unfiltered so existing behavior is preserved.
+    const expectedSession = waiter.sessionId ?? state.sessionId;
+    if (
+      data.sessionId &&
+      expectedSession &&
+      data.sessionId !== expectedSession
+    ) {
+      continue;
+    }
     let matched = false;
     try {
       matched = waiter.predicate(data);

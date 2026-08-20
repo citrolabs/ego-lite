@@ -6,6 +6,7 @@ import {
   drainBrowserEvents,
   invalidateSession,
 } from "../../dist/src/browser-runtime.js";
+import { state } from "../../dist/src/state.js";
 import { waitForEvent } from "../../dist/src/driver/downloads.js";
 
 function installAutoEgo(options = {}) {
@@ -43,7 +44,10 @@ function installAutoEgo(options = {}) {
   return calls;
 }
 
-function fireEvent(method, params = {}, sessionId = "sess-1") {
+// Fire on the active page session by default. Download events arrive on the
+// session ego-browser attached to; the waiters are now scoped to that session
+// (issue #204), so events must carry the same sessionId ego-browser resolved.
+function fireEvent(method, params = {}, sessionId = state.sessionId) {
   globalThis.ego.onCDPMessage(JSON.stringify({ method, params, sessionId }));
 }
 
