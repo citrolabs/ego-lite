@@ -15,6 +15,7 @@ import * as waits from "./driver/waits.js";
 import * as files from "./driver/files.js";
 import * as downloads from "./driver/downloads.js";
 import * as screencast from "./driver/screencast.js";
+import * as expect from "./driver/expect.js";
 import { browserFetch, serverFetch } from "./http.js";
 import {
   loadBrowserToolSource,
@@ -98,6 +99,14 @@ export {
 } from "./driver/waits.js";
 export { setInputFiles } from "./driver/files.js";
 export { startScreencast, stopScreencast } from "./driver/screencast.js";
+export {
+  retryOnTransient,
+  expectVisible,
+  expectHidden,
+  expectText,
+  expectUrl,
+  expectValue,
+} from "./driver/expect.js";
 export { browserFetch, serverFetch } from "./http.js";
 
 /**
@@ -745,6 +754,12 @@ function createPageFacade() {
       insertText: keyboard.insertText,
       type: keyboard.typeText,
     },
+    retryOnTransient: expect.retryOnTransient,
+    expectVisible: expect.expectVisible,
+    expectHidden: expect.expectHidden,
+    expectText: expect.expectText,
+    expectUrl: expect.expectUrl,
+    expectValue: expect.expectValue,
     mouse: {
       click: (x, y, options = {}) => {
         const [target, effectiveOptions] = mousePointArgs(x, y, options);
@@ -807,7 +822,7 @@ function createSiteFacade() {
 }
 
 const FACADE_HELP: Record<string, string> = {
-  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.getByText(text), page.getByLabel(text), page.getByPlaceholder(text), page.getByTestId(testId), page.setDefaultTimeout(ms), page.waitForEvent("download"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). waitForURL predicates receive URL objects and waitUntil defaults to load.',
+  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.getByText(text), page.getByLabel(text), page.getByPlaceholder(text), page.getByTestId(testId), page.setDefaultTimeout(ms), page.waitForEvent("download"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). Soft checks: page.retryOnTransient(fn, options), page.expectVisible(selector), page.expectHidden(selector), page.expectText(selector, expected), page.expectUrl(expected), page.expectValue(selector, expected) return { ok } instead of throwing. waitForURL predicates receive URL objects and waitUntil defaults to load.',
   locator:
     "page.locator(selector): returns a strict, auto-waiting locator facade with locator(), getByRole(), getByText(), filter(), first(), nth(index), last(), click(), hover(), dragTo(target), scrollIntoViewIfNeeded(), fill(value), clear(), press(key), check(), selectOption(value), textContent(), innerText(), innerHTML(), isVisible(), isEnabled(), getAttribute(name), screenshot(), count(), evaluate(fn, arg), evaluateAll(fn, arg), and waitFor(options). Narrow multiple matches; use first()/nth() only for confirmed legitimate duplicates.",
   browser:

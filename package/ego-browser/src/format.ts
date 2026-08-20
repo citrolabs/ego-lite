@@ -442,6 +442,126 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     returns: "Promise<object[]>",
     example: "console.log(await page.drainEvents())",
   },
+  "page.retryOnTransient": {
+    signature: "page.retryOnTransient(fn, options?) => Promise<any>",
+    description:
+      "Retry an async action when element resolution fails transiently (unknown ref, not ready, zero matches). Re-throws permanent or other errors immediately.",
+    params: [
+      {
+        name: "fn",
+        type: "Function",
+        required: true,
+        description: "Async action to run.",
+      },
+      {
+        name: "options",
+        type: "{ attempts?: number, interval?: number }",
+        description:
+          "Retry count (default 5) and interval in seconds between attempts (default 0.4).",
+      },
+    ],
+    returns: "Promise<any>",
+    example:
+      "await page.retryOnTransient(() => page.locator('@12').click(), { attempts: 3 })",
+  },
+  "page.expectVisible": {
+    signature:
+      "page.expectVisible(selector) => Promise<{ ok, detail?, actual?, expected? }>",
+    description:
+      "Soft assertion that an element is visible. Returns { ok: false } on failure instead of throwing.",
+    params: [
+      {
+        name: "selector",
+        type: "string",
+        required: true,
+        description: "CSS, XPath, loc=..., text, or @ref selector.",
+      },
+    ],
+    returns:
+      "Promise<{ ok: boolean, detail?: string, actual?: unknown, expected?: unknown }>",
+    example:
+      "const result = await page.expectVisible('button.submit'); if (!result.ok) cliLog(result)",
+  },
+  "page.expectHidden": {
+    signature:
+      "page.expectHidden(selector) => Promise<{ ok, detail?, actual?, expected? }>",
+    description:
+      "Soft assertion that an element is hidden. Returns { ok: false } on failure instead of throwing.",
+    params: [
+      {
+        name: "selector",
+        type: "string",
+        required: true,
+        description: "CSS, XPath, loc=..., text, or @ref selector.",
+      },
+    ],
+    returns:
+      "Promise<{ ok: boolean, detail?: string, actual?: unknown, expected?: unknown }>",
+    example: "cliLog(await page.expectHidden('.loading-spinner'))",
+  },
+  "page.expectText": {
+    signature:
+      "page.expectText(selector, expected) => Promise<{ ok, detail?, actual?, expected? }>",
+    description:
+      "Soft assertion that element innerText matches a string or RegExp.",
+    params: [
+      {
+        name: "selector",
+        type: "string",
+        required: true,
+        description: "CSS, XPath, loc=..., text, or @ref selector.",
+      },
+      {
+        name: "expected",
+        type: "string | RegExp",
+        required: true,
+        description: "Expected text.",
+      },
+    ],
+    returns:
+      "Promise<{ ok: boolean, detail?: string, actual?: unknown, expected?: unknown }>",
+    example: "cliLog(await page.expectText('h1', /Welcome/))",
+  },
+  "page.expectUrl": {
+    signature:
+      "page.expectUrl(expected) => Promise<{ ok, detail?, actual?, expected? }>",
+    description:
+      "Soft assertion that the current URL matches a string or RegExp. Returns ok:false when a native dialog blocks pageInfo().",
+    params: [
+      {
+        name: "expected",
+        type: "string | RegExp",
+        required: true,
+        description: "Expected URL or pattern.",
+      },
+    ],
+    returns:
+      "Promise<{ ok: boolean, detail?: string, actual?: unknown, expected?: unknown }>",
+    example: "cliLog(await page.expectUrl(/\\/checkout/))",
+  },
+  "page.expectValue": {
+    signature:
+      "page.expectValue(selector, expected) => Promise<{ ok, detail?, actual?, expected? }>",
+    description:
+      "Soft assertion that an input, textarea, or select value matches a string or RegExp.",
+    params: [
+      {
+        name: "selector",
+        type: "string",
+        required: true,
+        description: "CSS, XPath, loc=..., text, or @ref selector.",
+      },
+      {
+        name: "expected",
+        type: "string | RegExp",
+        required: true,
+        description: "Expected value.",
+      },
+    ],
+    returns:
+      "Promise<{ ok: boolean, detail?: string, actual?: unknown, expected?: unknown }>",
+    example: "cliLog(await page.expectValue('#email', 'me@example.com'))",
+  },
   "page.keyboard.press": {
     signature: "page.keyboard.press(key, options?) => Promise<void>",
     description: "Press a keyboard key or shortcut.",
