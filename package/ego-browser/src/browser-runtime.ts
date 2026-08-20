@@ -6,6 +6,19 @@ const SESSION_TTL_MS = 2000;
 // Upper bound for buffered CDP events. The runtime can be long-lived (installEgoSdk
 // inside the browser); without a cap, undrained events grow without bound.
 const MAX_BUFFERED_EVENTS = 10000;
+const MAX_BUFFERED_CONSOLE_MESSAGES = 1000;
+export type ConsoleMessage = {
+  type: string;
+  text: string;
+  timestamp?: number;
+  args?: string[];
+};
+type ConsoleWaiter = {
+  matches: (message: ConsoleMessage) => boolean;
+  resolve: (message: ConsoleMessage) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+};
 const SESSION_LOST =
   /Session (?:with given id )?not found|Target closed|No session/i;
 const BROWSER_LEVEL = (method) =>
@@ -19,6 +32,8 @@ let nextMessageId = 1;
 const pending = new Map();
 const events = [];
 const eventWaiters = [];
+const consoleMessages: ConsoleMessage[] = [];
+const consoleWaiters: ConsoleWaiter[] = [];
 const eventSubscribers = new Set<BrowserEventSubscriber>();
 const pageEnabledSessions = new Set();
 const pendingDialogs = new Map();
@@ -166,6 +181,57 @@ export function drainBrowserEvents() {
   return out;
 }
 
+export function drainConsoleMessages() {
+  return consoleMessages.splice(0, consoleMessages.length);
+}
+
+export function pendingConsoleMessages() {
+  return consoleMessages.slice();
+}
+
+export function waitForConsole(
+  matcher?: string | RegExp | ((message: ConsoleMessage) => boolean),
+  options: { timeout?: number; type?: string } = {},
+) {
+  const timeout = options.timeout ?? state.defaultTimeout;
+  const typeFilter = options.type;
+
+  function matches(message: ConsoleMessage) {
+    if (typeFilter && message.type !== typeFilter) {
+      return false;
+    }
+    if (matcher === undefined) {
+      return true;
+    }
+    if (typeof matcher === "string") {
+      return message.text.includes(matcher);
+    }
+    if (matcher instanceof RegExp) {
+      return matcher.test(message.text);
+    }
+    return matcher(message);
+  }
+
+  const existing = consoleMessages.find(matches);
+  if (existing) {
+    return Promise.resolve(existing);
+  }
+
+  return new Promise<ConsoleMessage>((resolve, reject) => {
+    const waiter: ConsoleWaiter = {
+      matches,
+      resolve,
+      reject,
+      timer: setTimeout(() => {
+        const index = consoleWaiters.indexOf(waiter);
+        if (index >= 0) consoleWaiters.splice(index, 1);
+        reject(new Error("waitForConsole timed out"));
+      }, timeout),
+    };
+    consoleWaiters.push(waiter);
+  });
+}
+
 export function waitForBrowserEvent(
   predicate,
   timeoutMs = state.defaultTimeout,
@@ -212,6 +278,72 @@ async function enablePageEvents(sessionId) {
   } catch {
     // Dialog tracking is best-effort. Do not make all helpers fail on targets
     // that reject Page.enable, such as unusual internal pages.
+  }
+  try {
+    await rawCdp("Runtime.enable", {}, sessionId);
+  } catch {
+    // Console capture is best-effort for the same unusual targets.
+  }
+}
+
+function remoteObjectText(obj: any) {
+  if (!obj || typeof obj !== "object") {
+    return "";
+  }
+  if (obj.value !== undefined) {
+    if (typeof obj.value === "string") {
+      return obj.value;
+    }
+    try {
+      return JSON.stringify(obj.value);
+    } catch {
+      return String(obj.value);
+    }
+  }
+  if (typeof obj.description === "string") {
+    return obj.description;
+  }
+  if (typeof obj.preview?.description === "string") {
+    return obj.preview.description;
+  }
+  return obj.type || "";
+}
+
+function formatConsoleAPICalled(params: any = {}): ConsoleMessage {
+  const args = (params.args || []).map(remoteObjectText);
+  return {
+    type: params.type || "log",
+    text: args.join(" "),
+    timestamp: params.timestamp,
+    args,
+  };
+}
+
+function formatExceptionThrown(params: any = {}): ConsoleMessage {
+  const details = params.exceptionDetails || {};
+  return {
+    type: "pageerror",
+    text:
+      details.text || details.exception?.description || "Uncaught exception",
+    timestamp: params.timestamp ?? details.timestamp,
+  };
+}
+
+function pushConsoleMessage(message: ConsoleMessage) {
+  consoleMessages.push(message);
+  if (consoleMessages.length > MAX_BUFFERED_CONSOLE_MESSAGES) {
+    consoleMessages.splice(
+      0,
+      consoleMessages.length - MAX_BUFFERED_CONSOLE_MESSAGES,
+    );
+  }
+  for (const waiter of [...consoleWaiters]) {
+    if (!waiter.matches(message)) {
+      continue;
+    }
+    clearTimeout(waiter.timer);
+    consoleWaiters.splice(consoleWaiters.indexOf(waiter), 1);
+    waiter.resolve(message);
   }
 }
 
@@ -273,6 +405,10 @@ function handleMessage(message) {
     if (sessionId) {
       pendingDialogs.delete(sessionId);
     }
+  } else if (data.method === "Runtime.consoleAPICalled") {
+    pushConsoleMessage(formatConsoleAPICalled(data.params));
+  } else if (data.method === "Runtime.exceptionThrown") {
+    pushConsoleMessage(formatExceptionThrown(data.params));
   }
   let deliveredToSubscriber = false;
   for (const subscriber of eventSubscribers) {
