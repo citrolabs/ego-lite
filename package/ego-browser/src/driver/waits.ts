@@ -258,10 +258,14 @@ async function waitForNetworkMatch(
   let matched;
   try {
     void networkEvents.ready;
-    await waitForBrowserEvent((event) => {
-      matched = processNetworkEvent(kind, matcher, event, requests, timeout);
-      return Boolean(matched);
-    }, browserEventTimeout(timeout));
+    await waitForBrowserEvent(
+      (event) => {
+        matched = processNetworkEvent(kind, matcher, event, requests, timeout);
+        return Boolean(matched);
+      },
+      browserEventTimeout(timeout),
+      { sessionScope: "current" },
+    );
     return matched;
   } catch (error) {
     if (/page\.waitForEvent timed out/i.test(error?.message || "")) {
@@ -415,6 +419,7 @@ async function readResponseBody(requestId, timeout) {
           event?.method === "Network.loadingFailed") &&
         event?.params?.requestId === requestId,
       browserEventTimeout(timeout),
+      { sessionScope: "current" },
     ).catch(() => null);
     try {
       return await cdp("Network.getResponseBody", { requestId });

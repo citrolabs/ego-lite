@@ -42,8 +42,10 @@ function installAutoEgo(resultFor = () => ({})) {
   return calls;
 }
 
-function fireEvent(method, params = {}) {
-  globalThis.ego.onCDPMessage(JSON.stringify({ method, params }));
+function fireEvent(method, params = {}, sessionId = state.sessionId) {
+  globalThis.ego.onCDPMessage(
+    JSON.stringify({ method, params, ...(sessionId ? { sessionId } : {}) }),
+  );
 }
 
 function cleanupBrowserRuntime() {
@@ -278,6 +280,43 @@ test("waitForRequest matches exact URL and returns a request facade", async () =
   assert.ok(calls.some((call) => call.method === "Network.disable"));
 });
 
+test("waitForRequest ignores matching events from other CDP sessions", async () => {
+  installAutoEgo();
+  try {
+    const promise = waitForRequest("https://example.com/api/session", {
+      timeout: 1000,
+    });
+    setTimeout(() => {
+      fireEvent(
+        "Network.requestWillBeSent",
+        {
+          requestId: "shared-request-id",
+          type: "XHR",
+          request: {
+            url: "https://example.com/api/session",
+            method: "POST",
+            headers: {},
+          },
+        },
+        "other-session",
+      );
+      fireEvent("Network.requestWillBeSent", {
+        requestId: "shared-request-id",
+        type: "XHR",
+        request: {
+          url: "https://example.com/api/session",
+          method: "GET",
+          headers: {},
+        },
+      });
+    }, 20);
+    const request = await promise;
+    assert.equal(request.method(), "GET");
+  } finally {
+    cleanupBrowserRuntime();
+  }
+});
+
 test("waitForResponse matches regex and exposes response body helpers", async () => {
   installAutoEgo((call) => {
     if (call.method === "Network.getResponseBody") {
@@ -317,6 +356,37 @@ test("waitForResponse matches regex and exposes response body helpers", async ()
     assert.equal(response.request().method(), "GET");
     assert.deepEqual(await response.json(), { ok: true });
     assert.equal(await response.text(), '{"ok":true}');
+  } finally {
+    cleanupBrowserRuntime();
+  }
+});
+
+test("waitForResponse ignores matching events from other CDP sessions", async () => {
+  installAutoEgo();
+  try {
+    const promise = waitForResponse(/\/api\/session$/, { timeout: 1000 });
+    setTimeout(() => {
+      fireEvent(
+        "Network.responseReceived",
+        {
+          requestId: "shared-response-id",
+          response: {
+            url: "https://example.com/api/session",
+            status: 500,
+          },
+        },
+        "other-session",
+      );
+      fireEvent("Network.responseReceived", {
+        requestId: "shared-response-id",
+        response: {
+          url: "https://example.com/api/session",
+          status: 200,
+        },
+      });
+    }, 20);
+    const response = await promise;
+    assert.equal(response.status(), 200);
   } finally {
     cleanupBrowserRuntime();
   }

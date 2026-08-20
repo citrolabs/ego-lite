@@ -15,6 +15,9 @@ type BrowserEventSubscriber = {
   sessionId?: string;
   listener: (event: any) => void;
 };
+type BrowserEventWaitOptions = {
+  sessionScope?: "current";
+};
 let nextMessageId = 1;
 const pending = new Map();
 const events = [];
@@ -169,12 +172,16 @@ export function drainBrowserEvents() {
 export function waitForBrowserEvent(
   predicate,
   timeoutMs = state.defaultTimeout,
+  options: BrowserEventWaitOptions = {},
 ) {
   return new Promise((resolve, reject) => {
+    const sessionScoped = options.sessionScope === "current";
     const waiter = {
       predicate,
       resolve,
       reject,
+      sessionScoped,
+      sessionId: sessionScoped ? state.sessionId : undefined,
       timer: setTimeout(() => {
         const index = eventWaiters.indexOf(waiter);
         if (index >= 0) eventWaiters.splice(index, 1);
@@ -294,6 +301,12 @@ function handleMessage(message) {
     }
   }
   for (const waiter of [...eventWaiters]) {
+    if (waiter.sessionScoped) {
+      waiter.sessionId ||= state.sessionId;
+      if (!waiter.sessionId || waiter.sessionId !== data.sessionId) {
+        continue;
+      }
+    }
     let matched = false;
     try {
       matched = waiter.predicate(data);
