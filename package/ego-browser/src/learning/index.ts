@@ -230,7 +230,12 @@ function relativeSitePath(siteDir, manifestPath, label) {
   }
   const resolved = resolve(siteDir, manifestPath);
   const siteRoot = resolve(siteDir);
-  if (resolved !== siteRoot && !resolved.startsWith(`${siteRoot}/`)) {
+  // Compare with path.relative rather than a hard-coded "/": resolve() returns
+  // OS-separated paths, so on Windows `${siteRoot}/` never prefixes a resolved
+  // path (the separator is "\"), which rejected every valid in-directory tool
+  // path and made every learned tool unrunnable on Windows.
+  const rel = relative(siteRoot, resolved);
+  if (rel.startsWith("..") || isAbsolute(rel)) {
     throw new Error(`${label} path must stay inside the site skill directory`);
   }
   return resolved;
