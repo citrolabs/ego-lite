@@ -5,6 +5,11 @@ import { browserCdp } from "./browser-runtime.js";
 
 loadEnv();
 
+// Linux polyfill: auto-installs globalThis.ego on Linux when Chrome is available.
+// Noop on macOS; safe to import unconditionally. Must run AFTER loadEnv() so
+// EGO_LINUX from .env is visible to shouldActivate().
+import "./linux/index.js";
+
 export const NAME = process.env.EGO_BROWSER_NAME || "default";
 
 async function defaultSend(req) {

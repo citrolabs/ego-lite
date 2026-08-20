@@ -67,7 +67,11 @@ try {
 
   const rollupConfig = {
     input: join(root, "src/index.ts"),
-    external: [...builtinModules, ...builtinModules.map((m) => `node:${m}`)],
+    external: [
+      ...builtinModules,
+      ...builtinModules.map((m) => `node:${m}`),
+      "ws",
+    ],
     plugins: [
       resolve(),
       typescript({
