@@ -58,12 +58,15 @@ export async function withHandle(selectorOrRef, fn) {
  * @param {string} selectorOrRef Selector or ref string.
  * @param {string} functionDeclaration Function source whose `this` is the element.
  * @param {Array<unknown>} [args=[]] Arguments passed by value.
+ * @param {boolean} [awaitPromise=false] When true, resolve a promise returned by
+ *   the function before serializing (needed for async `evaluate` callbacks).
  * @returns {Promise<{result: any, objectId: string, sessionId?: string}>}
  */
 export async function resolveAndCall(
   selectorOrRef,
   functionDeclaration,
   args = [],
+  awaitPromise = false,
 ) {
   return withHandle(selectorOrRef, async ({ objectId, sessionId }) => {
     const result = await cdp(
@@ -73,7 +76,7 @@ export async function resolveAndCall(
         objectId,
         arguments: args.map((value) => ({ value })),
         returnByValue: true,
-        awaitPromise: false,
+        awaitPromise,
       },
       sessionId,
     );

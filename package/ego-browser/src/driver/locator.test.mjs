@@ -444,6 +444,84 @@ test("evaluateLocator runs a page function with one resolved element and an argu
   assert.equal(calls.at(-1).method, "Runtime.releaseObject");
 });
 
+test("evaluateLocator awaits a promise returned by an async page function", async () => {
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Runtime.evaluate") {
+        return { result: { objectId: "node-1" } };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        assert.equal(
+          params.awaitPromise,
+          true,
+          "async locator.evaluate must ask CDP to await the returned promise",
+        );
+        // Simulate Chromium: the resolved value is only returned when awaitPromise
+        // is set; otherwise an unresolved promise serializes to {}.
+        return params.awaitPromise
+          ? { result: { value: "resolved" } }
+          : { result: { value: {} } };
+      }
+      return {};
+    },
+  });
+  try {
+    const value = await evaluateLocator(".item", async () => "resolved");
+    assert.equal(value, "resolved");
+  } finally {
+    restore();
+  }
+});
+
+test("evaluateAll awaits a promise for a ref selector", async () => {
+  browserRefMap.clear();
+  browserRefMap.add("1", 123, "button", "Submit");
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "DOM.resolveNode") {
+        return { object: { objectId: "node-1" } };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        assert.equal(params.awaitPromise, true);
+        return params.awaitPromise
+          ? { result: { value: 42 } }
+          : { result: { value: {} } };
+      }
+      return {};
+    },
+  });
+  try {
+    assert.equal(await evaluateAll("@1", async () => 42), 42);
+  } finally {
+    browserRefMap.clear();
+    restore();
+  }
+});
+
+test("plain element reads do not await promises (unchanged)", async () => {
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Runtime.evaluate") {
+        return { result: { objectId: "node-1" } };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        assert.notEqual(
+          params.awaitPromise,
+          true,
+          "synchronous reads must not opt into promise awaiting",
+        );
+        return { result: { value: "hello" } };
+      }
+      return {};
+    },
+  });
+  try {
+    assert.equal(await textContent(".item"), "hello");
+  } finally {
+    restore();
+  }
+});
+
 test("evaluateAll supports refs as a single-element array", async () => {
   const calls = [];
   browserRefMap.clear();

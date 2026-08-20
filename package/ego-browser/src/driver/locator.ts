@@ -272,6 +272,7 @@ export async function evaluateLocator(selector, pageFunction, arg = undefined) {
       return pageFunction(this, arg);
     }`,
     [functionSource, arg],
+    true,
   );
 }
 
@@ -292,6 +293,7 @@ export async function evaluateAll(selector, pageFunction, arg = undefined) {
         return pageFunction([this], arg);
       }`,
       [functionSource, arg],
+      true,
     );
   }
   const backendNodeIds = await queryRoleBackendNodeIds(selector);
@@ -301,11 +303,21 @@ export async function evaluateAll(selector, pageFunction, arg = undefined) {
   return evaluateQueryAll(selector, functionSource, arg);
 }
 
-async function readElement(selector, functionDeclaration, args = []) {
+async function readElement(
+  selector,
+  functionDeclaration,
+  args = [],
+  awaitPromise = false,
+) {
   const deadline = state.now() + state.defaultTimeout;
   while (true) {
     try {
-      return await readElementOnce(selector, functionDeclaration, args);
+      return await readElementOnce(
+        selector,
+        functionDeclaration,
+        args,
+        awaitPromise,
+      );
     } catch (error) {
       if (
         !(error instanceof ElementResolutionError) ||
@@ -319,8 +331,18 @@ async function readElement(selector, functionDeclaration, args = []) {
   }
 }
 
-async function readElementOnce(selector, functionDeclaration, args = []) {
-  const { result } = await resolveAndCall(selector, functionDeclaration, args);
+async function readElementOnce(
+  selector,
+  functionDeclaration,
+  args = [],
+  awaitPromise = false,
+) {
+  const { result } = await resolveAndCall(
+    selector,
+    functionDeclaration,
+    args,
+    awaitPromise,
+  );
   return runtimeValue(result, functionDeclaration);
 }
 
