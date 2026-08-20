@@ -756,6 +756,28 @@ test("browserCdp does NOT retry SESSION_LOST for explicit sessionId", async () =
   }
 });
 
+test("browserCdp sends Extensions.* without attaching a page session", async () => {
+  const calls = installManualEgo();
+  try {
+    const promise = browserCdp(
+      "Extensions.loadUnpacked",
+      { path: "/tmp/extension" },
+      undefined,
+      5000,
+    );
+    assert.equal(calls.length, 1, "no Target.attachToTarget beforehand");
+    assert.equal(calls[0].method, "Extensions.loadUnpacked");
+    assert.equal(calls[0].sessionId, undefined);
+    globalThis.ego.onCDPMessage(
+      JSON.stringify({ id: calls[0].id, result: { id: "abcdef" } }),
+    );
+    const response = await promise;
+    assert.deepEqual(response.result, { id: "abcdef" });
+  } finally {
+    cleanup();
+  }
+});
+
 test("browserCdp does NOT retry SESSION_LOST for browser-level methods", async () => {
   const calls = installManualEgo();
   try {
