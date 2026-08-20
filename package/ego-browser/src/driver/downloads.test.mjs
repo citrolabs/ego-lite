@@ -71,10 +71,15 @@ test("waitForEvent('download') returns a Playwright-style download facade", asyn
     const download = await promise;
     assert.equal(download.suggestedFilename(), "file.png");
     assert.equal(download.url(), "https://example.com/file.png");
-    assert.match(await download.path(), /file\.png$/);
-    assert.ok(
-      calls.some((call) => call.method === "Browser.setDownloadBehavior"),
-      "enables browser download behavior",
+    assert.match(await download.path(), /download-1$/);
+    const behaviorCall = calls.find(
+      (call) => call.method === "Browser.setDownloadBehavior",
+    );
+    assert.ok(behaviorCall, "enables browser download behavior");
+    assert.equal(
+      behaviorCall.params.behavior,
+      "allowAndName",
+      "names the file on disk by its download guid",
     );
   } finally {
     cleanup();
@@ -113,11 +118,61 @@ test("waitForEvent('download') falls back to Page.setDownloadBehavior", async ()
       guid: "download-1",
       state: "completed",
     });
-    await promise;
+    const download = await promise;
+    const behaviorCall = calls.find(
+      (call) => call.method === "Page.setDownloadBehavior",
+    );
     assert.ok(
-      calls.some((call) => call.method === "Page.setDownloadBehavior"),
+      behaviorCall,
       "uses page-level download behavior when browser-level command is missing",
     );
+    assert.equal(
+      behaviorCall.params.behavior,
+      "allow",
+      "Page.setDownloadBehavior does not support allowAndName",
+    );
+    assert.match(
+      await download.path(),
+      /file\.png$/,
+      "derives the path from suggestedFilename when the browser names the file",
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("waitForEvent('download') derives the path from suggestedFilename when the guid is missing", async () => {
+  installAutoEgo();
+  try {
+    const promise = waitForEvent("download", { timeout: 1000 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fireEvent("Page.downloadWillBegin", {
+      url: "https://example.com/file.png",
+      suggestedFilename: "file.png",
+    });
+    fireEvent("Page.downloadProgress", { state: "completed" });
+    const download = await promise;
+    assert.equal(download.suggestedFilename(), "file.png");
+    assert.match(await download.path(), /file\.png$/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("waitForEvent('download') rejects a path that escapes the download directory", async () => {
+  installAutoEgo({ browserSetDownloadBehaviorError: true });
+  try {
+    const promise = waitForEvent("download", { timeout: 1000 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fireEvent("Page.downloadWillBegin", {
+      guid: "download-1",
+      suggestedFilename: "../escaped.png",
+    });
+    fireEvent("Page.downloadProgress", {
+      guid: "download-1",
+      state: "completed",
+    });
+    await assert.rejects(promise, /escapes the download directory/);
   } finally {
     cleanup();
   }
