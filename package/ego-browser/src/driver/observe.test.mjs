@@ -36,7 +36,21 @@ function withCdpRuntime(fn) {
       } else if (request.method === "Page.captureScreenshot") {
         result = { data: Buffer.from("png").toString("base64") };
       } else if (request.method === "Runtime.evaluate") {
-        result = { result: { value: "1" } };
+        const value = request.params.expression.includes(
+          "document.documentElement",
+        )
+          ? JSON.stringify({
+              url: "https://example.com/",
+              title: "Example",
+              w: 1280,
+              h: 720,
+              sx: 32,
+              sy: 8192,
+              pw: 1280,
+              ph: 12000,
+            })
+          : "2";
+        result = { result: { value } };
       }
       queueMicrotask(() =>
         runtime.onCDPMessage(JSON.stringify({ id: request.id, result })),
@@ -109,6 +123,34 @@ test("screenshot creates a missing parent directory", async () => {
     assert.equal((await readFile(path)).toString(), "png");
   } finally {
     await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("screenshot clips the viewport at the current document scroll offset", async () => {
+  const restore = setOverrides({
+    async writeFile() {},
+  });
+  try {
+    await withCdpRuntime(async ({ sent }) => {
+      await screenshot({ path: "/tmp/ego-browser-scrolled-shot.png" });
+
+      const shot = sent.find(
+        (request) => request.method === "Page.captureScreenshot",
+      );
+      assert.deepEqual(shot.params, {
+        format: "png",
+        captureBeyondViewport: false,
+        clip: {
+          x: 32,
+          y: 8192,
+          width: 1280,
+          height: 720,
+          scale: 0.5,
+        },
+      });
+    });
+  } finally {
+    restore();
   }
 });
 

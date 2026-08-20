@@ -123,8 +123,8 @@ export async function screenshot(options: ScreenshotOptions = {}) {
           return screenshot({ ...options, path, raw: true });
         }
         params.clip = {
-          x: 0,
-          y: 0,
+          x: full ? 0 : info.sx,
+          y: full ? 0 : info.sy,
           width: full ? info.pw : info.w,
           height: full ? info.ph : info.h,
           scale: cssScale,
