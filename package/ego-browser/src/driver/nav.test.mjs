@@ -141,6 +141,71 @@ test("newTab throws when the binding returns no targetId", async () => {
   );
 });
 
+test("newTab attaches subsequent page commands to the created target", async () => {
+  const calls = [];
+  let tabs = [
+    {
+      targetId: "target-old",
+      active: true,
+      title: "Old",
+      url: "https://example.com/old",
+    },
+  ];
+  const runtime = {
+    async listTabs() {
+      return { tabs };
+    },
+    async createTab(url) {
+      tabs = [
+        { ...tabs[0], active: false },
+        { targetId: "target-new", active: true, title: "New", url },
+      ];
+      return { targetId: "target-new" };
+    },
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      calls.push(request);
+      const result =
+        request.method === "Target.attachToTarget"
+          ? { sessionId: `session-${request.params.targetId}` }
+          : {};
+      queueMicrotask(() =>
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result })),
+      );
+    },
+  };
+
+  await withEgo(runtime, async () => {
+    invalidateSession();
+    state.preferredTargetId = null;
+    try {
+      await browserCdp("Runtime.evaluate", { expression: "1" });
+      assert.equal(state.sessionTargetId, "target-old");
+
+      assert.equal(await newTab("https://example.com/new"), "target-new");
+      assert.equal(state.sessionId, null);
+      assert.equal(state.preferredTargetId, "target-new");
+
+      await browserCdp("Runtime.evaluate", { expression: "2" });
+      assert.equal(state.sessionTargetId, "target-new");
+    } finally {
+      invalidateSession();
+      state.preferredTargetId = null;
+    }
+  });
+
+  assert.deepEqual(
+    calls
+      .filter((call) => call.method === "Target.attachToTarget")
+      .map((call) => call.params.targetId),
+    ["target-old", "target-new"],
+  );
+  assert.equal(
+    calls.filter((call) => call.method === "Runtime.evaluate").at(-1).sessionId,
+    "session-target-new",
+  );
+});
+
 test("openOrReuseTab settles a newly opened tab in milliseconds, not seconds", async () => {
   // Regression: the new-tab branch used to sleep(settle * 1000), so settle:500
   // (documented as 500ms) blocked for 500 seconds while the reuse branch

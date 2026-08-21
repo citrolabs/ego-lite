@@ -170,6 +170,8 @@ export async function newTab(url = "about:blank") {
   if (!result.targetId) {
     throw new Error("newTab returned no targetId");
   }
+  invalidateSession();
+  setPreferredTarget(result.targetId);
   return result.targetId;
 }
 
