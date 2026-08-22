@@ -21,6 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: dev
 
       # Pinned to the v1.0.5 commit; the renderer's package-lock.json makes the
       # npm install deterministic from there. commit is left to us because the
@@ -53,5 +55,6 @@ jobs:
             exit 0
           fi
           git commit -m 'chore: update star history [skip ci]'
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          target_branch=dev
+          git pull --rebase origin "${target_branch}"
+          git push origin "HEAD:${target_branch}"
