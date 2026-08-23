@@ -1,9 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { agentWorkspace, REPO_ROOT, SRC_DIR } from "../dist/src/env.js";
+import { agentWorkspace } from "../dist/src/env.js";
 
+// Derived the same way env.js derives them, from the built module's own
+// location, so the module keeps its internals private.
+const SRC_DIR = dirname(
+  fileURLToPath(new URL("../dist/src/env.js", import.meta.url)),
+);
+const REPO_ROOT = resolve(SRC_DIR, "..");
 const BUNDLED_SKILL = resolve(SRC_DIR, "ego-browser");
 const REPO_SKILL = resolve(REPO_ROOT, "..", "..", "skills", "ego-browser");
 const HOME = resolve("/home/agent");
