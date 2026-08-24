@@ -379,6 +379,9 @@ Result:
 }
 ```
 
+When no stable, unique locator is available, omit `loc` from both `refs` and
+the textual snapshot. Do not return `unstable` or `ambiguous` as locator values.
+
 If the browser side reports a snapshot error, the promise rejects with an
 `Error`. The `message` contains the human-readable error, and `error_code`
 contains a stable code such as `EGO_SNAPSHOT_FAILED`,

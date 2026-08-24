@@ -14,6 +14,11 @@ type SnapshotResult = {
   refs?: SnapshotRef[];
 };
 
+type SnapshotTreeNode = {
+  text: string;
+  children: SnapshotTreeNode[];
+};
+
 type CdpAdapter = {
   sendRaw(
     method: string,
@@ -29,6 +34,133 @@ type SnapshotServices = {
     sessionId?: string,
   ): Promise<any>;
 };
+
+/**
+ * Remove redundant native snapshot wrappers without changing semantic nodes.
+ *
+ * Native output uses two-space indentation as its tree encoding. If an older
+ * runtime returns another shape, leave it untouched instead of risking a
+ * lossy rewrite.
+ */
+export function compactSnapshotContent(content: string): string {
+  if (typeof content !== "string" || content.length === 0) return content;
+
+  const newline = content.includes("\r\n") ? "\r\n" : "\n";
+  const trailingNewline = content.endsWith(newline);
+  const lines = content.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  const rootIndex = lines.findIndex((line) => line.trim() === "root");
+  if (rootIndex < 0) return content;
+
+  const roots: SnapshotTreeNode[] = [];
+  const stack: Array<{ indent: number; node: SnapshotTreeNode }> = [];
+  for (const line of lines.slice(rootIndex)) {
+    const indent = line.length - line.trimStart().length;
+    if (indent % 2 !== 0) return content;
+
+    const node: SnapshotTreeNode = { text: line.trim(), children: [] };
+    while (stack.length && stack.at(-1)!.indent >= indent) stack.pop();
+    if (stack.length) stack.at(-1)!.node.children.push(node);
+    else roots.push(node);
+    stack.push({ indent, node });
+  }
+
+  const compacted = roots.flatMap(compactSnapshotNode);
+  const rendered = [
+    ...lines.slice(0, rootIndex),
+    ...renderSnapshotTree(compacted),
+  ].join(newline);
+  return rendered + (trailingNewline ? newline : "");
+}
+
+/** Compact textual content and omit native locator status sentinels. */
+export function compactSnapshotResult(result: SnapshotResult): SnapshotResult {
+  if (!result || typeof result !== "object") return result;
+  if (typeof result.content === "string") {
+    result.content = compactSnapshotContent(result.content);
+  }
+  for (const ref of result.refs || []) {
+    if (ref.loc === "unstable" || ref.loc === "ambiguous") delete ref.loc;
+  }
+  return result;
+}
+
+function compactSnapshotNode(node: SnapshotTreeNode): SnapshotTreeNode[] {
+  const text = omitUnusableLocatorStatus(node.text);
+  const children = node.children.flatMap(compactSnapshotNode);
+  if (isEmptySnapshotText(text)) return [];
+  if (text === "container" && children.length === 0) return [];
+  if (text === "container" && children.length === 1) return children;
+  return [{ text, children }];
+}
+
+function omitUnusableLocatorStatus(text: string): string {
+  const metadataIndex = findSnapshotMetadataStart(text);
+  if (metadataIndex < 0) return text;
+
+  const metadata = text.slice(metadataIndex);
+  if (!metadata.endsWith("]")) return text;
+  const compacted = metadata.replace(
+    /^(\[ref=[^,\]]+),\s*loc=(?:unstable|ambiguous)(?=,|\])/,
+    "$1",
+  );
+  return compacted === metadata
+    ? text
+    : `${text.slice(0, metadataIndex)}${compacted}`;
+}
+
+function findSnapshotMetadataStart(text: string): number {
+  let quoted = false;
+  let escaped = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quoted && character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === '"') {
+      quoted = !quoted;
+      continue;
+    }
+    if (
+      !quoted &&
+      text.startsWith("[ref=", index) &&
+      (index === 0 || /\s/.test(text[index - 1]))
+    ) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function isEmptySnapshotText(text: string): boolean {
+  if (text === "text") return true;
+  const match = text.match(/^text\s+("(?:\\.|[^"\\])*")$/);
+  if (!match) return false;
+  try {
+    const value = JSON.parse(match[1]);
+    return (
+      typeof value === "string" && value.replace(/[\s\p{Cf}]/gu, "") === ""
+    );
+  } catch {
+    return false;
+  }
+}
+
+function renderSnapshotTree(
+  nodes: SnapshotTreeNode[],
+  depth = 0,
+  output: string[] = [],
+): string[] {
+  for (const node of nodes) {
+    output.push(`${"  ".repeat(depth)}${node.text}`);
+    renderSnapshotTree(node.children, depth + 1, output);
+  }
+  return output;
+}
 
 /**
  * Add frame provenance that older native snapshots omit.
@@ -93,13 +225,14 @@ export async function validateSnapshotLocator(
   return valid.has(0);
 }
 
-/** Replace invalid native stable locators while retaining their short-lived refs. */
+/** Omit invalid native stable locators while retaining their short-lived refs. */
 export async function sanitizeSnapshotLocators(
   result: SnapshotResult,
   validator: (ref: SnapshotRef) => Promise<boolean>,
 ): Promise<SnapshotResult> {
   if (!Array.isArray(result?.refs)) return result;
 
+  const invalidLocators = new Map<string, Set<string>>();
   for (const ref of result.refs) {
     const locator = ref?.loc;
     if (
@@ -111,19 +244,58 @@ export async function sanitizeSnapshotLocators(
     }
     if (await validator(ref)) continue;
 
-    ref.loc = "unstable";
+    delete ref.loc;
     const refId = ref.refId ?? ref.backendNodeId;
-    if (typeof result.content === "string" && refId !== undefined) {
-      result.content = result.content.replaceAll(
-        `ref=${refId}, loc=${locator}`,
-        `ref=${refId}, loc=unstable`,
-      );
+    if (refId !== undefined) {
+      const refLocators = invalidLocators.get(String(refId)) ?? new Set();
+      refLocators.add(locator);
+      invalidLocators.set(String(refId), refLocators);
     }
+  }
+  if (typeof result.content === "string" && invalidLocators.size > 0) {
+    result.content = omitSnapshotLocators(result.content, invalidLocators);
   }
   return result;
 }
 
-/** Prepare one native snapshot for the Page API without changing its text shape. */
+function omitSnapshotLocators(
+  content: string,
+  invalidLocators: Map<string, Set<string>>,
+): string {
+  const newline = content.includes("\r\n") ? "\r\n" : "\n";
+  return content
+    .split(/\r?\n/)
+    .map((line) => omitSnapshotLineLocator(line, invalidLocators))
+    .join(newline);
+}
+
+function omitSnapshotLineLocator(
+  text: string,
+  invalidLocators: Map<string, Set<string>>,
+): string {
+  const metadataIndex = findSnapshotMetadataStart(text);
+  if (metadataIndex < 0) return text;
+
+  const metadata = text.slice(metadataIndex);
+  if (!metadata.endsWith("]")) return text;
+  const prefix = metadata.match(/^\[ref=([^,\]]+),\s*loc=/);
+  if (!prefix) return text;
+
+  const candidates = invalidLocators.get(prefix[1]);
+  if (!candidates) return text;
+  for (const locator of candidates) {
+    const locatorEnd = prefix[0].length + locator.length;
+    if (
+      metadata.startsWith(locator, prefix[0].length) &&
+      (metadata[locatorEnd] === "," || metadata[locatorEnd] === "]")
+    ) {
+      return `${text.slice(0, metadataIndex)}[ref=${prefix[1]}${metadata.slice(locatorEnd)}`;
+    }
+  }
+  return text;
+}
+
+/** Add frame provenance and validate stable locators for the Page API. */
 export async function preparePageSnapshotResult(
   services: SnapshotServices,
   pageSessionId: string,

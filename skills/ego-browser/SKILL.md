@@ -120,16 +120,28 @@ ego-browser provides the following Page API:
 or Node.js modules from the surrounding heredoc. Define browser-side helpers
 inside the callback or pass one JSON-serializable value as its second argument.
 
+Work efficiently:
+
+- Each time you observe, collect only the cheapest page state sufficient to
+  choose the next action. Use a snapshot for semantic or locator ground truth
+  and a screenshot for visual confirmation; do not request both by default.
+- If an action does not produce the expected result, inspect the current page
+  before deciding whether to retry. Do not blindly repeat it or immediately
+  fall back to coordinates or raw CDP.
+- Once the page clearly shows the requested result, stop; do not confirm the
+  same result through multiple surfaces.
+
 ### Semantic pages: snapshot and selectors
 
 Prefer snapshots and semantic selectors for ordinary DOM pages. Use screenshots
 and coordinates only when useful DOM semantics are unavailable.
 
-Before choosing an unfamiliar target, take a snapshot. When the next step
-depends on an action's result, keep the action, an expected-state wait, and the
-next snapshot in the same heredoc. Print the snapshot last so the next round
-can act on it directly. If no decision depends on intermediate states, batch
-deterministic actions and observe only after the last verified result.
+Before choosing an unfamiliar target, take a snapshot. When the current state
+is sufficient to plan several actions on the same Page, complete them in one
+heredoc, then observe the result once. Observe between actions only when an
+intermediate result changes what should happen next. Keep the action sequence,
+the wait for its final expected state, and the next snapshot in the same
+heredoc. Print the snapshot last so the next round can act on it directly.
 The final snapshot is the next round's starting view of the changed page;
 without it, that round usually has to spend a separate browser call observing
 before it can choose the next target, which wastes compute.

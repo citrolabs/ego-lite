@@ -8,7 +8,7 @@ import {
   browserCdp,
   invalidateSession,
 } from "../../dist/src/browser-runtime.js";
-import { captureScreenshot } from "../../dist/src/driver/observe.js";
+import { captureScreenshot, snapshot } from "../../dist/src/driver/observe.js";
 import { setOverrides } from "../../dist/src/state.js";
 
 function withCdpRuntime(fn) {
@@ -75,6 +75,34 @@ function withCdpRuntime(fn) {
       }
     });
 }
+
+test("snapshot compacts the native result before returning it", async () => {
+  const previous = globalThis.ego;
+  const calls = [];
+  globalThis.ego = {
+    async snapshot(options) {
+      calls.push(options);
+      return {
+        content: [
+          "root",
+          "  container",
+          "    button [ref=1, loc=unstable]",
+        ].join("\n"),
+        refs: [{ refId: 1, backendNodeId: 1, loc: "unstable" }],
+      };
+    },
+  };
+
+  try {
+    const result = await snapshot({ scope: "full_page" });
+    assert.deepEqual(calls, [{ scope: "full_page" }]);
+    assert.equal(result.content, "root\n  button [ref=1]");
+    assert.equal(result.refs[0].loc, undefined);
+  } finally {
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
 
 test("captureScreenshot skips page metric JavaScript while a native dialog is pending", async () => {
   const writes = [];

@@ -18,7 +18,7 @@ export function pageSnapshotLocatorCase() {
       .filter((line) => line.includes("locator=duplicate"));
     assertEqual(duplicateLines.length, 2, "snapshot contains both duplicate links");
     assert(
-      duplicateLines.every((line) => line.includes("loc=unstable")),
+      duplicateLines.every((line) => !line.includes(", loc=")),
       "snapshot does not advertise a duplicate href as a stable locator"
     );
     assertIncludes(

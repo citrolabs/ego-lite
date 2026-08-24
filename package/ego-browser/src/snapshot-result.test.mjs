@@ -2,11 +2,111 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  compactSnapshotContent,
+  compactSnapshotResult,
   enrichSnapshotRefFrames,
   preparePageSnapshotResult,
   sanitizeSnapshotLocators,
   validateSnapshotLocator,
 } from "../dist/src/snapshot-result.js";
+
+test("snapshot compaction removes only redundant text and containers", () => {
+  const content = [
+    "root",
+    "  container",
+    "  container",
+    "    container",
+    "      button [ref=1, loc=unstable]",
+    '        text "Save"',
+    "  container",
+    '    text "A"',
+    '    text "B"',
+    "  text",
+    '  text " "',
+    '  text "​"',
+    '  container "Section"',
+    '    text "Title"',
+    "  container [ref=2, loc=ambiguous]",
+    "  button [ref=3, loc=css:#confirm]",
+    "  button [ref=5, loc=css:[loc=unstable]]",
+    "  anchor [ref=6, loc=unstable, url=https://example.com/item]",
+    '  text "literal [ref=9, loc=unstable]"',
+    "  image",
+    "  svg_root",
+    "  canvas",
+    "  iframe [ref=4, loc=unstable]",
+    "    root",
+    "  list",
+    "    list_item",
+    "  table",
+    "    table_row",
+    "      table_cell",
+  ].join("\n");
+
+  const compact = [
+    "root",
+    "  button [ref=1]",
+    '    text "Save"',
+    "  container",
+    '    text "A"',
+    '    text "B"',
+    '  container "Section"',
+    '    text "Title"',
+    "  container [ref=2]",
+    "  button [ref=3, loc=css:#confirm]",
+    "  button [ref=5, loc=css:[loc=unstable]]",
+    "  anchor [ref=6, url=https://example.com/item]",
+    '  text "literal [ref=9, loc=unstable]"',
+    "  image",
+    "  svg_root",
+    "  canvas",
+    "  iframe [ref=4]",
+    "    root",
+    "  list",
+    "    list_item",
+    "  table",
+    "    table_row",
+    "      table_cell",
+  ].join("\n");
+
+  assert.equal(compactSnapshotContent(content), compact);
+  assert.equal(compactSnapshotContent(compact), compact);
+  assert.equal(
+    compactSnapshotContent("snapshot unavailable"),
+    "snapshot unavailable",
+  );
+});
+
+test("snapshot compaction omits unusable locator statuses from refs", () => {
+  const result = {
+    content: [
+      "root",
+      "  button [ref=1, loc=unstable]",
+      "  button [ref=2, loc=ambiguous]",
+      "  button [ref=3, loc=css:#save]",
+    ].join("\n"),
+    refs: [
+      { refId: 1, backendNodeId: 1, loc: "unstable" },
+      { refId: 2, backendNodeId: 2, loc: "ambiguous" },
+      { refId: 3, backendNodeId: 3, loc: "css:#save" },
+    ],
+  };
+
+  compactSnapshotResult(result);
+
+  assert.equal(
+    result.content,
+    [
+      "root",
+      "  button [ref=1]",
+      "  button [ref=2]",
+      "  button [ref=3, loc=css:#save]",
+    ].join("\n"),
+  );
+  assert.equal(result.refs[0].loc, undefined);
+  assert.equal(result.refs[1].loc, undefined);
+  assert.equal(result.refs[2].loc, "css:#save");
+});
 
 test("snapshot locator validation batches DOM queries and object cleanup", async () => {
   const calls = [];
@@ -184,7 +284,8 @@ test("role locator validation keeps healthy trees when one frame detaches", asyn
 test("invalid native snapshot locators are hidden without removing their refs", async () => {
   const result = {
     content: [
-      'textfield "Prompt" [ref=10, loc=css:input[aria-label="Prompt"]]',
+      'textfield "Prompt" [ref=10, loc=css:#prompt, url=https://example.com/prompt]',
+      'text "literal ref=10, loc=css:#prompt"',
       'button "Save" [ref=11, loc=role:button[name="Save"]]',
     ].join("\n"),
     refs: [
@@ -192,7 +293,7 @@ test("invalid native snapshot locators are hidden without removing their refs", 
         backendNodeId: 10,
         role: "textfield",
         name: "Prompt",
-        loc: 'css:input[aria-label="Prompt"]',
+        loc: "css:#prompt",
       },
       {
         backendNodeId: 11,
@@ -208,10 +309,15 @@ test("invalid native snapshot locators are hidden without removing their refs", 
     async (ref) => ref.backendNodeId === 11,
   );
 
-  assert.match(result.content, /ref=10, loc=unstable/);
-  assert.doesNotMatch(result.content, /loc=css:input/);
-  assert.match(result.content, /ref=11, loc=role:button/);
-  assert.equal(result.refs[0].loc, "unstable");
+  assert.equal(
+    result.content,
+    [
+      'textfield "Prompt" [ref=10, url=https://example.com/prompt]',
+      'text "literal ref=10, loc=css:#prompt"',
+      'button "Save" [ref=11, loc=role:button[name="Save"]]',
+    ].join("\n"),
+  );
+  assert.equal(result.refs[0].loc, undefined);
   assert.equal(result.refs[1].loc, 'role:button[name="Save"]');
 });
 

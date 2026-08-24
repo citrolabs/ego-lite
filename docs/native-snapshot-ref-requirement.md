@@ -1,4 +1,28 @@
-# Native snapshot metadata requirements
+# Native snapshot requirements
+
+## Compact snapshot text
+
+Please simplify the snapshot tree before serializing `content`:
+
+- Omit text nodes that are empty, whitespace-only (including NBSP), or contain
+  only zero-width formatting characters.
+- Omit an unnamed `container` with no remaining children.
+- Replace an unnamed `container` with its only remaining child.
+- Keep unnamed containers with multiple children because they preserve
+  grouping.
+- Keep named or ref-bearing containers and semantic nodes such as `image`,
+  `svg_root`, `canvas`, `iframe`, `root`, list items, and table cells.
+
+The transformation must preserve the order of remaining nodes, refs, stable
+locators, URLs, and iframe boundaries. It applies to both viewport and full-page
+snapshots. Never remove or rewrite non-empty page text because it is
+non-interactive, because its parent container is simplified, or while cleaning
+locator metadata.
+
+Acceptance: a fixture containing nested containers, blank text, two sibling
+groups, an iframe, an image, an SVG, a canvas, and an empty table cell is
+captured twice. The compact output is identical on the second pass, the sibling
+groups remain distinct, and every ref still resolves to its original node.
 
 ## Snapshot refs for iframe content
 
@@ -48,6 +72,7 @@ Please cover at least these cases in native tests:
 - the same role and name in the top-level document and an iframe;
 - a locator whose element type does not match the source node.
 
-Return `ambiguous` or `unstable`, or omit the locator, when uniqueness and node
-identity cannot both be established. The JS runtime validates advertised
-locators and downgrades invalid ones as a compatibility safeguard.
+Omit the locator when uniqueness and node identity cannot both be established.
+Do not serialize `loc=unstable` or `loc=ambiguous` in `content`, and do not use
+those status strings in `refs`. The JS runtime validates advertised locators
+and omits invalid ones as a compatibility safeguard.

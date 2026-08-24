@@ -14,6 +14,7 @@ import {
 } from "../browser-runtime.js";
 import { invokeEgo } from "../ego-errors.js";
 import { resolveElementCenter } from "../element-resolver.js";
+import { compactSnapshotResult } from "../snapshot-result.js";
 import {
   browserRefMap,
   ensureRefMapForRef,
@@ -49,6 +50,7 @@ export async function snapshot(options: SnapshotOptions = {}) {
   const result: any = await invokeEgo("snapshot", () =>
     browserEgo().snapshot(options),
   );
+  compactSnapshotResult(result);
   browserSnapshotRefsToRefMap(browserRefMap, result.refs || []);
   return result;
 }
