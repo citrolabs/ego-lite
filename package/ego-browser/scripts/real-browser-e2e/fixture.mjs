@@ -78,6 +78,14 @@ export async function startFixtureServer(taskName) {
       res.end();
       return;
     }
+    if (url.pathname === "/redirect/favicon.ico") {
+      res.writeHead(302, {
+        location: "/api/slow?ms=2000&case=favicon-redirect",
+        "cache-control": "no-store",
+      });
+      res.end();
+      return;
+    }
     if (url.pathname === "/api/echo") {
       let body = "";
       req.on("data", (chunk) => {
@@ -87,6 +95,7 @@ export async function startFixtureServer(taskName) {
         res.writeHead(200, {
           "content-type": "text/plain",
           "access-control-allow-origin": "*",
+          "cache-control": "no-store",
         });
         res.end(`echo:${req.method}:${body}`);
       });
@@ -129,6 +138,7 @@ export async function startFixtureServer(taskName) {
         res.writeHead(200, {
           "content-type": "text/plain",
           "access-control-allow-origin": "*",
+          "cache-control": "no-store",
         });
         res.end("slow fixture");
       }, delayMs);
@@ -166,6 +176,19 @@ export async function startFixtureServer(taskName) {
       res.end(pageHtml("frame", { iframeUrl: null }));
       return;
     }
+    if (url.pathname === "/slow-frame") {
+      const delayMs = Number(url.searchParams.get("ms") || 800);
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(`<!doctype html>
+        <html>
+          <head><title>Slow OOPIF fixture</title></head>
+          <body>
+            <h1>Slow OOPIF</h1>
+            <img src="/api/slow?ms=${delayMs}" alt="slow OOPIF resource">
+          </body>
+        </html>`);
+      return;
+    }
     if (url.pathname === "/nav-target") {
       res.writeHead(200, { "content-type": "text/html" });
       res.end(pageHtml("nav-target"));
@@ -179,6 +202,16 @@ export async function startFixtureServer(taskName) {
     if (url.pathname === "/same-origin-frame") {
       res.writeHead(200, { "content-type": "text/html" });
       res.end(pageHtml("home", { iframeUrl: "/frame.html" }));
+      return;
+    }
+    if (url.pathname === "/oopif-network") {
+      const delayMs = Number(url.searchParams.get("ms") || 800);
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(
+        pageHtml("home", {
+          iframeUrl: `${crossSiteBaseUrl}/slow-frame?ms=${delayMs}`,
+        }),
+      );
       return;
     }
     if (url.pathname === "/visual") {
@@ -233,6 +266,21 @@ export async function startFixtureServer(taskName) {
               });
             </script>
           </body>
+        </html>`);
+      return;
+    }
+    if (url.pathname === "/favicon-redirect-page") {
+      res.writeHead(200, {
+        "content-type": "text/html",
+        "cache-control": "no-store",
+      });
+      res.end(`<!doctype html>
+        <html>
+          <head>
+            <title>Favicon redirect fixture</title>
+            <link rel="icon" href="/redirect/favicon.ico">
+          </head>
+          <body><h1>Favicon redirect fixture</h1></body>
         </html>`);
       return;
     }

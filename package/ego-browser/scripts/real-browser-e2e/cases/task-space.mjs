@@ -83,7 +83,7 @@ export function taskSpaceCase() {
     await takeOverTaskSpace();
     await waitForAgentControl(taskName, { interval: 0.1, timeout: 5 });
     const v2Task = await taskSpace(taskName + " v2 lifecycle");
-    await newPageAt(v2Task, baseUrl + "/secondary?v2-lifecycle=handoff");
+    await v2Task.page("p1").goto(baseUrl + "/secondary?v2-lifecycle=handoff");
     await v2Task.handOff();
     const resumedTask = await takeOverTaskSpace(v2Task.spaceId);
     await resumedTask.waitForControl({ interval: 100, timeout: 5_000 });
@@ -101,7 +101,7 @@ export function taskSpaceCase() {
     );
 
     const finishTask = await taskSpace(taskName + " v2 finish");
-    await newPageAt(finishTask, baseUrl + "/secondary?v2-lifecycle=finish");
+    await finishTask.page("p1").goto(baseUrl + "/secondary?v2-lifecycle=finish");
     const finishSpaceId = finishTask.spaceId;
     await finishTask.finish();
     assert(
@@ -116,9 +116,11 @@ export function taskSpaceCase() {
 export function crossSpaceV2Case() {
   return `
     const firstTask = await taskSpace(taskName + " gate first");
-    const firstPage = await newPageAt(firstTask, baseUrl + "/?space=first");
+    const firstPage = firstTask.page("p1");
+    await firstPage.goto(baseUrl + "/?space=first");
     const secondTask = await taskSpace(taskName + " gate second");
-    const secondPage = await newPageAt(secondTask, baseUrl + "/secondary?space=second");
+    const secondPage = secondTask.page("p1");
+    await secondPage.goto(baseUrl + "/secondary?space=second");
 
     const [firstInfo, secondInfo] = await Promise.all([
       firstPage.info(),

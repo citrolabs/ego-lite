@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { NativeOperationGate } from "../dist/src/native-gate.js";
+import { CdpRequestTimeoutError } from "../dist/src/browser-runtime.js";
 import { PageLedgerStore } from "../dist/src/page-ledger.js";
 import {
   captureTaskSpaceUserBoundary,
@@ -49,6 +50,11 @@ function createFixture(rootDir) {
   let focusResult = { focused: true };
   let unsafeFillActivationTarget = null;
   let selectedValues = [];
+  let selectOptions = [
+    { value: "nl", label: "Netherlands" },
+    { value: "one", label: "One" },
+    { value: "two", label: "Two" },
+  ];
   let navigateOnNextClickUrl = null;
   let elementPresent = true;
   let elementVisible = true;
@@ -61,6 +67,8 @@ function createFixture(rootDir) {
   let nowMs = 1_000;
   const pageEvents = new Map();
   const networkSessions = new Set();
+  const networkRequests = new Map();
+  const networkLastActivityAt = new Map();
   const sessionOverrides = new Map();
   const sessionTargets = new Map();
   const snapshotOptions = [];
@@ -262,6 +270,17 @@ function createFixture(rootDir) {
             },
           };
         }
+        if (params.expression.includes("__egoNavigationState")) {
+          return {
+            result: {
+              type: "object",
+              value: {
+                url: tab.url,
+                readyState: documentReadyState,
+              },
+            },
+          };
+        }
         if (
           /return __egoQueryAllOpenShadow\([^;]+\)\.length;/.test(
             params.expression,
@@ -369,7 +388,24 @@ function createFixture(rootDir) {
           };
         }
         if (params.functionDeclaration.includes("selectOptionsForAction")) {
-          selectedValues = [...(params.arguments?.[0]?.value ?? [])];
+          const choices = params.arguments?.[0]?.value ?? [];
+          selectedValues = choices.map((choice) => {
+            const option =
+              typeof choice === "string"
+                ? selectOptions.find(
+                    (candidate) =>
+                      candidate.value === choice || candidate.label === choice,
+                  )
+                : selectOptions.find(
+                    (candidate, index) =>
+                      (choice.value === undefined ||
+                        candidate.value === choice.value) &&
+                      (choice.label === undefined ||
+                        candidate.label === choice.label) &&
+                      (choice.index === undefined || index === choice.index),
+                  );
+            return option?.value;
+          });
           return {
             result: { type: "object", value: { selected: selectedValues } },
           };
@@ -510,11 +546,17 @@ function createFixture(rootDir) {
       }
       if (method === "DOM.setFileInputFiles") return {};
       if (method === "Network.enable") {
+        if (!networkSessions.has(sessionId)) {
+          networkRequests.set(sessionId, new Set());
+          networkLastActivityAt.set(sessionId, nowMs);
+        }
         networkSessions.add(sessionId);
         return {};
       }
       if (method === "Network.disable") {
         networkSessions.delete(sessionId);
+        networkRequests.delete(sessionId);
+        networkLastActivityAt.delete(sessionId);
         return {};
       }
       if (method === "Browser.getVersion") {
@@ -561,6 +603,9 @@ function createFixture(rootDir) {
       }
       if (method === "Target.setDiscoverTargets") return {};
       if (method === "Page.handleJavaScriptDialog") {
+        if (!pendingDialogs.has(sessionId)) {
+          throw new Error("No dialog is showing");
+        }
         pendingDialogs.delete(sessionId);
         return {};
       }
@@ -637,8 +682,32 @@ function createFixture(rootDir) {
       pageEvents.set(sessionId, []);
       return events;
     },
-    isNetworkDomainEnabled(sessionId) {
-      return networkSessions.has(sessionId);
+    async ensureNetworkTracking(sessionIds) {
+      for (const sessionId of new Set(sessionIds)) {
+        if (!networkSessions.has(sessionId)) {
+          await services.cdp("Network.enable", {}, sessionId);
+        }
+      }
+    },
+    async pageNetworkSessions(sessionId) {
+      return [sessionId];
+    },
+    networkActivity(sessionIds) {
+      let tracking = sessionIds.length > 0;
+      let inflight = 0;
+      let lastActivityAt = 0;
+      for (const sessionId of new Set(sessionIds)) {
+        if (!networkSessions.has(sessionId)) {
+          tracking = false;
+          continue;
+        }
+        inflight += networkRequests.get(sessionId)?.size ?? 0;
+        lastActivityAt = Math.max(
+          lastActivityAt,
+          networkLastActivityAt.get(sessionId) ?? 0,
+        );
+      }
+      return { tracking, inflight, lastActivityAt };
     },
     ensureSession: ensureTargetSession,
     async ensureFrameSessions() {
@@ -691,6 +760,9 @@ function createFixture(rootDir) {
         type: dialog.type ?? "alert",
         message: dialog.message ?? "Confirm action",
         url: dialog.url ?? "https://example.test/dialog",
+        ...(dialog.defaultPrompt === undefined
+          ? {}
+          : { defaultPrompt: dialog.defaultPrompt }),
       };
     },
     rejectNextClickPoint() {
@@ -726,6 +798,9 @@ function createFixture(rootDir) {
     configureUnsafeFillActivation(target) {
       unsafeFillActivationTarget = target;
     },
+    configureSelectOptions(options) {
+      selectOptions = options.map((option) => ({ ...option }));
+    },
     fillText: () => fillText,
     setElementState({ present = true, visible = true }) {
       elementPresent = present;
@@ -755,6 +830,21 @@ function createFixture(rootDir) {
     },
     emitPageEvent(targetId, method, params = {}) {
       const sessionId = `session:${targetId}`;
+      if (networkSessions.has(sessionId)) {
+        const requests = networkRequests.get(sessionId) || new Set();
+        if (method === "Network.requestWillBeSent" && params.requestId) {
+          requests.add(params.requestId);
+          networkLastActivityAt.set(sessionId, nowMs);
+        } else if (
+          (method === "Network.loadingFinished" ||
+            method === "Network.loadingFailed") &&
+          params.requestId
+        ) {
+          requests.delete(params.requestId);
+          networkLastActivityAt.set(sessionId, nowMs);
+        }
+        networkRequests.set(sessionId, requests);
+      }
       const events = pageEvents.get(sessionId) || [];
       events.push({ sessionId, method, params });
       pageEvents.set(sessionId, events);
@@ -810,6 +900,78 @@ test("background discovery does not adopt the pre-existing tab baseline", async 
       "target-existing": "unknown",
     });
     assert.deepEqual(consumeUnhandledPageNotices(), []);
+  });
+});
+
+test("a created TaskSpace manages its sole default tab as agent page p1", async () => {
+  await withFixture(async (fixture) => {
+    fixture.addExternalTab("target-initial", "chrome://newtab/", {
+      active: true,
+    });
+    const ledger = new PageLedgerStore({ rootDir: fixture.rootDir });
+    const task = taskForRound(fixture, "round-a", { ledger });
+
+    await initializeTaskSpaceHandle(task, { created: true });
+
+    const [initial] = await task.pages();
+    assert.equal(initial.label, "p1");
+    assert.equal(initial.targetId, "target-initial");
+    assert.equal(initial.openedBy, "agent");
+
+    const next = await task.newPage();
+    assert.equal(next.label, "p2");
+    assert.notEqual(next.targetId, initial.targetId);
+  });
+});
+
+test("created-space initialization waits for a delayed default tab", async () => {
+  await withFixture(async (fixture) => {
+    fixture.addExternalTab("target-initial", "chrome://newtab/", {
+      active: true,
+    });
+    let inventories = 0;
+    const task = taskForRound(fixture, "round-a", {
+      async listTabs() {
+        inventories += 1;
+        if (inventories === 1) return [];
+        return fixture.services.listTabs();
+      },
+    });
+
+    await initializeTaskSpaceHandle(task, { created: true });
+
+    const [initial] = await task.pages();
+    assert.equal(initial.label, "p1");
+    assert.equal(initial.targetId, "target-initial");
+    assert(inventories >= 2);
+  });
+});
+
+test("created-space initialization refuses to guess between multiple tabs", async () => {
+  await withFixture(async (fixture) => {
+    fixture.addExternalTab("target-a", "chrome://newtab/", { active: true });
+    fixture.addExternalTab("target-b", "about:blank");
+    const ledger = new PageLedgerStore({ rootDir: fixture.rootDir });
+    const task = taskForRound(fixture, "round-a", { ledger });
+
+    await assert.rejects(
+      () => initializeTaskSpaceHandle(task, { created: true }),
+      /new task space expected one default tab, found 2/,
+    );
+    assert.deepEqual((await ledger.read(7)).pages, {});
+  });
+});
+
+test("created-space initialization times out when no default tab appears", async () => {
+  await withFixture(async (fixture) => {
+    const ledger = new PageLedgerStore({ rootDir: fixture.rootDir });
+    const task = taskForRound(fixture, "round-a", { ledger });
+
+    await assert.rejects(
+      () => initializeTaskSpaceHandle(task, { created: true }),
+      /new task space did not expose its default tab within 2000ms/,
+    );
+    assert.deepEqual((await ledger.read(7)).pages, {});
   });
 });
 
@@ -1394,7 +1556,209 @@ test("Page.goto starts network tracking before a network-idle navigation", async
       methods.indexOf("Network.enable") < methods.indexOf("Page.navigate"),
     );
     assert(
-      methods.lastIndexOf("Network.disable") > methods.indexOf("Page.navigate"),
+      !methods.includes("Network.disable"),
+      "continuous tracking must remain enabled for requests that start before a later wait",
+    );
+  });
+});
+
+test("Page.goto timeout distinguishes a committed usable document", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+    fixture.setDocumentLifecycle({
+      readyState: "loading",
+      domContentLoaded: false,
+    });
+
+    await assert.rejects(
+      () =>
+        page.goto("https://example.test/streaming", {
+          timeout: 100,
+          waitUntil: "load",
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_NAVIGATION_TIMEOUT");
+        assert.equal(error.committed, true);
+        assert.equal(error.url, "https://example.test/streaming");
+        assert.equal(error.readyState, "loading");
+        assert.match(error.message, /navigation committed/);
+        assert.match(error.message, /waitForLoadState\("load"\)/);
+        return true;
+      },
+    );
+  });
+});
+
+test("Page.goto timeout reports when no new document committed", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let nowMs = 0;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (
+          method === "Page.navigate" &&
+          params.url === "https://example.test/never-committed"
+        ) {
+          nowMs = 100;
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+      now: () => nowMs,
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    nowMs = 0;
+
+    await assert.rejects(
+      () =>
+        page.goto("https://example.test/never-committed", {
+          timeout: 100,
+          waitUntil: "load",
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_NAVIGATION_TIMEOUT");
+        assert.equal(error.committed, false);
+        assert.equal(error.url, undefined);
+        assert.equal(error.readyState, undefined);
+        assert.doesNotMatch(error.message, /Continue on this Page/);
+        return true;
+      },
+    );
+  });
+});
+
+test("Page.goto performs one final loader check at the timeout boundary", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let nowMs = 0;
+    let frameChecks = 0;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.navigate") {
+          await baseCdp(method, params, sessionId, timeoutMs);
+          return {
+            result: { frameId: "frame-1", loaderId: "loader-new" },
+          };
+        }
+        if (method === "Page.getFrameTree") {
+          frameChecks += 1;
+          return {
+            result: {
+              frameTree: {
+                frame: {
+                  id: "frame-1",
+                  loaderId: frameChecks >= 3 ? "loader-new" : "loader-old",
+                },
+              },
+            },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+      now: () => nowMs,
+      async sleep(ms) {
+        nowMs += ms;
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    nowMs = 0;
+    frameChecks = 0;
+    fixture.setDocumentLifecycle({
+      readyState: "loading",
+      domContentLoaded: false,
+    });
+
+    await assert.rejects(
+      () =>
+        page.goto("https://example.test/boundary", {
+          timeout: 100,
+          waitUntil: "load",
+        }),
+      (error) => {
+        assert.equal(error.committed, true);
+        assert.equal(error.url, "https://example.test/boundary");
+        return true;
+      },
+    );
+    assert.equal(frameChecks, 3);
+  });
+});
+
+test("Page.reload reloads the current document and waits for the requested state", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let loaderId = "loader-old";
+    let reloading = false;
+    let postReloadChecks = 0;
+    let reloadParams;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.getFrameTree") {
+          if (reloading) {
+            postReloadChecks += 1;
+            if (postReloadChecks >= 2) loaderId = "loader-new";
+          }
+          return {
+            result: {
+              frameTree: { frame: { id: "frame-1", loaderId } },
+            },
+          };
+        }
+        if (method === "Page.reload") {
+          reloadParams = params;
+          reloading = true;
+          return {};
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    fixture.setDocumentLifecycle({
+      readyState: "interactive",
+      domContentLoaded: true,
+    });
+    assert.deepEqual(
+      await page.reload({ timeout: 250, waitUntil: "domcontentloaded" }),
+      {},
+    );
+    assert.deepEqual(reloadParams, { loaderId: "loader-old" });
+    assert.equal(
+      postReloadChecks,
+      2,
+      "reload waits for a new main-frame loader",
+    );
+  });
+});
+
+test("Page.reload times out when no new document commits", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let nowMs = 0;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.getFrameTree") {
+          return {
+            result: {
+              frameTree: {
+                frame: { id: "frame-1", loaderId: "loader-old" },
+              },
+            },
+          };
+        }
+        if (method === "Page.reload") return {};
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+      now: () => nowMs,
+      async sleep(ms) {
+        nowMs += ms;
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+
+    await assert.rejects(
+      () => page.reload({ timeout: 100, waitUntil: "commit" }),
+      /page\.reload timed out after 100ms waiting for commit/,
     );
   });
 });
@@ -1621,6 +1985,276 @@ test("Page evaluate preserves a large nested JSON argument", async () => {
   });
 });
 
+test("Page evaluate preserves user exceptions that resemble protocol timeouts", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (
+          method === "Runtime.evaluate" &&
+          params.expression.includes("userTimeoutLikeError")
+        ) {
+          return {
+            result: {
+              type: "object",
+              subtype: "error",
+              description: "Error: Execution was terminated",
+            },
+            exceptionDetails: { text: "Uncaught" },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/evaluate");
+
+    await assert.rejects(
+      () =>
+        page.evaluate(function userTimeoutLikeError() {
+          throw new Error("Execution was terminated");
+        }),
+      (error) => {
+        assert.equal(error.code, undefined);
+        assert.match(error.message, /Execution was terminated/);
+        return true;
+      },
+    );
+  });
+});
+
+test("Page.waitForFunction gives one predicate the remaining overall timeout", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let timedCall;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (
+          method === "Runtime.evaluate" &&
+          params.expression.includes("__egoWaitForFunction")
+        ) {
+          timedCall = { params, timeoutMs };
+          return {
+            result: {
+              type: "object",
+              value: {
+                matched: true,
+                url: "https://example.test/wait",
+                title: "wait",
+              },
+            },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/wait");
+
+    assert.equal(
+      await page.waitForFunction(
+        async () => {
+          await new Promise((resolve) => setTimeout(resolve, 1_500));
+          return true;
+        },
+        undefined,
+        { timeout: 2_500 },
+      ),
+      true,
+    );
+    assert.equal(timedCall.params.timeout, 2_500);
+    assert.equal(timedCall.timeoutMs, 2_750);
+  });
+});
+
+test("Page evaluate gives synchronous code an execution deadline", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let first = true;
+    let timedCall;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (
+          first &&
+          method === "Runtime.evaluate" &&
+          params.expression.includes("__egoPageEvaluate")
+        ) {
+          first = false;
+          timedCall = { params, timeoutMs };
+          throw new Error("Execution was terminated");
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/evaluate");
+
+    await assert.rejects(
+      () =>
+        page.evaluate(() => {
+          while (true) {}
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_EVALUATION_TIMED_OUT");
+        assert.equal(error.executionStopped, true);
+        assert.equal(error.mayHaveLateEffects, true);
+        assert.equal(error.pageResponsive, true);
+        assert.match(error.message, /execution was stopped/i);
+        return true;
+      },
+    );
+    assert.equal(timedCall.params.timeout, 14_000);
+    assert.equal(timedCall.timeoutMs, 15_000);
+    assert.deepEqual(await page.evaluate((value) => value, "ready"), "ready");
+  });
+});
+
+test("Page evaluate distinguishes a responsive pending promise from a stuck renderer", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let first = true;
+    let probes = 0;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (
+          first &&
+          method === "Runtime.evaluate" &&
+          params.expression.includes("__egoPageEvaluate")
+        ) {
+          first = false;
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Runtime.evaluate" && params.expression === "1") {
+          probes += 1;
+          return { result: { type: "number", value: 1 } };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/evaluate");
+
+    await assert.rejects(
+      () => page.evaluate(async () => new Promise(() => {})),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_EVALUATION_TIMED_OUT");
+        assert.equal(error.executionStopped, false);
+        assert.equal(error.mayHaveLateEffects, true);
+        assert.equal(error.pageResponsive, true);
+        assert.match(error.message, /still pending/i);
+        return true;
+      },
+    );
+    assert.equal(probes, 1);
+    assert.equal(
+      fixture.calls.some(
+        ([kind, method]) =>
+          kind === "cdp" && method === "Runtime.terminateExecution",
+      ),
+      false,
+    );
+  });
+});
+
+test("Page evaluate terminates execution only after its health probe also times out", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let initial = true;
+    let healthChecks = 0;
+    let terminateCalls = 0;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (
+          initial &&
+          method === "Runtime.evaluate" &&
+          params.expression.includes("__egoPageEvaluate")
+        ) {
+          initial = false;
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Runtime.evaluate" && params.expression === "1") {
+          healthChecks += 1;
+          if (healthChecks === 1) {
+            throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+          }
+          return { result: { type: "number", value: 1 } };
+        }
+        if (method === "Runtime.terminateExecution") {
+          terminateCalls += 1;
+          return {};
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/evaluate");
+
+    await assert.rejects(
+      () =>
+        page.evaluate(() => {
+          while (true) {}
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_EVALUATION_TIMED_OUT");
+        assert.equal(error.executionStopped, true);
+        assert.equal(error.mayHaveLateEffects, true);
+        assert.equal(error.pageResponsive, true);
+        assert.match(error.message, /renderer stopped responding/i);
+        return true;
+      },
+    );
+    assert.equal(terminateCalls, 1);
+    assert.equal(healthChecks, 2);
+  });
+});
+
+test("Page evaluate retries when termination is consumed by the first recovery probe", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let initial = true;
+    let healthChecks = 0;
+    let terminateCalls = 0;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (
+          initial &&
+          method === "Runtime.evaluate" &&
+          params.expression.includes("__egoPageEvaluate")
+        ) {
+          initial = false;
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Runtime.evaluate" && params.expression === "1") {
+          healthChecks += 1;
+          if (healthChecks === 1) {
+            throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+          }
+          if (healthChecks === 2) {
+            throw new Error("Execution was terminated");
+          }
+          return { result: { type: "number", value: 1 } };
+        }
+        if (method === "Runtime.terminateExecution") {
+          terminateCalls += 1;
+          return {};
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/evaluate");
+
+    await assert.rejects(
+      () =>
+        page.evaluate(() => {
+          while (true) {}
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_EVALUATION_TIMED_OUT");
+        assert.equal(error.executionStopped, true);
+        assert.equal(error.pageResponsive, true);
+        return true;
+      },
+    );
+    assert.equal(terminateCalls, 1);
+    assert.equal(healthChecks, 3);
+  });
+});
+
 test("Page fetch activates its target and returns a structured non-2xx response", async () => {
   await withFixture(async (fixture) => {
     const task = taskForRound(fixture, "round-a");
@@ -1795,7 +2429,8 @@ test("Page click returns a pending JavaScript dialog without waiting for input c
     const activationsBeforeHandle = fixture.calls.filter(
       ([kind, method]) => kind === "cdp" && method === "Target.activateTarget",
     ).length;
-    await page.cdp("Page.handleJavaScriptDialog", { accept: true });
+    assert.equal(await page.acceptDialog(), true);
+    assert.equal(await page.acceptDialog(), false);
     assert.equal(
       fixture.calls.filter(
         ([kind, method]) =>
@@ -1813,6 +2448,62 @@ test("Page click returns a pending JavaScript dialog without waiting for input c
       ),
     );
     assert.equal((await page.info()).url, "https://example.test/dialog");
+  });
+});
+
+test("a no-dialog response keeps current snapshot refs", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/dialog");
+    await page.snapshot();
+
+    assert.equal(
+      fixture.services.pageRefs.forTarget(page.targetId).get("21")
+        .backendNodeId,
+      21,
+    );
+    assert.equal(await page.dismissDialog(), false);
+    assert.equal(
+      fixture.services.pageRefs.forTarget(page.targetId).get("21")
+        .backendNodeId,
+      21,
+      "an idempotent no-dialog call must not invalidate an unchanged DOM",
+    );
+  });
+});
+
+test("Page accepts prompt text and dismisses dialogs on its own session", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const first = await openTestPage(task, "https://example.test/first");
+    const second = await openTestPage(task, "https://example.test/second");
+
+    fixture.openDialogOnNextClick({
+      type: "prompt",
+      message: "Choose a name",
+      defaultPrompt: "guest",
+    });
+    const promptReceipt = await first.click("#prompt");
+    assert.equal(promptReceipt.dialog.defaultPrompt, "guest");
+    assert.equal(await second.dismissDialog(), false);
+    assert.equal(await first.acceptDialog("agent"), true);
+
+    fixture.openDialogOnNextClick({ type: "confirm", message: "Continue?" });
+    await first.click("#confirm");
+    assert.equal(await first.dismissDialog(), true);
+
+    const dialogCalls = fixture.calls.filter(
+      ([kind, method]) =>
+        kind === "cdp" && method === "Page.handleJavaScriptDialog",
+    );
+    assert.deepEqual(
+      dialogCalls.map(([, , params, sessionId]) => [params, sessionId]),
+      [
+        [{ accept: false }, "session:target-2"],
+        [{ accept: true, promptText: "agent" }, "session:target-1"],
+        [{ accept: false }, "session:target-1"],
+      ],
+    );
   });
 });
 
@@ -2054,6 +2745,144 @@ test("Page selectOption selects values through the addressed Page", async () => 
       "two",
     ]);
     assert.deepEqual(fixture.selectedValues(), ["one", "two"]);
+  });
+});
+
+test("Page selectOption accepts Playwright-style labels, values, and indexes", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/form");
+
+    fixture.configureSelectOptions([
+      { value: "09", label: "September" },
+      { value: "10", label: "October" },
+    ]);
+    assert.deepEqual(await page.selectOption("#month", { label: "October" }), [
+      "10",
+    ]);
+    fixture.configureSelectOptions([
+      { value: "AZ", label: "Arizona" },
+      { value: "CA", label: "California" },
+    ]);
+    assert.deepEqual(await page.selectOption("#state", "Arizona"), ["AZ"]);
+    fixture.configureSelectOptions([
+      { value: "one", label: "One" },
+      { value: "two", label: "Two" },
+    ]);
+    assert.deepEqual(
+      await page.selectOption("#tags", [{ value: "one" }, { index: 1 }]),
+      ["one", "two"],
+    );
+  });
+});
+
+test("Page selectOption validates option descriptors", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/form");
+
+    assert.deepEqual(await page.selectOption("#month", null), []);
+    assert.deepEqual(await page.selectOption("#month", []), []);
+    await assert.rejects(
+      () => page.selectOption("#month", {}),
+      /must specify value, label, or index/,
+    );
+    await assert.rejects(
+      () => page.selectOption("#month", { index: -1 }),
+      /index must be a non-negative integer/,
+    );
+    await assert.rejects(
+      () => page.selectOption("#month", { text: "October" }),
+      /unknown field "text"/,
+    );
+  });
+});
+
+test("Page selectOption clears existing values before applying new choices", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/form");
+    await page.selectOption("#tags", ["one", "two"]);
+
+    const actionCall = fixture.calls.find(
+      ([kind, method, params]) =>
+        kind === "cdp" &&
+        method === "Runtime.callFunctionOn" &&
+        params.functionDeclaration.includes("selectOptionsForAction"),
+    );
+    assert(actionCall, "selectOption sends its browser-side action function");
+    const selectOptionsForAction = Function(
+      `return (${actionCall[2].functionDeclaration})`,
+    )();
+    const options = [
+      { value: "one", label: "One", selected: false },
+      { value: "two", label: "Two", selected: false },
+      { value: "undefined", label: "Undefined", selected: true },
+      { value: "", label: "None", selected: false },
+    ];
+    const select = {
+      tagName: "SELECT",
+      isConnected: true,
+      disabled: false,
+      multiple: true,
+      options,
+      ownerDocument: {
+        defaultView: {
+          getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+        },
+      },
+      getBoundingClientRect: () => ({ width: 100, height: 30 }),
+      get selectedOptions() {
+        return options.filter((option) => option.selected);
+      },
+      dispatchEvent() {},
+    };
+
+    assert.deepEqual(selectOptionsForAction.call(select, ["one", "two"]), {
+      selected: ["one", "two"],
+    });
+    assert.deepEqual(selectOptionsForAction.call(select, []), { selected: [] });
+    assert.deepEqual(selectOptionsForAction.call(select, [""]), {
+      selected: [""],
+    });
+    assert.deepEqual(
+      options.filter((option) => option.selected).map((option) => option.value),
+      [""],
+      "an empty string is a valid option value",
+    );
+    assert.deepEqual(selectOptionsForAction.call(select, []), { selected: [] });
+
+    options[1].disabled = true;
+    assert.deepEqual(selectOptionsForAction.call(select, [{ value: "two" }]), {
+      selected: ["two"],
+    });
+    assert.deepEqual(
+      options.filter((option) => option.selected).map((option) => option.value),
+      ["two"],
+      "a disabled option remains programmatically selectable",
+    );
+
+    options[1].disabled = false;
+    select.disabled = true;
+    assert.deepEqual(selectOptionsForAction.call(select, ["one"]), {
+      error: "element is disabled",
+    });
+    select.disabled = false;
+    assert.deepEqual(selectOptionsForAction.call(select, ["one"]), {
+      selected: ["one"],
+    });
+
+    select.getAttribute = (name) => (name === "aria-disabled" ? "true" : null);
+    assert.deepEqual(selectOptionsForAction.call(select, ["one"]), {
+      error: "element is disabled",
+    });
+
+    select.getAttribute = () => null;
+    options[1].getAttribute = (name) =>
+      name === "aria-disabled" ? "true" : null;
+    assert.deepEqual(selectOptionsForAction.call(select, ["two"]), {
+      selected: ["two"],
+    });
   });
 });
 
@@ -2752,6 +3581,25 @@ test("Page keyboard releases pressed modifiers when a chord fails", async () => 
   });
 });
 
+test("Page keyboard suggests Playwright arrow-key names", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+
+    for (const [legacy, supported] of [
+      ["Left", "ArrowLeft"],
+      ["Right", "ArrowRight"],
+      ["Up", "ArrowUp"],
+      ["Down", "ArrowDown"],
+    ]) {
+      await assert.rejects(
+        () => page.keyboard.press(legacy),
+        new RegExp(`Unknown key: "${legacy}"\\. Use "${supported}"`),
+      );
+    }
+  });
+});
+
 test("low-level Page input skips action observers and returns no receipt", async () => {
   await withFixture(async (fixture) => {
     const task = taskForRound(fixture, "round-a", { platform: "darwin" });
@@ -2982,7 +3830,7 @@ test("Page waits and events remain isolated to the addressed target", async () =
       readyState: "complete",
       domContentLoaded: true,
     });
-    await first.waitForLoadState("load", { timeout: 250 });
+    await first.waitForLoadState();
     fixture.emitPageEvent(first.targetId, "Network.requestWillBeSent", {
       requestId: "request-first",
     });
@@ -3005,8 +3853,13 @@ test("Page waits and events remain isolated to the addressed target", async () =
       ["second"],
     );
     assert.deepEqual(
-      (await first.events()).map((event) => event.params.value),
-      ["first"],
+      (await first.events()).map((event) => event.method),
+      [
+        "Network.requestWillBeSent",
+        "Network.loadingFinished",
+        "Runtime.consoleAPICalled",
+      ],
+      "network-idle must preserve the addressed Page event stream",
     );
 
     assert(
@@ -3017,6 +3870,60 @@ test("Page waits and events remain isolated to the addressed target", async () =
           sessionId === "session:target-1",
       ),
       "network idle must enable events on the addressed Page session",
+    );
+  });
+});
+
+test("Page network-idle sees an earlier request without consuming events", async () => {
+  await withFixture(async (fixture) => {
+    let now = 0;
+    let childBusy = true;
+    let childFinishedAt = 0;
+    const task = taskForRound(fixture, "round-a", {
+      now: () => now,
+      async sleep(ms) {
+        now += ms;
+        if (childBusy && now >= 150) {
+          childBusy = false;
+          childFinishedAt = now;
+        }
+      },
+      async ensureNetworkTracking() {},
+      async pageNetworkSessions(sessionId) {
+        return [sessionId, "session:oopif-child"];
+      },
+      networkActivity(sessionIds) {
+        assert.deepEqual(sessionIds, [
+          "session:target-1",
+          "session:oopif-child",
+        ]);
+        return {
+          tracking: true,
+          inflight: childBusy ? 1 : 0,
+          lastActivityAt: childBusy ? 0 : childFinishedAt,
+        };
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/network-idle");
+    fixture.emitPageEvent(page.targetId, "Runtime.consoleAPICalled", {
+      value: "preserve this event",
+    });
+
+    await page.waitForLoadState("networkidle", {
+      timeout: 500,
+      idleMs: 100,
+    });
+
+    assert.equal(
+      childBusy,
+      false,
+      "a request started before the wait must finish",
+    );
+    assert(now >= 250, "the idle window begins after the earlier request ends");
+    assert.deepEqual(
+      (await page.events()).map((event) => event.params.value),
+      ["preserve this event"],
+      "network-idle must not consume unrelated Page events",
     );
   });
 });
@@ -3083,19 +3990,26 @@ test("Page.waitForEvent arms before a click and resolves the opened popup", asyn
   });
 });
 
-test("Page.waitForEvent replays a popup reported by the preceding action", async () => {
+test("Page.waitForEvent ignores an older popup and resolves the next one", async () => {
   await withFixture(async (fixture) => {
     resetPageNotices();
     const task = taskForRound(fixture, "round-a");
     const source = await openTestPage(task, "https://example.test/source");
-    fixture.openPopupOnNextClick("https://example.test/popup");
+    fixture.openPopupOnNextClick("https://example.test/old-popup");
 
-    const receipt = await source.click("#open-popup");
-    const popup = await source.waitForEvent("popup", { timeout: 1_000 });
+    const oldReceipt = await source.click("#open-old-popup");
+    fixture.openPopupOnNextClick("https://example.test/next-popup");
+    const popupPromise = source.waitForEvent("popup", { timeout: 1_000 });
+    const nextReceipt = await source.click("#open-next-popup");
+    const popup = await popupPromise;
 
-    assert.equal(popup.label, receipt.popups[0].label);
-    assert.equal(await popup.url(), "https://example.test/popup");
-    assert.deepEqual(consumeUnhandledPageNotices(), []);
+    assert.notEqual(popup.label, oldReceipt.popups[0].label);
+    assert.equal(popup.label, nextReceipt.popups[0].label);
+    assert.equal(await popup.url(), "https://example.test/next-popup");
+    assert.deepEqual(
+      consumeUnhandledPageNotices().map((notice) => notice.targetId),
+      [oldReceipt.popups[0].targetId],
+    );
   });
 });
 

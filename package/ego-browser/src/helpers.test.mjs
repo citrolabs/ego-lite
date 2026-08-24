@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import * as helperExports from "../dist/src/helpers.js";
 import {
@@ -16,6 +19,19 @@ import {
   takeOverTaskSpace,
   waitForAgentControl,
 } from "../dist/src/helpers.js";
+
+const previousStateDir = process.env.EGO_BROWSER_STATE_DIR;
+const stateDir = await mkdtemp(join(tmpdir(), "ego-browser-helpers-"));
+process.env.EGO_BROWSER_STATE_DIR = stateDir;
+
+test.after(async () => {
+  if (previousStateDir === undefined) {
+    delete process.env.EGO_BROWSER_STATE_DIR;
+  } else {
+    process.env.EGO_BROWSER_STATE_DIR = previousStateDir;
+  }
+  await rm(stateDir, { recursive: true, force: true });
+});
 
 function withEgo(ego, fn) {
   const previous = globalThis.ego;
@@ -225,6 +241,10 @@ test("taskSpace creates a new space with an explicit browser profile", async () 
         calls.push(["useTaskSpace", id]);
         return id;
       },
+      async listTabs() {
+        calls.push(["listTabs"]);
+        return { tabs: [{ targetId: "target-profile-initial" }] };
+      },
     },
     async () => {
       const task = await taskSpace("work research", { profileId: "Profile 2" });
@@ -236,6 +256,162 @@ test("taskSpace creates a new space with an explicit browser profile", async () 
     ["listTaskSpaces"],
     ["createTaskSpace", "work research", "Profile 2"],
     ["useTaskSpace", 8],
+    ["listTabs"],
+  ]);
+});
+
+test("taskSpace manages a newly created space's default tab as p1", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return { taskSpaces: [] };
+      },
+      async createTaskSpace(name) {
+        calls.push(["createTaskSpace", name]);
+        return { taskId: name, id: 9, name };
+      },
+      async useTaskSpace(id) {
+        calls.push(["useTaskSpace", id]);
+      },
+      async listTabs() {
+        calls.push(["listTabs"]);
+        return {
+          tabs: [
+            {
+              targetId: "target-initial",
+              url: "chrome://newtab/",
+              title: "New Tab",
+              active: true,
+            },
+          ],
+        };
+      },
+    },
+    async () => {
+      const task = await taskSpace("fresh research");
+      const pages = await task.pages();
+      assert.equal(pages.length, 1);
+      assert.equal(pages[0].label, "p1");
+      assert.equal(pages[0].targetId, "target-initial");
+      assert.equal(pages[0].openedBy, "agent");
+    },
+  );
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["createTaskSpace", "fresh research"],
+    ["useTaskSpace", 9],
+    ["listTabs"],
+    ["useTaskSpace", 9],
+    ["listTabs"],
+  ]);
+});
+
+test("resolving an existing v2 space cannot interrupt fresh p1 discovery", async () => {
+  let selectedSpace;
+  let releaseFirstInventory;
+  let reportFirstInventory;
+  const firstInventoryStarted = new Promise((resolve) => {
+    reportFirstInventory = resolve;
+  });
+  const firstInventoryRelease = new Promise((resolve) => {
+    releaseFirstInventory = resolve;
+  });
+  let inventoryCalls = 0;
+
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [
+            {
+              taskId: "existing",
+              id: 12,
+              name: "existing",
+              ownership: "agent",
+            },
+          ],
+        };
+      },
+      async createTaskSpace(name) {
+        return { taskId: name, id: 11, name };
+      },
+      async useTaskSpace(id) {
+        selectedSpace = id;
+      },
+      async listTabs() {
+        inventoryCalls += 1;
+        if (inventoryCalls === 1) {
+          reportFirstInventory();
+          await firstInventoryRelease;
+        }
+        return {
+          tabs: [
+            {
+              targetId:
+                selectedSpace === 11 ? "target-fresh" : "target-existing",
+            },
+          ],
+        };
+      },
+    },
+    async () => {
+      const freshPromise = taskSpace("fresh concurrent");
+      await firstInventoryStarted;
+      const existing = await taskSpace(12);
+      assert.equal(existing.spaceId, 12);
+      releaseFirstInventory();
+
+      const fresh = await freshPromise;
+      const pages = await fresh.pages();
+      assert.deepEqual(
+        pages.map((page) => [page.label, page.targetId]),
+        [["p1", "target-fresh"]],
+      );
+    },
+  );
+});
+
+test("taskSpace closes a new space when its default tab is ambiguous", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return { taskSpaces: [] };
+      },
+      async createTaskSpace(name) {
+        calls.push(["createTaskSpace", name]);
+        return { taskId: name, id: 10, name };
+      },
+      async useTaskSpace(id) {
+        calls.push(["useTaskSpace", id]);
+      },
+      async closeTaskSpace() {
+        calls.push(["closeTaskSpace"]);
+      },
+      async listTabs() {
+        calls.push(["listTabs"]);
+        return {
+          tabs: [{ targetId: "target-a" }, { targetId: "target-b" }],
+        };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () => taskSpace("ambiguous runtime"),
+        /new task space expected one default tab, found 2/,
+      );
+    },
+  );
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["createTaskSpace", "ambiguous runtime"],
+    ["useTaskSpace", 10],
+    ["listTabs"],
+    ["useTaskSpace", 10],
+    ["closeTaskSpace"],
   ]);
 });
 

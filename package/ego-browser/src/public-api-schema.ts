@@ -35,7 +35,7 @@ const timeout = option(
 );
 const actionTimeout = option(
   "positiveMilliseconds",
-  "Maximum actionability wait in milliseconds; defaults to 3000.",
+  "Maximum wait for the element to become usable in milliseconds; defaults to 3000.",
 );
 const delay = option("nonNegativeNumber", "Input delay in milliseconds.");
 const button = option("string", "Mouse button.", ["left", "middle", "right"]);
@@ -66,7 +66,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     name: "taskSpace",
     signature: "await taskSpace(nameOrId, { profileId? })",
     summary:
-      "Reuse or create an Agent-owned task space; profileId applies only to a new named space.",
+      "Reuse or create an Agent-owned task space; a new space starts with managed Page p1, and profileId applies only when creating it.",
     options: {
       profileId: option(
         "nonEmptyString",
@@ -195,12 +195,26 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: "Page.goto",
     signature: "await page.goto(url, { referer?, timeout?, waitUntil? })",
-    summary: "Navigate this Page in place.",
+    summary:
+      "Navigate this Page in place. Timeout errors report whether the new document committed, plus its URL and readyState when available.",
     options: {
       referer: option(
         "nonEmptyString",
         "HTTP Referer header for the navigation.",
       ),
+      timeout,
+      waitUntil: option(
+        "string",
+        "Completion state; defaults to load. networkidle requires 500ms without network activity.",
+        ["commit", "domcontentloaded", "load", "networkidle"],
+      ),
+    },
+  },
+  {
+    name: "Page.reload",
+    signature: "await page.reload({ timeout?, waitUntil? })",
+    summary: "Reload this Page and wait for the selected navigation state.",
+    options: {
       timeout,
       waitUntil: option(
         "string",
@@ -274,10 +288,22 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     summary: "Read URL, title, viewport, scroll, and dialog state.",
   },
   {
+    name: "Page.acceptDialog",
+    signature: "await page.acceptDialog(promptText?)",
+    summary:
+      "Accept this Page's JavaScript dialog, optionally supplying prompt text; return false when none is open.",
+  },
+  {
+    name: "Page.dismissDialog",
+    signature: "await page.dismissDialog()",
+    summary:
+      "Dismiss this Page's JavaScript dialog; return false when none is open.",
+  },
+  {
     name: "Page.evaluate",
     signature: "await page.evaluate(fnOrString, argument?)",
     summary:
-      "Run JavaScript in this Page; callbacks receive JSON data but cannot capture Node.js variables.",
+      "Run JavaScript in this Page; callbacks receive JSON data but cannot capture Node.js variables. Safety-timeout errors report executionStopped, pageResponsive, and mayHaveLateEffects.",
   },
   {
     name: "Page.waitForFunction",
@@ -357,8 +383,9 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   },
   {
     name: "Page.waitForLoadState",
-    signature: "await page.waitForLoadState(state, { timeout?, idleMs? })",
-    summary: "Wait for DOM content, load, or network-idle state.",
+    signature: "await page.waitForLoadState(state?, { timeout?, idleMs? })",
+    summary:
+      "Wait for DOM content, load, or network-idle state; no state defaults to load.",
     options: {
       timeout,
       idleMs: option(
@@ -425,7 +452,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: "Page.selectOption",
     signature: "await page.selectOption(selector, valueOrValues, { timeout? })",
-    summary: "Select one or more option values and return the selected values.",
+    summary:
+      "Select by a value-or-label string or { value?, label?, index? }; arrays select multiple options, while null or [] clears the selection. The select must be enabled, but disabled options remain programmatically selectable.",
     options: { timeout: actionTimeout },
   },
   {
@@ -621,9 +649,11 @@ export function publicApiMarkdown(): string {
     "",
     "Generated from `package/ego-browser/src/public-api-schema.ts`.",
     "",
-    'High-level Page actions return a receipt that may contain `popups` or a synchronous `dialog`. Handle a returned dialog with `page.cdp("Page.handleJavaScriptDialog", { accept: true })` or `{ accept: false }` before continuing; prompts may also include `promptText`.',
+    "High-level Page actions return a receipt that may contain `popups` or a synchronous `dialog`. Handle a returned dialog with `page.acceptDialog(promptText?)` or `page.dismissDialog()` before continuing.",
     "",
-    'For an explicit popup wait, arm it before the action: `const popupPromise = page.waitForEvent("popup"); await page.click(selector); const popup = await popupPromise;`. The default workflow can read `receipt.popups` instead.',
+    'For an explicit popup wait, arm it before the action: `const popupPromise = page.waitForEvent("popup"); await page.click(selector); const popup = await popupPromise;`. Action receipts instead expose `{ label, targetId }` entries in `receipt.popups`; resolve one with `task.page(label)`.',
+    "",
+    'Selectors accept refs, Ego locators, XPath, and raw CSS. A small compatibility subset also accepts `css=...`, terminal `:has-text("...")` and `:text-is("...")`, `>> nth=N` after CSS/text/href selectors (`N` is `-1` or non-negative), and `loc=role:...[name*="..."]`.',
   ];
   for (const [group, entries] of groups) {
     lines.push(

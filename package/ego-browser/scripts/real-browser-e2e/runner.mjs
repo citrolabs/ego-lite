@@ -14,16 +14,65 @@ const packageDir = join(runnerDir, "..", "..");
 const egoBrowserSdkPath = join(packageDir, "dist", "out", "index.js");
 const egoBrowserArgs = ["nodejs", "--sdk-path", egoBrowserSdkPath];
 
+export function parseOnlyCases(configured, availableCaseNames) {
+  const raw = typeof configured === "string" ? configured.trim() : "";
+  if (!raw) return new Set();
+
+  const available = [...availableCaseNames];
+  const availableSet = new Set(available);
+  let requested;
+  if (raw.startsWith("[")) {
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      throw new TypeError(
+        `EGO_BROWSER_REAL_E2E_ONLY must be a valid JSON array: ${error.message}`,
+      );
+    }
+    if (
+      !Array.isArray(parsed) ||
+      parsed.some((name) => typeof name !== "string" || !name.trim())
+    ) {
+      throw new TypeError(
+        "EGO_BROWSER_REAL_E2E_ONLY must be a JSON array of non-empty case names",
+      );
+    }
+    requested = parsed.map((name) => name.trim());
+  } else if (availableSet.has(raw)) {
+    // Exact matching comes first because a case name may itself contain commas.
+    requested = [raw];
+  } else {
+    requested = raw
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean);
+  }
+
+  if (requested.length === 0) {
+    throw new TypeError(
+      "EGO_BROWSER_REAL_E2E_ONLY must select at least one case",
+    );
+  }
+  const unknown = [...new Set(requested)].filter(
+    (name) => !availableSet.has(name),
+  );
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown real-browser E2E case: ${unknown.join(", ")}. Available cases: ${available.join(", ")}`,
+    );
+  }
+  return new Set(requested);
+}
+
 export async function runRealBrowserE2e() {
   const egoBrowserCli = resolveEgoBrowserCli();
   const keepTaskSpace =
     process.env.EGO_BROWSER_REAL_E2E_KEEP === "1" ||
     process.env.EGO_BROWSER_REAL_E2E_KEEP === "true";
-  const onlyCases = new Set(
-    (process.env.EGO_BROWSER_REAL_E2E_ONLY || "")
-      .split(",")
-      .map((name) => name.trim())
-      .filter(Boolean),
+  const onlyCases = parseOnlyCases(
+    process.env.EGO_BROWSER_REAL_E2E_ONLY,
+    e2eCases.map((testCase) => testCase.name),
   );
 
   let server;
@@ -98,6 +147,7 @@ export async function runRealBrowserE2e() {
     timeoutMs = 45000,
     expectedOutput,
     acceptedCompletionOutput,
+    pendingOnExpectedTermination,
   ) {
     console.log(`-- ${name}`);
     const source = egoSource(body, {
@@ -156,13 +206,21 @@ export async function runRealBrowserE2e() {
             commandResult?.stderr,
           ) ?? 1)
         : 1;
-      recordResult(name, "pass", durationMs, assertions);
+      const status =
+        !completedWithAcceptedOutput && pendingOnExpectedTermination
+          ? "pending"
+          : "pass";
+      const message =
+        status === "pending" ? pendingOnExpectedTermination : undefined;
+      recordResult(name, status, durationMs, assertions, message);
       console.log(
-        `-- ${name} passed (${formatDuration(durationMs)}, ${
-          completedWithAcceptedOutput
-            ? `${assertions} assertions, accepted completion`
-            : "expected termination"
-        })`,
+        status === "pending"
+          ? `-- ${name} pending (${formatDuration(durationMs)}): ${message}`
+          : `-- ${name} passed (${formatDuration(durationMs)}, ${
+              completedWithAcceptedOutput
+                ? `${assertions} assertions, accepted completion`
+                : "expected termination"
+            })`,
       );
     } catch (error) {
       const message = error?.message || String(error);
@@ -187,6 +245,7 @@ export async function runRealBrowserE2e() {
         testCase.timeoutMs,
         testCase.expectedOutput,
         testCase.acceptedCompletionOutput,
+        testCase.pendingOnExpectedTermination,
       );
       return;
     }
@@ -358,6 +417,7 @@ function printSummary(results, totalMs) {
   const total = results.length;
   const passed = results.filter((r) => r.status === "pass").length;
   const failed = results.filter((r) => r.status === "fail").length;
+  const pending = results.filter((r) => r.status === "pending").length;
   const skipped = results.filter((r) => r.status === "skip").length;
   const totalAssertions = results.reduce((sum, r) => sum + r.assertionCount, 0);
 
@@ -367,6 +427,7 @@ function printSummary(results, totalMs) {
     `  Passed:   ${passed}/${total}${total > 0 ? `  (${Math.round((passed / total) * 100)}%)` : ""}`,
   );
   if (failed > 0) console.log(`  Failed:   ${failed}/${total}`);
+  if (pending > 0) console.log(`  Pending:  ${pending}/${total}`);
   if (skipped > 0) console.log(`  Skipped:  ${skipped}/${total}`);
   console.log(`  Total time: ${formatDuration(totalMs)}`);
   console.log(`  Assertions: ${totalAssertions}`);
@@ -381,7 +442,9 @@ function printSummary(results, totalMs) {
         ? "PASS"
         : result.status === "fail"
           ? "FAIL"
-          : "SKIP";
+          : result.status === "pending"
+            ? "PENDING"
+            : "SKIP";
     const timing =
       result.status === "skip"
         ? "       "
@@ -401,6 +464,15 @@ function printSummary(results, totalMs) {
     console.log("");
     console.log("  Failures:");
     for (const result of failedResults) {
+      console.log(`    - ${result.name}: ${result.message}`);
+    }
+  }
+
+  const pendingResults = results.filter((r) => r.status === "pending");
+  if (pendingResults.length > 0) {
+    console.log("");
+    console.log("  Pending:");
+    for (const result of pendingResults) {
       console.log(`    - ${result.name}: ${result.message}`);
     }
   }

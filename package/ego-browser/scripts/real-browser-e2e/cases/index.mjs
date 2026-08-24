@@ -11,7 +11,7 @@ import { pageKeyboardInterfaceCase } from "./page-keyboard.mjs";
 import { pageClickHitTargetCase } from "./page-click-hit-target.mjs";
 import { pageDragAndDrawCase } from "./page-drag-and-draw.mjs";
 import {
-  pageJavaScriptDialogHandoffCase,
+  pageJavaScriptDialogHandlingCase,
   pageJavaScriptDialogRecoveryCase,
 } from "./page-dialogs.mjs";
 import { pageMediaPlaybackCase } from "./page-media-playback.mjs";
@@ -19,9 +19,13 @@ import { pageScrolledScreenshotCase } from "./page-screenshot.mjs";
 import { pageSnapshotLocatorCase } from "./page-snapshot-locators.mjs";
 import { pageShadowDomCase } from "./page-shadow-dom.mjs";
 import { pageTextLocatorCase } from "./page-text-locators.mjs";
+import { pageSelectorCompatibilityCase } from "./page-selector-compatibility.mjs";
 import { pagePopupWaiterCase } from "./page-popup-waiter.mjs";
 import { pageOopifActionCase, pageOopifRestoreCase } from "./page-oopif.mjs";
 import { pageLoadStatesCase } from "./page-load-states.mjs";
+import { pageApiAlignmentCase } from "./page-api-alignment.mjs";
+import { pageActionabilityCase } from "./page-actionability.mjs";
+import { pageEvaluateTimeoutCase } from "./page-evaluate-timeout.mjs";
 import {
   pageDelayedPopupResumeCase,
   pageDelayedPopupScheduleCase,
@@ -86,12 +90,14 @@ export const e2eCases = [
   { name: "Page click hit target", body: pageClickHitTargetCase },
   { name: "Page drag and canvas drawing", body: pageDragAndDrawCase },
   {
-    name: "Page JavaScript dialog handoff",
-    body: pageJavaScriptDialogHandoffCase,
+    name: "Page JavaScript dialog handling",
+    body: pageJavaScriptDialogHandlingCase,
     expectedTermination: true,
     markerName: "dialog-hard-stop.json",
     expectedOutput: "The page has displayed a dialog that requires review.",
-    acceptedCompletionOutput: '"dialogReceipt":true',
+    acceptedCompletionOutput: '"dialogHandled":true',
+    pendingOnExpectedTermination:
+      "installed Ego Lite still hands page-authored JavaScript dialogs to the user",
   },
   {
     name: "Page JavaScript dialog recovery",
@@ -102,10 +108,21 @@ export const e2eCases = [
   { name: "Page snapshot locator quality", body: pageSnapshotLocatorCase },
   { name: "Page open Shadow DOM locators", body: pageShadowDomCase },
   { name: "Page text locators", body: pageTextLocatorCase },
+  {
+    name: "Page Playwright selector compatibility",
+    body: pageSelectorCompatibilityCase,
+  },
   { name: "Page popup waiter and URL diagnostic", body: pagePopupWaiterCase },
   { name: "Page OOPIF actions", body: pageOopifActionCase },
   { name: "Page OOPIF restore and close", body: pageOopifRestoreCase },
   { name: "Page load states", body: pageLoadStatesCase },
+  { name: "Page API alignment", body: pageApiAlignmentCase },
+  { name: "Page actionability", body: pageActionabilityCase },
+  {
+    name: "Page evaluate timeout recovery",
+    body: pageEvaluateTimeoutCase,
+    timeoutMs: 60_000,
+  },
   {
     name: "Page delayed popup: schedule",
     body: pageDelayedPopupScheduleCase,

@@ -45,6 +45,41 @@ test("page labels survive a new process and are never reused", async () => {
   });
 });
 
+test("a newly created space atomically replaces stale state with agent page p1", async () => {
+  await withTempLedger(async (rootDir) => {
+    const store = new PageLedgerStore({
+      rootDir,
+      browserInstanceId: "browser-current",
+    });
+    await store.addPage(7, "target-stale");
+    await store.closePage(7, "p1");
+
+    const initial = await store.initializeCreatedSpace(7, "target-initial");
+
+    assert.deepEqual(initial, {
+      label: "p1",
+      targetId: "target-initial",
+      openedBy: "agent",
+    });
+    assert.deepEqual(await store.read(7), {
+      browserInstanceId: "browser-current",
+      spaceId: 7,
+      nextLabel: 2,
+      usedLabels: ["p1"],
+      releasedLabels: [],
+      initialized: true,
+      userControlPending: false,
+      unmanagedTargets: {},
+      pages: {
+        p1: { targetId: "target-initial", openedBy: "agent" },
+      },
+    });
+
+    const next = await store.addPage(7, "target-next");
+    assert.equal(next.label, "p2");
+  });
+});
+
 test("a reused space id starts conservatively in a new browser instance", async () => {
   await withTempLedger(async (rootDir) => {
     const firstBrowser = new PageLedgerStore({

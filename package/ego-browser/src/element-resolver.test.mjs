@@ -144,6 +144,239 @@ test("CSS locators search nested open shadow roots", async () => {
   assert.deepEqual(point, { x: 12, y: 34, sessionId: undefined });
 });
 
+test("Playwright css= aliases the documented CSS locator", async () => {
+  const cdp = new FakeCDP(async (method, params) => {
+    if (method === "Runtime.evaluate") {
+      assert.match(params.expression, /button#target/);
+      assert.doesNotMatch(
+        params.expression,
+        /__egoQueryAllOpenShadow\("css=button/,
+      );
+      return { result: { value: { x: 7, y: 9 } } };
+    }
+    return {};
+  });
+
+  const point = await resolveElementCenter(
+    cdp,
+    undefined,
+    new RefMap(),
+    "css=button#target",
+  );
+
+  assert.deepEqual(point, { x: 7, y: 9, sessionId: undefined });
+});
+
+test("Playwright has-text and text-is pseudos keep their matching semantics", async () => {
+  const expressions = [];
+  const cdp = new FakeCDP(async (method, params) => {
+    if (method === "Runtime.evaluate") {
+      expressions.push(params.expression);
+      return { result: { value: { x: 11, y: 13 } } };
+    }
+    return {};
+  });
+
+  await resolveElementCenter(
+    cdp,
+    undefined,
+    new RefMap(),
+    'button:has-text("Save changes")',
+  );
+  await resolveElementCenter(
+    cdp,
+    undefined,
+    new RefMap(),
+    "loc=css:button:text-is('Save')",
+  );
+
+  assert.match(expressions[0], /selector: "button"/);
+  assert.match(expressions[0], /mode: "substring"/);
+  assert.match(expressions[0], /toLowerCase\(\)\.includes/);
+  assert.match(expressions[1], /mode: "exact"/);
+  assert.match(expressions[1], /immediate\.some/);
+});
+
+test("Playwright text pseudos strictly decode quoted CSS strings", async () => {
+  const cdp = new FakeCDP(async (method, params) => {
+    if (method === "Runtime.evaluate") {
+      assert.match(params.expression, /can&apos;t|can't/);
+      return { result: { value: { x: 9, y: 11 } } };
+    }
+    return {};
+  });
+
+  const point = await resolveElementCenter(
+    cdp,
+    undefined,
+    new RefMap(),
+    String.raw`button:text-is('can\'t')`,
+  );
+
+  assert.deepEqual(point, { x: 9, y: 11, sessionId: undefined });
+});
+
+test("Playwright text pseudos decode CSS hex escapes and their terminator", async () => {
+  const cdp = new FakeCDP(async (method, params) => {
+    if (method === "Runtime.evaluate") {
+      assert.match(params.expression, /text: "AB"/);
+      return { result: { value: { x: 10, y: 12 } } };
+    }
+    return {};
+  });
+
+  const point = await resolveElementCenter(
+    cdp,
+    undefined,
+    new RefMap(),
+    String.raw`button:text-is("\41 B")`,
+  );
+
+  assert.deepEqual(point, { x: 10, y: 12, sessionId: undefined });
+});
+
+test("Playwright text-is matches an element with no immediate text", async () => {
+  const cdp = new FakeCDP(async (method, params) => {
+    if (method === "Runtime.evaluate") {
+      assert.match(params.expression, /expected === ""/);
+      assert.match(params.expression, /text\.immediate\.length === 0/);
+      return { result: { value: { x: 12, y: 14 } } };
+    }
+    return {};
+  });
+
+  const point = await resolveElementCenter(
+    cdp,
+    undefined,
+    new RefMap(),
+    '#empty:text-is("")',
+  );
+
+  assert.deepEqual(point, { x: 12, y: 14, sessionId: undefined });
+});
+
+test("raw CSS may contain compatibility tokens inside quoted values", async () => {
+  const cdp = new FakeCDP(async (method, params) => {
+    if (method === "Runtime.evaluate") {
+      assert.match(params.expression, /data-value/);
+      assert.match(params.expression, /:has-text/);
+      return { result: { value: { x: 13, y: 14 } } };
+    }
+    return {};
+  });
+
+  const point = await resolveElementCenter(
+    cdp,
+    undefined,
+    new RefMap(),
+    '[data-value=":has-text("]',
+  );
+
+  assert.deepEqual(point, { x: 13, y: 14, sessionId: undefined });
+});
+
+test("Playwright terminal nth selects before actionability filtering", async () => {
+  const cdp = new FakeCDP(async (method, params) => {
+    if (method === "Runtime.evaluate") {
+      assert.match(params.expression, /const values = Array\.from/);
+      assert.match(params.expression, /const index = 1/);
+      return { result: { value: { x: 15, y: 17 } } };
+    }
+    return {};
+  });
+
+  const point = await resolveElementCenter(
+    cdp,
+    undefined,
+    new RefMap(),
+    ".duplicate >> nth=1",
+  );
+
+  assert.deepEqual(point, { x: 15, y: 17, sessionId: undefined });
+});
+
+test("Playwright text filters compose with nth=-1 and quoted parentheses", async () => {
+  const cdp = new FakeCDP(async (method, params) => {
+    if (method === "Runtime.evaluate") {
+      assert.match(params.expression, /Save \(draft\)/);
+      assert.match(params.expression, /const index = -1 === -1/);
+      return { result: { value: { x: 19, y: 23 } } };
+    }
+    return {};
+  });
+
+  const point = await resolveElementCenter(
+    cdp,
+    undefined,
+    new RefMap(),
+    'button:has-text("Save (draft)") >> nth=-1',
+  );
+
+  assert.deepEqual(point, { x: 19, y: 23, sessionId: undefined });
+});
+
+test("unsupported Playwright selector combinations fail before CDP", async () => {
+  const cdp = new FakeCDP(async () => {
+    throw new Error("unsupported selector syntax must not reach CDP");
+  });
+
+  for (const selector of [
+    "button:has-text(Save)",
+    'button:has-text("a" "b")',
+    'button, a:has-text("Docs")',
+    'loc=css:button:not(:has-text("Save"))',
+    ".row >> visible=true",
+  ]) {
+    await assert.rejects(
+      () =>
+        resolveElementObjectId(
+          cdp,
+          "session:page",
+          new RefMap(),
+          selector,
+          new Map(),
+          { strict: true },
+        ),
+      (error) => {
+        assert.ok(error instanceof ElementResolutionError);
+        assert.equal(error.kind, "permanent");
+        assert.match(error.message, /Invalid locator/);
+        return true;
+      },
+    );
+  }
+  assert.deepEqual(cdp.calls, []);
+});
+
+test("role name*= uses a case-insensitive accessible-name substring", async () => {
+  const cdp = new FakeCDP(async (method) => {
+    if (method === "Accessibility.getFullAXTree") {
+      return {
+        nodes: [
+          {
+            role: { value: "button" },
+            name: { value: "Increment counter 42" },
+            backendDOMNodeId: 101,
+          },
+        ],
+      };
+    }
+    if (method === "DOM.getBoxModel") {
+      return { model: { content: [0, 0, 20, 0, 20, 10, 0, 10] } };
+    }
+    return {};
+  });
+
+  const point = await resolveElementCenter(
+    cdp,
+    "session:page",
+    new RefMap(),
+    'loc=role:button[name*="increment COUNTER"]',
+  );
+
+  assert.deepEqual(point, { x: 10, y: 5, sessionId: "session:page" });
+});
+
 test("invalid numeric CSS ids suggest a valid attribute selector", async () => {
   const cdp = new FakeCDP(async (method) => {
     if (method === "Runtime.evaluate") {
@@ -371,7 +604,7 @@ test("action resolution uses the sole usable CSS match", async () => {
       new RefMap(),
       "button.save",
       new Map(),
-      { strict: true, actionability: "visible" },
+      { strict: true, actionability: "enabled" },
     ),
     { objectId: "visible-button", sessionId: "session:page" },
   );
@@ -395,7 +628,7 @@ test("action resolution prefers a sole actionable Page match over iframe matches
       new RefMap(),
       "button.save",
       new Map([["frame-child", "session:frame-child"]]),
-      { strict: true, actionability: "pointer" },
+      { strict: true, actionability: "pointer-enabled" },
     ),
     { objectId: "button:session:page", sessionId: "session:page" },
   );
@@ -423,13 +656,13 @@ test("pointer action resolution skips a covered Page match for a frame match", a
       new RefMap(),
       "button.move",
       new Map([["frame-child", "session:frame-child"]]),
-      { strict: true, actionability: "pointer" },
+      { strict: true, actionability: "pointer-enabled" },
     ),
     { objectId: "frame-button", sessionId: "session:frame-child" },
   );
 });
 
-test("visible action resolution permits opacity-zero native controls", async () => {
+test("enabled action resolution permits opacity-zero native controls", async () => {
   const cdp = new FakeCDP(async (method, params) => {
     if (method !== "Runtime.evaluate") return {};
     if (params.expression.includes("__egoActionableMatches")) {
@@ -448,7 +681,7 @@ test("visible action resolution permits opacity-zero native controls", async () 
       new RefMap(),
       "select.sort",
       new Map(),
-      { strict: true, actionability: "visible" },
+      { strict: true, actionability: "enabled" },
     ),
     { objectId: "transparent-select", sessionId: "session:page" },
   );
@@ -619,7 +852,7 @@ test("same-process frame role matches keep their frame provenance", async () => 
       new RefMap(),
       'loc=role:listboxoption[name="Upload"]',
       new Map([["frame-child", "session:page"]]),
-      { actionability: "pointer" },
+      { actionability: "pointer-enabled" },
     ),
     {
       objectId: "upload-option",
@@ -659,7 +892,7 @@ test("a unique interactable frame role wins over a blocked Page duplicate", asyn
       new RefMap(),
       'loc=role:button[name="Duplicate"]',
       new Map([["frame-child", "session:frame-child"]]),
-      { actionability: "pointer" },
+      { actionability: "pointer-enabled" },
     ),
     { objectId: "node:session:frame-child", sessionId: "session:frame-child" },
   );
@@ -694,7 +927,7 @@ test("role actions prefer the actionable Page match over a frame match", async (
       new RefMap(),
       'loc=role:button[name="Duplicate"]',
       new Map([["frame-child", "session:frame-child"]]),
-      { actionability: "pointer" },
+      { actionability: "pointer-enabled" },
     ),
     { objectId: "node:session:page", sessionId: "session:page" },
   );

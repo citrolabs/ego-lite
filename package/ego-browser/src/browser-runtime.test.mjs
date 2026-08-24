@@ -2,14 +2,44 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  CdpRequestTimeoutError,
   browserCdp,
   drainBrowserEvents,
   drainPageEvents,
   ensureFrameSessions,
+  ensureNetworkTracking,
+  ensureSession,
   invalidateSession,
+  networkActivity,
+  pageNetworkSessions,
   prepareFileChooser,
   subscribeBrowserEvents,
 } from "../dist/src/browser-runtime.js";
+
+test("browserCdp exposes a typed transport timeout", async () => {
+  const previous = globalThis.ego;
+  globalThis.ego = { sendCDPMessage() {} };
+  try {
+    await assert.rejects(
+      () => browserCdp("Browser.getVersion", {}, undefined, 5),
+      (error) => {
+        assert(error instanceof CdpRequestTimeoutError);
+        assert.equal(error.code, "EGO_CDP_REQUEST_TIMEOUT");
+        assert.equal(error.method, "Browser.getVersion");
+        assert.equal(error.timeoutMs, 5);
+        assert.match(
+          error.message,
+          /CDP request timed out: Browser\.getVersion/,
+        );
+        return true;
+      },
+    );
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
 
 test("frame sessions follow one Page target and are invalidated with it", async () => {
   const previous = globalThis.ego;
@@ -25,17 +55,17 @@ test("frame sessions follow one Page target and are invalidated with it", async 
             {
               targetId: "frame-child",
               type: "iframe",
-              parentId: "page-main",
+              parentFrameId: "same-process-frame",
             },
             {
               targetId: "frame-grandchild",
               type: "iframe",
-              parentId: "frame-child",
+              parentFrameId: "same-process-inside-child",
             },
             {
               targetId: "foreign-frame",
               type: "iframe",
-              parentId: "foreign-page",
+              parentFrameId: "foreign-page",
             },
           ],
         };
@@ -43,7 +73,22 @@ test("frame sessions follow one Page target and are invalidated with it", async 
         result = {
           frameTree: {
             frame: { id: "page-main" },
-            childFrames: [{ frame: { id: "same-process-frame" } }],
+            childFrames: [
+              {
+                frame: { id: "same-process-frame" },
+                childFrames: [
+                  {
+                    frame: { id: "frame-child" },
+                    childFrames: [
+                      {
+                        frame: { id: "same-process-inside-child" },
+                        childFrames: [{ frame: { id: "frame-grandchild" } }],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
           },
         };
       } else if (request.method === "Target.attachToTarget") {
@@ -65,6 +110,7 @@ test("frame sessions follow one Page target and are invalidated with it", async 
       [
         ["same-process-frame", "session:page-main"],
         ["frame-child", "session:frame-child"],
+        ["same-process-inside-child", "session:frame-child"],
         ["frame-grandchild", "session:frame-grandchild"],
       ],
     );
@@ -75,6 +121,768 @@ test("frame sessions follow one Page target and are invalidated with it", async 
     assert.deepEqual([...second], [...first]);
     assert.equal(attachCounts.get("frame-child"), 2);
     assert.equal(attachCounts.get("frame-grandchild"), 2);
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
+test("network tracking is continuous and does not consume Page events", async () => {
+  const previous = globalThis.ego;
+  const methods = [];
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      methods.push([request.method, request.sessionId]);
+      const result =
+        request.method === "Target.attachToTarget"
+          ? { sessionId: "session:page-main" }
+          : {};
+      queueMicrotask(() => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      });
+    },
+  };
+  globalThis.ego = runtime;
+
+  try {
+    const sessionId = await ensureSession("page-main");
+    assert.equal(sessionId, "session:page-main");
+    assert.equal(
+      methods.filter(([method]) => method === "Network.enable").length,
+      1,
+      "a Page session starts network tracking before it is returned",
+    );
+
+    runtime.onCDPMessage(
+      JSON.stringify({
+        sessionId,
+        method: "Network.requestWillBeSent",
+        params: {
+          requestId: "favicon-without-terminal-event",
+          request: { url: "https://example.com/favicon.ico" },
+        },
+      }),
+    );
+    assert.equal(
+      networkActivity([sessionId]).inflight,
+      0,
+      "favicon traffic must not keep a Page from reaching network idle",
+    );
+    assert.deepEqual(
+      drainPageEvents(sessionId).map((event) => event.method),
+      ["Network.requestWillBeSent"],
+      "ignoring favicon activity for idle does not hide its public event",
+    );
+
+    runtime.onCDPMessage(
+      JSON.stringify({
+        sessionId,
+        method: "Network.requestWillBeSent",
+        params: {
+          requestId: "favicon-without-terminal-event",
+          redirectResponse: { status: 302 },
+          request: { url: "https://example.com/assets/icon.png" },
+        },
+      }),
+    );
+    assert.equal(
+      networkActivity([sessionId]).inflight,
+      0,
+      "a redirected favicon stays excluded for its entire request chain",
+    );
+    assert.deepEqual(
+      drainPageEvents(sessionId).map((event) => event.method),
+      ["Network.requestWillBeSent"],
+      "excluding a favicon redirect does not hide its public event",
+    );
+
+    runtime.onCDPMessage(
+      JSON.stringify({
+        sessionId,
+        method: "Network.loadingFinished",
+        params: { requestId: "favicon-without-terminal-event" },
+      }),
+    );
+    drainPageEvents(sessionId);
+    runtime.onCDPMessage(
+      JSON.stringify({
+        sessionId,
+        method: "Network.requestWillBeSent",
+        params: {
+          requestId: "favicon-without-terminal-event",
+          request: { url: "https://example.com/api/data" },
+        },
+      }),
+    );
+    assert.equal(
+      networkActivity([sessionId]).inflight,
+      1,
+      "a favicon request id is released when a terminal event arrives",
+    );
+    runtime.onCDPMessage(
+      JSON.stringify({
+        sessionId,
+        method: "Network.loadingFinished",
+        params: { requestId: "favicon-without-terminal-event" },
+      }),
+    );
+    drainPageEvents(sessionId);
+
+    runtime.onCDPMessage(
+      JSON.stringify({
+        sessionId,
+        method: "Runtime.consoleAPICalled",
+        params: { value: "keep me" },
+      }),
+    );
+    runtime.onCDPMessage(
+      JSON.stringify({
+        sessionId,
+        method: "Network.requestWillBeSent",
+        params: { requestId: "slow-request" },
+      }),
+    );
+
+    assert.deepEqual(networkActivity([sessionId]).inflight, 1);
+    await ensureNetworkTracking([sessionId]);
+    assert.equal(
+      methods.filter(([method]) => method === "Network.enable").length,
+      1,
+      "ensuring an initialized tracker is idempotent",
+    );
+    assert.deepEqual(
+      drainPageEvents(sessionId).map((event) => event.method),
+      ["Runtime.consoleAPICalled", "Network.requestWillBeSent"],
+      "reading tracker state leaves the public Page event queue intact",
+    );
+
+    runtime.onCDPMessage(
+      JSON.stringify({
+        sessionId,
+        method: "Network.loadingFinished",
+        params: { requestId: "slow-request" },
+      }),
+    );
+    assert.equal(networkActivity([sessionId]).inflight, 0);
+
+    await browserCdp("Network.disable", {}, sessionId);
+    runtime.onCDPMessage(
+      JSON.stringify({
+        sessionId,
+        method: "Network.loadingFinished",
+        params: { requestId: "late-after-disable" },
+      }),
+    );
+    assert.equal(
+      networkActivity([sessionId]).tracking,
+      false,
+      "a late event after Network.disable must not resurrect tracking",
+    );
+    await ensureNetworkTracking([sessionId]);
+    assert.equal(
+      methods.filter(([method]) => method === "Network.enable").length,
+      2,
+      "the next sensitive operation must restore disabled tracking",
+    );
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
+test("Page network sessions include only its known OOPIF descendants", async () => {
+  const previous = globalThis.ego;
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      let result = {};
+      if (request.method === "Target.getTargets") {
+        result = {
+          targetInfos: [
+            { targetId: "page-main", type: "page" },
+            {
+              targetId: "frame-child",
+              type: "iframe",
+              parentFrameId: "page-main",
+            },
+            {
+              targetId: "foreign-frame",
+              type: "iframe",
+              parentFrameId: "foreign-page",
+            },
+          ],
+        };
+      } else if (request.method === "Page.getFrameTree") {
+        result = {
+          frameTree: {
+            frame: { id: "page-main" },
+            childFrames: [{ frame: { id: "frame-child" } }],
+          },
+        };
+      } else if (request.method === "Target.attachToTarget") {
+        result = { sessionId: `session:${request.params.targetId}` };
+      }
+      queueMicrotask(() => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      });
+    },
+  };
+  globalThis.ego = runtime;
+
+  try {
+    const mainSessionId = await ensureSession("page-main");
+    assert.deepEqual(await pageNetworkSessions(mainSessionId), [
+      "session:page-main",
+      "session:frame-child",
+    ]);
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
+test("a live auto-attached OOPIF survives a temporarily incomplete frame tree", async () => {
+  const previous = globalThis.ego;
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      let result = {};
+      if (request.method === "Target.getTargets") {
+        result = {
+          targetInfos: [
+            { targetId: "page-main", type: "page" },
+            {
+              targetId: "frame-child",
+              type: "iframe",
+              parentFrameId: "same-process-parent",
+            },
+          ],
+        };
+      } else if (request.method === "Page.getFrameTree") {
+        // Target and frame-tree snapshots are not atomic. The target can be
+        // visible one protocol turn before its parent frame appears here.
+        result = { frameTree: { frame: { id: "page-main" } } };
+      } else if (request.method === "Target.attachToTarget") {
+        result = { sessionId: `session:${request.params.targetId}` };
+      }
+      queueMicrotask(() => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      });
+    },
+  };
+  globalThis.ego = runtime;
+
+  try {
+    const mainSessionId = await ensureSession("page-main");
+    runtime.onCDPMessage(
+      JSON.stringify({
+        sessionId: mainSessionId,
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "session:frame-child",
+          targetInfo: {
+            targetId: "frame-child",
+            type: "iframe",
+            parentFrameId: "same-process-parent",
+          },
+          waitingForDebugger: true,
+        },
+      }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.deepEqual(await pageNetworkSessions(mainSessionId), [
+      "session:page-main",
+      "session:frame-child",
+    ]);
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
+test("Page network session discovery honors its transport timeout", async () => {
+  const previous = globalThis.ego;
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      if (request.method === "Target.getTargets") return;
+      const result =
+        request.method === "Target.attachToTarget"
+          ? { sessionId: `session:${request.params.targetId}` }
+          : {};
+      queueMicrotask(() => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      });
+    },
+  };
+  globalThis.ego = runtime;
+
+  try {
+    const mainSessionId = await ensureSession("page-main");
+    await assert.rejects(
+      () => pageNetworkSessions(mainSessionId, 10),
+      (error) => {
+        assert(error instanceof CdpRequestTimeoutError);
+        assert.equal(error.method, "Target.getTargets");
+        assert(error.timeoutMs > 0 && error.timeoutMs <= 10);
+        return true;
+      },
+    );
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
+test("a shorter network-tracking waiter does not cancel shared initialization", async () => {
+  const previous = globalThis.ego;
+  let delayedNetworkEnable;
+  const methods = [];
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      methods.push([request.method, request.sessionId]);
+      let result = {};
+      if (request.method === "Target.attachToTarget") {
+        result = { sessionId: `session:${request.params.targetId}` };
+      } else if (request.method === "Target.getTargets") {
+        result = {
+          targetInfos: [
+            { targetId: "page-main", type: "page" },
+            {
+              targetId: "frame-child",
+              type: "iframe",
+              parentFrameId: "page-main",
+            },
+          ],
+        };
+      } else if (request.method === "Page.getFrameTree") {
+        result = {
+          frameTree: {
+            frame: { id: "page-main" },
+            childFrames: [
+              { frame: { id: "frame-child", parentId: "page-main" } },
+            ],
+          },
+        };
+      }
+      const respond = () => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      };
+      if (
+        request.method === "Network.enable" &&
+        request.sessionId === "session:frame-child"
+      ) {
+        delayedNetworkEnable = respond;
+        setTimeout(respond, 80);
+        return;
+      }
+      queueMicrotask(respond);
+    },
+  };
+  globalThis.ego = runtime;
+
+  try {
+    const mainSessionId = await ensureSession("page-main");
+    runtime.onCDPMessage(
+      JSON.stringify({
+        sessionId: mainSessionId,
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "session:frame-child",
+          targetInfo: {
+            targetId: "frame-child",
+            type: "iframe",
+            parentFrameId: "page-main",
+          },
+          waitingForDebugger: false,
+        },
+      }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const discoveryStartedAt = performance.now();
+    assert.deepEqual(await pageNetworkSessions(mainSessionId, 10), [
+      "session:page-main",
+      "session:frame-child",
+    ]);
+    assert(
+      performance.now() - discoveryStartedAt < 60,
+      "best-effort initialization must stay inside discovery's budget",
+    );
+
+    const startedAt = performance.now();
+    await assert.rejects(
+      () => ensureNetworkTracking(["session:frame-child"], 10),
+      (error) => {
+        assert(error instanceof CdpRequestTimeoutError);
+        assert.equal(error.method, "Network.enable");
+        assert.equal(error.timeoutMs, 10);
+        return true;
+      },
+    );
+    assert(
+      performance.now() - startedAt < 60,
+      "the short waiter must honor its own budget",
+    );
+    assert.equal(typeof delayedNetworkEnable, "function");
+    assert.equal(
+      methods.filter(
+        ([method, sessionId]) =>
+          method === "Network.enable" && sessionId === "session:frame-child",
+      ).length,
+      1,
+      "the short waiter must reuse the existing Network.enable request",
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    await ensureNetworkTracking(["session:frame-child"], 10);
+    assert.equal(
+      methods.filter(
+        ([method, sessionId]) =>
+          method === "Network.enable" && sessionId === "session:frame-child",
+      ).length,
+      1,
+      "the shared request still completes for later callers",
+    );
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
+test("a shorter session waiter does not cancel shared auto-attach initialization", async () => {
+  const previous = globalThis.ego;
+  const methods = [];
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      methods.push([request.method, request.sessionId]);
+      let result = {};
+      if (request.method === "Target.attachToTarget") {
+        result = { sessionId: `session:${request.params.targetId}` };
+      } else if (request.method === "Target.getTargets") {
+        result = {
+          targetInfos: [
+            { targetId: "page-main", type: "page" },
+            {
+              targetId: "frame-child",
+              type: "iframe",
+              parentFrameId: "page-main",
+            },
+          ],
+        };
+      } else if (request.method === "Page.getFrameTree") {
+        result = {
+          frameTree: {
+            frame: { id: "page-main" },
+            childFrames: [
+              { frame: { id: "frame-child", parentId: "page-main" } },
+            ],
+          },
+        };
+      }
+      const respond = () => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      };
+      if (
+        request.method === "Target.setAutoAttach" &&
+        request.sessionId === "session:frame-child"
+      ) {
+        setTimeout(respond, 80);
+        return;
+      }
+      queueMicrotask(respond);
+    },
+  };
+  globalThis.ego = runtime;
+
+  try {
+    const mainSessionId = await ensureSession("page-main");
+    runtime.onCDPMessage(
+      JSON.stringify({
+        sessionId: mainSessionId,
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "session:frame-child",
+          targetInfo: {
+            targetId: "frame-child",
+            type: "iframe",
+            parentFrameId: "page-main",
+          },
+          waitingForDebugger: false,
+        },
+      }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const discoveryStartedAt = performance.now();
+    assert.deepEqual(await pageNetworkSessions(mainSessionId, 10), [
+      "session:page-main",
+      "session:frame-child",
+    ]);
+    assert(
+      performance.now() - discoveryStartedAt < 60,
+      "shared auto-attach must stay inside discovery's budget",
+    );
+
+    const startedAt = performance.now();
+    assert.equal(await ensureSession("frame-child", 10), "session:frame-child");
+    assert(
+      performance.now() - startedAt < 60,
+      "best-effort auto-attach must not outlive the session wait budget",
+    );
+    assert.equal(
+      methods.filter(
+        ([method, sessionId]) =>
+          method === "Target.setAutoAttach" &&
+          sessionId === "session:frame-child",
+      ).length,
+      1,
+      "the short waiter must reuse the existing auto-attach request",
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    assert.equal(await ensureSession("frame-child", 10), "session:frame-child");
+    assert.equal(
+      methods.filter(
+        ([method, sessionId]) =>
+          method === "Target.setAutoAttach" &&
+          sessionId === "session:frame-child",
+      ).length,
+      1,
+      "the shared auto-attach request still completes for later callers",
+    );
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
+test("an OOPIF document request can finish in its child session", async () => {
+  const previous = globalThis.ego;
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      let result = {};
+      if (request.method === "Target.getTargets") {
+        result = {
+          targetInfos: [
+            { targetId: "page-main", type: "page" },
+            {
+              targetId: "frame-child",
+              type: "iframe",
+              parentFrameId: "page-main",
+              url: "https://frame.example/",
+            },
+          ],
+        };
+      } else if (request.method === "Page.getFrameTree") {
+        result = {
+          frameTree: {
+            frame: { id: "page-main" },
+            childFrames: [{ frame: { id: "frame-child" } }],
+          },
+        };
+      } else if (request.method === "Target.attachToTarget") {
+        result = { sessionId: `session:${request.params.targetId}` };
+      } else if (request.method === "Runtime.evaluate") {
+        result = { result: { value: "loading" } };
+      }
+      queueMicrotask(() => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      });
+    },
+    emit(sessionId, method, params) {
+      runtime.onCDPMessage(JSON.stringify({ sessionId, method, params }));
+    },
+  };
+  globalThis.ego = runtime;
+
+  try {
+    const mainSession = await ensureSession("page-main");
+    const foreignSession = await ensureSession("page-foreign");
+    runtime.emit(mainSession, "Network.requestWillBeSent", {
+      requestId: "document-request",
+      frameId: "frame-child",
+      loaderId: "document-request",
+      type: "Document",
+      request: { url: "https://frame.example/" },
+    });
+    runtime.emit(foreignSession, "Network.requestWillBeSent", {
+      requestId: "document-request",
+      frameId: "foreign-frame",
+      loaderId: "document-request",
+      type: "Document",
+      request: { url: "https://foreign.example/" },
+    });
+
+    const sessions = await pageNetworkSessions(mainSession);
+    runtime.emit("session:frame-child", "Network.loadingFinished", {
+      requestId: "document-request",
+    });
+
+    assert.equal(networkActivity(sessions).inflight, 0);
+    assert.equal(
+      networkActivity([foreignSession]).inflight,
+      1,
+      "a terminal event must not clear an unrelated Page's request",
+    );
+
+    runtime.emit(mainSession, "Network.requestWillBeSent", {
+      requestId: "reattached-document",
+      frameId: "frame-child",
+      loaderId: "reattached-document",
+      type: "Document",
+    });
+    await pageNetworkSessions(mainSession);
+    runtime.emit(mainSession, "Target.targetDestroyed", {
+      targetId: "frame-child",
+    });
+    assert.equal(
+      networkActivity([mainSession]).tracking,
+      true,
+      "destroying an OOPIF must not detach its parent Page session",
+    );
+    assert.equal(
+      networkActivity([mainSession]).inflight,
+      0,
+      "destroying a reattached OOPIF removes its migrated document request",
+    );
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
+test("auto-attached OOPIFs are instrumented and resumed without waiting for Network.enable", async () => {
+  const previous = globalThis.ego;
+  const sent = [];
+  let delayedChildNetworkEnable;
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      sent.push(request);
+      if (
+        request.method === "Network.enable" &&
+        request.sessionId === "session:frame-child"
+      ) {
+        delayedChildNetworkEnable = request;
+        return;
+      }
+      queueMicrotask(() => {
+        if (
+          request.method === "Target.setAutoAttach" &&
+          request.sessionId === "session:page-main"
+        ) {
+          runtime.onCDPMessage(
+            JSON.stringify({
+              sessionId: "session:page-main",
+              method: "Network.requestWillBeSent",
+              params: {
+                requestId: "oopif-document",
+                frameId: "frame-child",
+                loaderId: "oopif-document",
+                type: "Document",
+              },
+            }),
+          );
+          runtime.onCDPMessage(
+            JSON.stringify({
+              sessionId: "session:page-main",
+              method: "Target.attachedToTarget",
+              params: {
+                sessionId: "session:frame-child",
+                targetInfo: {
+                  targetId: "frame-child",
+                  type: "iframe",
+                  parentFrameId: "same-process-parent",
+                },
+                waitingForDebugger: true,
+              },
+            }),
+          );
+        }
+        const result =
+          request.method === "Target.attachToTarget"
+            ? { sessionId: `session:${request.params.targetId}` }
+            : {};
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+        if (
+          request.method === "Runtime.runIfWaitingForDebugger" &&
+          request.sessionId === "session:frame-child" &&
+          delayedChildNetworkEnable
+        ) {
+          runtime.onCDPMessage(
+            JSON.stringify({ id: delayedChildNetworkEnable.id, result: {} }),
+          );
+          delayedChildNetworkEnable = undefined;
+        }
+      });
+    },
+  };
+  globalThis.ego = runtime;
+
+  try {
+    await ensureSession("page-main");
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const mainAutoAttach = sent.find(
+      (request) =>
+        request.method === "Target.setAutoAttach" &&
+        request.sessionId === "session:page-main",
+    );
+    assert.equal(mainAutoAttach?.params?.autoAttach, true);
+    assert.equal(mainAutoAttach?.params?.waitForDebuggerOnStart, true);
+    assert.equal(mainAutoAttach?.params?.flatten, true);
+
+    const childNetworkIndex = sent.findIndex(
+      (request) =>
+        request.method === "Network.enable" &&
+        request.sessionId === "session:frame-child",
+    );
+    const childResumeIndex = sent.findIndex(
+      (request) =>
+        request.method === "Runtime.runIfWaitingForDebugger" &&
+        request.sessionId === "session:frame-child",
+    );
+    assert.ok(childNetworkIndex >= 0, "the child Network domain is enabled");
+    assert.ok(childResumeIndex >= 0, "the paused child is resumed");
+    assert.ok(
+      childNetworkIndex < childResumeIndex,
+      "Network.enable is sent before the child resumes",
+    );
+    assert.equal(
+      delayedChildNetworkEnable,
+      undefined,
+      "resuming does not await the Network.enable response",
+    );
+    assert.equal(
+      networkActivity(["session:page-main", "session:frame-child"]).inflight,
+      1,
+      "enabling the child Network domain preserves the migrated request",
+    );
+    runtime.onCDPMessage(
+      JSON.stringify({
+        sessionId: "session:frame-child",
+        method: "Network.loadingFinished",
+        params: { requestId: "oopif-document" },
+      }),
+    );
+    assert.equal(
+      networkActivity(["session:page-main", "session:frame-child"]).inflight,
+      0,
+    );
   } finally {
     invalidateSession();
     if (previous === undefined) delete globalThis.ego;

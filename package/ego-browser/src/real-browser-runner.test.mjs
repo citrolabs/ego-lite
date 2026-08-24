@@ -5,6 +5,7 @@ import {
   MACOS_EGO_LITE_CLI,
   resolveEgoBrowserCli,
 } from "../scripts/real-browser-e2e/ego-browser-cli.mjs";
+import { parseOnlyCases } from "../scripts/real-browser-e2e/runner.mjs";
 
 test("real-browser E2E honors an explicit Ego Lite CLI", () => {
   assert.equal(
@@ -35,5 +36,55 @@ test("real-browser E2E falls back to PATH when no app-specific CLI exists", () =
       pathExists: () => false,
     }),
     "ego-browser",
+  );
+});
+
+test("real-browser E2E selects an exact case name that contains commas", () => {
+  assert.deepEqual(
+    [
+      ...parseOnlyCases("wait, fetch, cdp, js, help", [
+        "wait, fetch, cdp, js, help",
+        "Page API alignment",
+      ]),
+    ],
+    ["wait, fetch, cdp, js, help"],
+  );
+});
+
+test("real-browser E2E accepts a JSON array for multiple exact case names", () => {
+  assert.deepEqual(
+    [
+      ...parseOnlyCases(
+        '["wait, fetch, cdp, js, help", "Page API alignment"]',
+        ["wait, fetch, cdp, js, help", "Page API alignment"],
+      ),
+    ],
+    ["wait, fetch, cdp, js, help", "Page API alignment"],
+  );
+});
+
+test("real-browser E2E keeps legacy comma-separated case selection", () => {
+  assert.deepEqual(
+    [
+      ...parseOnlyCases("first case, second case", [
+        "first case",
+        "second case",
+      ]),
+    ],
+    ["first case", "second case"],
+  );
+});
+
+test("real-browser E2E rejects unknown selected cases instead of skipping all", () => {
+  assert.throws(
+    () => parseOnlyCases("Page API aligment", ["Page API alignment"]),
+    /unknown real-browser E2E case.*Page API aligment.*Page API alignment/i,
+  );
+});
+
+test("real-browser E2E rejects an explicitly empty selection", () => {
+  assert.throws(
+    () => parseOnlyCases("[]", ["Page API alignment"]),
+    /must select at least one/i,
   );
 });

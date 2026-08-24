@@ -1,7 +1,14 @@
 import { parseRef } from "./ref-map.js";
-import { HIT_TARGET_HELPERS } from "./driver/action-target.js";
+import {
+  ACTION_TARGET_STATE_HELPERS,
+  HIT_TARGET_HELPERS,
+} from "./driver/action-target.js";
 
-type ElementActionability = "pointer" | "visible";
+type ElementActionability =
+  | "visible"
+  | "enabled"
+  | "pointer"
+  | "pointer-enabled";
 type PageRuntimeContext = {
   sessionId: string;
   frameId?: string;
@@ -323,7 +330,11 @@ async function validateRoleLocatorBackendNodes(
           (node) =>
             !node.ignored &&
             normalizeRole(extractAxString(node.role)) === entry.locator.role &&
-            extractAxString(node.name) === entry.locator.name &&
+            roleNameMatches(
+              extractAxString(node.name),
+              entry.locator.name,
+              entry.locator.nameMode,
+            ) &&
             Number.isInteger(node.backendDOMNodeId),
         )
         .map((node) => ({
@@ -836,6 +847,7 @@ async function resolveLocatorCenter(cdp, sessionId, locator, iframeSessions) {
       locator.role,
       locator.name,
       locator.raw,
+      { nameMode: locator.nameMode },
     );
     const result = await send(
       cdp,
@@ -907,6 +919,7 @@ async function resolveLocatorObjectId(
       locator.name,
       locator.raw,
       {
+        nameMode: locator.nameMode,
         strictGlobal: options.strictGlobal,
         actionability: options.actionability,
       },
@@ -1070,9 +1083,11 @@ async function findUniqueRoleMatch(
   name,
   raw,
   {
+    nameMode = "exact",
     strictGlobal = false,
     actionability = undefined,
   }: {
+    nameMode?: "exact" | "substring";
     strictGlobal?: boolean;
     actionability?: ElementActionability;
   } = {},
@@ -1090,7 +1105,7 @@ async function findUniqueRoleMatch(
         if (
           !node.ignored &&
           normalizeRole(extractAxString(node.role)) === normalizeRole(role) &&
-          extractAxString(node.name) === name &&
+          roleNameMatches(extractAxString(node.name), name, nameMode) &&
           node.backendDOMNodeId !== undefined &&
           node.backendDOMNodeId !== null
         ) {
@@ -1213,7 +1228,7 @@ async function roleMatchActionability(
       "Runtime.callFunctionOn",
       {
         functionDeclaration: `function() {
-          ${actionability === "pointer" ? HIT_TARGET_HELPERS : ""}
+          ${actionabilityRequiresPointer(actionability) ? HIT_TARGET_HELPERS : ACTION_TARGET_STATE_HELPERS}
           if (!this.isConnected) return { actionable: false };
           const rect = this.getBoundingClientRect();
           const view = this.ownerDocument?.defaultView;
@@ -1221,11 +1236,13 @@ async function roleMatchActionability(
           const style = view.getComputedStyle(this);
           const visible = !this.closest?.("[hidden], [inert]") &&
             style.display !== "none" &&
-            style.visibility !== "hidden" &&
-            !this.matches?.(":disabled") &&
-            this.getAttribute?.("aria-disabled") !== "true";
+            style.visibility !== "hidden";
           if (!visible) return { actionable: false };
-          if (${JSON.stringify(actionability)} === "pointer") {
+          if (
+            ${JSON.stringify(actionabilityRequiresEnabled(actionability))} &&
+            isActionTargetDisabled(this)
+          ) return { actionable: false, blocker: "element is disabled" };
+          if (${JSON.stringify(actionabilityRequiresPointer(actionability))}) {
             const point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
             const offscreen = point.x < 0 || point.y < 0 ||
               point.x >= view.innerWidth || point.y >= view.innerHeight;
@@ -1503,7 +1520,11 @@ function parseRawSelector(input) {
   const raw = String(input);
   return raw.startsWith("xpath=")
     ? { kind: "xpath", selector: raw.slice(6), raw }
-    : { kind: "css", selector: raw, raw };
+    : {
+        kind: "css",
+        selector: raw.startsWith("css=") ? raw.slice(4) : raw,
+        raw,
+      };
 }
 
 function buildRawSelectorCountJs(selector) {
@@ -1530,7 +1551,10 @@ function buildLocatorFindJs(locator) {
   if (locator.kind === "text") {
     return `(() => ${textElementsJs(locator)}[0] || null)()`;
   }
-  return `(() => ${hrefElementsJs(locator.href)}[0] || null)()`;
+  if (locator.kind === "href") {
+    return `(() => ${hrefElementsJs(locator.href)}[0] || null)()`;
+  }
+  return `(() => ${buildLocatorElementsJs(locator)}[0] || null)()`;
 }
 
 function buildLocatorActionableFindJs(
@@ -1552,7 +1576,7 @@ function buildActionableElementsJs(
   actionability: ElementActionability,
 ) {
   return `(() => {
-            ${actionability === "pointer" ? HIT_TARGET_HELPERS : ""}
+            ${actionabilityRequiresPointer(actionability) ? HIT_TARGET_HELPERS : ACTION_TARGET_STATE_HELPERS}
             const __egoActionableMatches = Array.from(${elementsExpression} || []).filter((element) => {
               if (!element?.isConnected || element.closest?.("[hidden], [inert]")) return false;
               const view = element.ownerDocument?.defaultView;
@@ -1561,11 +1585,13 @@ function buildActionableElementsJs(
               const style = view.getComputedStyle(element);
               const visible = rect.width > 0 && rect.height > 0 &&
                 style.display !== "none" &&
-                style.visibility !== "hidden" &&
-                !element.matches?.(":disabled") &&
-                element.getAttribute?.("aria-disabled") !== "true";
+                style.visibility !== "hidden";
               if (!visible) return false;
-              if (${JSON.stringify(actionability)} !== "pointer") return true;
+              if (
+                ${JSON.stringify(actionabilityRequiresEnabled(actionability))} &&
+                isActionTargetDisabled(element)
+              ) return false;
+              if (!${JSON.stringify(actionabilityRequiresPointer(actionability))}) return true;
               const point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
               const offscreen = point.x < 0 || point.y < 0 ||
                 point.x >= view.innerWidth || point.y >= view.innerHeight;
@@ -1581,23 +1607,25 @@ async function firstActionabilityBlocker(
   elementsExpression,
   actionability: ElementActionability,
 ): Promise<string | undefined> {
-  if (actionability !== "pointer") return undefined;
   for (const context of contexts) {
     try {
       const result = await evaluateInContext(
         cdp,
         context,
         `(() => {
-          ${HIT_TARGET_HELPERS}
+          ${actionabilityRequiresPointer(actionability) ? HIT_TARGET_HELPERS : ACTION_TARGET_STATE_HELPERS}
           for (const element of Array.from(${elementsExpression} || [])) {
             if (!element?.isConnected || element.closest?.("[hidden], [inert]")) continue;
             const view = element.ownerDocument?.defaultView;
             const rect = element.getBoundingClientRect();
             const style = view?.getComputedStyle(element);
             if (!view || rect.width <= 0 || rect.height <= 0 ||
-                style.display === "none" || style.visibility === "hidden" ||
-                element.matches?.(":disabled") ||
-                element.getAttribute?.("aria-disabled") === "true") continue;
+                style.display === "none" || style.visibility === "hidden") continue;
+            if (
+              ${JSON.stringify(actionabilityRequiresEnabled(actionability))} &&
+              isActionTargetDisabled(element)
+            ) return "element is disabled";
+            if (!${JSON.stringify(actionabilityRequiresPointer(actionability))}) continue;
             const point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
             if (point.x < 0 || point.y < 0 ||
                 point.x >= view.innerWidth || point.y >= view.innerHeight) continue;
@@ -1625,7 +1653,10 @@ function buildLocatorCountJs(locator) {
   if (locator.kind === "text") {
     return `(() => ${textElementsJs(locator)}.length)()`;
   }
-  return `(() => ${hrefElementsJs(locator.href)}.length)()`;
+  if (locator.kind === "href") {
+    return `(() => ${hrefElementsJs(locator.href)}.length)()`;
+  }
+  return `(() => ${buildLocatorElementsJs(locator)}.length)()`;
 }
 
 function buildBatchLocatorCountJs(locators) {
@@ -1660,11 +1691,21 @@ function buildLocatorElementsJs(locator) {
   if (locator.kind === "text") {
     return textElementsJs(locator);
   }
-  return hrefElementsJs(locator.href);
+  if (locator.kind === "href") {
+    return hrefElementsJs(locator.href);
+  }
+  if (locator.kind === "cssText") {
+    return cssTextElementsJs(locator);
+  }
+  if (locator.kind === "nth") {
+    return nthElementsJs(locator);
+  }
+  throw new Error(`Unsupported locator kind: ${locator.kind}`);
 }
 
 function buildMatchDiagnosticsJs(elementsExpression) {
   return `(() => {
+            ${ACTION_TARGET_STATE_HELPERS}
             const __egoDescribeMatches = (values) => {
               const elements = Array.from(values || []).filter(Boolean);
               const normalize = (value) =>
@@ -1693,10 +1734,7 @@ function buildMatchDiagnosticsJs(elementsExpression) {
                   role: element.getAttribute?.("role") || undefined,
                   name: name || undefined,
                   visible: isVisible,
-                  disabled: Boolean(
-                    element.disabled ||
-                    element.getAttribute?.("aria-disabled") === "true"
-                  )
+                  disabled: isActionTargetDisabled(element)
                 };
               });
               const visibleCount = elements.filter(visible).length;
@@ -1708,6 +1746,18 @@ function buildMatchDiagnosticsJs(elementsExpression) {
             };
             return __egoDescribeMatches(${elementsExpression});
           })()`;
+}
+
+function actionabilityRequiresEnabled(
+  actionability: ElementActionability,
+): boolean {
+  return actionability === "enabled" || actionability === "pointer-enabled";
+}
+
+function actionabilityRequiresPointer(
+  actionability: ElementActionability,
+): boolean {
+  return actionability === "pointer" || actionability === "pointer-enabled";
 }
 
 function buildLocatorCenterJs(locator) {
@@ -1731,6 +1781,84 @@ function hrefElementsJs(href) {
               return false;
             }
           })`;
+}
+
+function cssTextElementsJs(locator) {
+  return `(() => {
+            const spec = {
+              selector: ${JSON.stringify(locator.selector)},
+              mode: ${JSON.stringify(locator.mode)},
+              text: ${JSON.stringify(locator.text)}
+            };
+            const normalize = (value) =>
+              String(value ?? "")
+                .replace(/[\\u200b\\u00ad]/g, "")
+                .replace(/[\\r\\n\\s\\t]+/g, " ")
+                .trim();
+            const expected = normalize(spec.text);
+            const elements = ${buildCssQueryAllJs(locator.selector)};
+
+            function shouldSkip(element) {
+              return (
+                element.tagName === "SCRIPT" ||
+                element.tagName === "NOSCRIPT" ||
+                element.tagName === "STYLE" ||
+                document.head?.contains(element)
+              );
+            }
+
+            function elementText(element) {
+              if (shouldSkip(element)) {
+                return { full: "", normalized: "", immediate: [] };
+              }
+              const type = String(element.getAttribute?.("type") || "").toLowerCase();
+              if (element.tagName === "INPUT" && (type === "button" || type === "submit")) {
+                const value = String(element.value || "");
+                return { full: value, normalized: normalize(value), immediate: [value] };
+              }
+
+              let full = "";
+              let currentImmediate = "";
+              const immediate = [];
+              const flushImmediate = () => {
+                if (currentImmediate) immediate.push(currentImmediate);
+                currentImmediate = "";
+              };
+              for (const child of element.childNodes) {
+                if (child.nodeType === Node.TEXT_NODE) {
+                  full += child.nodeValue || "";
+                  currentImmediate += child.nodeValue || "";
+                } else if (child.nodeType !== Node.COMMENT_NODE) {
+                  flushImmediate();
+                  if (child.nodeType === Node.ELEMENT_NODE) {
+                    full += elementText(child).full;
+                  }
+                }
+              }
+              flushImmediate();
+              if (element.shadowRoot) full += elementText(element.shadowRoot).full;
+              return { full, normalized: normalize(full), immediate };
+            }
+
+            return elements.filter((element) => {
+              const text = elementText(element);
+              if (spec.mode === "exact") {
+                return (
+                  (expected === "" && text.immediate.length === 0) ||
+                  text.immediate.some((value) => normalize(value) === expected)
+                );
+              }
+              return text.normalized.toLowerCase().includes(expected.toLowerCase());
+            });
+          })()`;
+}
+
+function nthElementsJs(locator) {
+  return `(() => {
+            const values = Array.from(${buildLocatorElementsJs(locator.locator)} || []);
+            const index = ${locator.index} === -1 ? values.length - 1 : ${locator.index};
+            return index >= 0 && index < values.length ? [values[index]] : [];
+          })()`;
 }
 
 function textElementsJs(locator) {
@@ -1860,17 +1988,37 @@ function buildSelectorCenterJs(selector) {
 }
 
 function parseLocator(input) {
-  let value = String(input || "").trim();
+  const raw = String(input || "").trim();
+  let value = raw;
   if (value.startsWith("loc=")) {
     value = value.slice(4);
   }
+
+  const nth = parseTerminalNth(value);
+  if (nth?.valid) {
+    const locator = parseLocatorCore(nth.base, raw, true);
+    if (!locator || locator.kind === "role" || locator.kind === "nth") {
+      return null;
+    }
+    return { kind: "nth", locator, index: nth.index, raw };
+  }
+  if (nth) return null;
+
+  return parseLocatorCore(value, raw, false);
+}
+
+function parseLocatorCore(value, raw, allowRawCss) {
   if (value.startsWith("css:")) {
     const selector = value.slice(4);
-    return selector ? { kind: "css", selector, raw: value } : null;
+    return parseCssLocator(selector, raw);
+  }
+  if (value.startsWith("css=")) {
+    const selector = value.slice(4);
+    return parseCssLocator(selector, raw);
   }
   if (value.startsWith("href:")) {
     const href = value.slice(5);
-    return href ? { kind: "href", href, raw: value } : null;
+    return href ? { kind: "href", href, raw } : null;
   }
   if (value.startsWith("text=")) {
     const body = value.slice(5).trim();
@@ -1884,20 +2032,43 @@ function parseLocator(input) {
           kind: "text",
           mode: quoted ? "exact" : "substring",
           text,
-          raw: value,
+          raw,
         }
       : null;
   }
-  const roleMatch = /^role:([A-Za-z0-9_-]+)\[name=(.+)\]$/.exec(value);
+  const roleMatch = /^role:([A-Za-z0-9_-]+)\[name(\*=|=)(.+)\]$/.exec(value);
   if (roleMatch) {
     return {
       kind: "role",
       role: normalizeRole(roleMatch[1]),
-      name: parseLocatorName(roleMatch[2]),
-      raw: value,
+      nameMode: roleMatch[2] === "*=" ? "substring" : "exact",
+      name: parseLocatorName(roleMatch[3]),
+      raw,
     };
   }
+
+  if (allowRawCss || hasTerminalCssTextPseudo(value)) {
+    return parseCssLocator(value, raw);
+  }
   return null;
+}
+
+function parseCssLocator(selector, raw) {
+  const trimmed = selector.trim();
+  if (!trimmed) return null;
+  const text = parseTerminalCssText(trimmed);
+  if (text?.valid) {
+    return {
+      kind: "cssText",
+      selector: text.selector,
+      mode: text.mode,
+      text: text.text,
+      raw,
+    };
+  }
+  if (text) return null;
+  if (containsUnquotedTextPseudo(trimmed)) return null;
+  return { kind: "css", selector: trimmed, raw };
 }
 
 function parseLocatorOrThrow(input) {
@@ -1908,14 +2079,241 @@ function parseLocatorOrThrow(input) {
   if (
     value.startsWith("loc=") ||
     value.startsWith("role:") ||
-    value.startsWith("text=")
+    value.startsWith("text=") ||
+    value.startsWith("css=") ||
+    hasPlaywrightCompatibilitySyntax(value)
   ) {
     throw new ElementResolutionError(
-      `Invalid locator: ${value}. Expected loc=role:<role>[name="<exact name>"], loc=css:<selector>, loc=href:<substring>, or text=... for text matching`,
+      `Invalid locator: ${value}. Expected loc=role:<role>[name="<exact name>"], loc=role:<role>[name*="<name part>"], loc=css:<selector>, loc=href:<substring>, text=..., css=..., a terminal :has-text(...) or :text-is(...), or a terminal >> nth=N`,
       "permanent",
     );
   }
   return null;
+}
+
+function parseTerminalNth(value) {
+  const separators = topLevelTokenPositions(value, ">>");
+  if (separators.length === 0) return undefined;
+  if (separators.length !== 1) return { valid: false };
+  const position = separators[0];
+  const base = value.slice(0, position).trim();
+  const tail = value.slice(position + 2).trim();
+  const match = /^nth=(-?\d+)$/.exec(tail);
+  if (!base || !match) return { valid: false };
+  const index = Number(match[1]);
+  if (!Number.isSafeInteger(index) || index < -1) return { valid: false };
+  return { valid: true, base, index };
+}
+
+function parseTerminalCssText(selector) {
+  const pseudos = [
+    { token: ":has-text(", mode: "substring" },
+    { token: ":text-is(", mode: "exact" },
+  ];
+  for (let index = 0; index < selector.length; index += 1) {
+    if (!isTopLevelPosition(selector, index)) continue;
+    const pseudo = pseudos.find(({ token }) =>
+      selector.startsWith(token, index),
+    );
+    if (!pseudo) continue;
+    const open = index + pseudo.token.length - 1;
+    const close = matchingParenPosition(selector, open);
+    if (close === -1 || selector.slice(close + 1).trim()) {
+      return { valid: false };
+    }
+    const base = selector.slice(0, index).trim();
+    const argument = selector.slice(open + 1, close).trim();
+    const string = parseCssString(argument);
+    if (
+      !base ||
+      topLevelTokenPositions(base, ",").length > 0 ||
+      !string.valid
+    ) {
+      return { valid: false };
+    }
+    return {
+      valid: true,
+      selector: base,
+      mode: pseudo.mode,
+      text: string.value,
+    };
+  }
+  return undefined;
+}
+
+function hasTerminalCssTextPseudo(value) {
+  return Boolean(parseTerminalCssText(value));
+}
+
+function hasPlaywrightCompatibilitySyntax(value) {
+  return (
+    containsUnquotedTextPseudo(value) ||
+    topLevelTokenPositions(value, ">>").length > 0
+  );
+}
+
+function containsUnquotedTextPseudo(value) {
+  const tokens = [":has-text(", ":text-is("];
+  let quote;
+  let escaped = false;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (tokens.some((token) => value.startsWith(token, index))) return true;
+  }
+  return false;
+}
+
+function topLevelTokenPositions(value, token) {
+  const positions = [];
+  let quote;
+  let escaped = false;
+  let bracketDepth = 0;
+  let parenDepth = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === "[") bracketDepth += 1;
+    else if (character === "]") bracketDepth = Math.max(0, bracketDepth - 1);
+    else if (character === "(") parenDepth += 1;
+    else if (character === ")") parenDepth = Math.max(0, parenDepth - 1);
+    if (
+      bracketDepth === 0 &&
+      parenDepth === 0 &&
+      value.startsWith(token, index)
+    ) {
+      positions.push(index);
+      index += token.length - 1;
+    }
+  }
+  return positions;
+}
+
+function isTopLevelPosition(value, position) {
+  let quote;
+  let escaped = false;
+  let bracketDepth = 0;
+  let parenDepth = 0;
+  for (let index = 0; index < position; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === "[") {
+      bracketDepth += 1;
+    } else if (character === "]") {
+      bracketDepth = Math.max(0, bracketDepth - 1);
+    } else if (character === "(") {
+      parenDepth += 1;
+    } else if (character === ")") {
+      parenDepth = Math.max(0, parenDepth - 1);
+    }
+  }
+  return !quote && bracketDepth === 0 && parenDepth === 0;
+}
+
+function matchingParenPosition(value, open) {
+  let quote;
+  let escaped = false;
+  let depth = 0;
+  for (let index = open; index < value.length; index += 1) {
+    const character = value[index];
+    if (quote) {
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === "(") depth += 1;
+    if (character === ")" && --depth === 0) return index;
+  }
+  return -1;
+}
+
+function parseCssString(value) {
+  const quote = value[0];
+  if ((quote !== '"' && quote !== "'") || value.length < 2) {
+    return { valid: false };
+  }
+
+  let decoded = "";
+  for (let index = 1; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === quote) {
+      return index === value.length - 1
+        ? { valid: true, value: decoded }
+        : { valid: false };
+    }
+    if (character === "\n" || character === "\r" || character === "\f") {
+      return { valid: false };
+    }
+    if (character !== "\\") {
+      decoded += character;
+      continue;
+    }
+
+    index += 1;
+    if (index >= value.length) return { valid: false };
+    if (value[index] === "\r" && value[index + 1] === "\n") index += 1;
+    if (
+      value[index] === "\n" ||
+      value[index] === "\r" ||
+      value[index] === "\f"
+    ) {
+      continue;
+    }
+
+    const hex = value.slice(index).match(/^[0-9a-fA-F]{1,6}/)?.[0];
+    if (!hex) {
+      decoded += value[index];
+      continue;
+    }
+    index += hex.length - 1;
+    const terminator = value[index + 1];
+    if (terminator === "\r") {
+      index += value[index + 2] === "\n" ? 2 : 1;
+    } else if (
+      terminator === "\n" ||
+      terminator === "\f" ||
+      terminator === "\t" ||
+      terminator === " "
+    ) {
+      index += 1;
+    }
+    const codePoint = Number.parseInt(hex, 16);
+    decoded +=
+      codePoint === 0 || codePoint > 0x10ffff
+        ? "\uFFFD"
+        : String.fromCodePoint(codePoint);
+  }
+  return { valid: false };
 }
 
 function parseLocatorName(raw) {
@@ -1937,6 +2335,13 @@ function normalizeText(value) {
   return String(value ?? "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function roleNameMatches(actual, expected, mode = "exact") {
+  if (mode === "exact") return actual === expected;
+  return normalizeText(actual)
+    .toLowerCase()
+    .includes(normalizeText(expected).toLowerCase());
 }
 
 function normalizeRole(value) {

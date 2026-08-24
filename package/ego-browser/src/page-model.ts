@@ -5,12 +5,15 @@ import {
   browserCdp,
   browserEgo,
   drainPageEvents,
+  ensureNetworkTracking,
   ensureSession,
   ensureFrameSessions,
   invalidateSession,
+  isCdpRequestTimeoutError,
   isBrowserRuntime,
-  isNetworkDomainEnabled,
   isPageDialogOpenedError,
+  networkActivity,
+  pageNetworkSessions,
   pendingDialog,
   prepareFileChooser,
   setPreferredTarget,
@@ -46,6 +49,7 @@ import {
   type PageMouseButtonOptions,
   type PageMouseClickOptions,
   type PageMouseMoveOptions,
+  type PageSelectOption,
 } from "./driver/page-actions.js";
 import {
   normalizeFilePaths,
@@ -60,6 +64,7 @@ import {
 } from "./driver/page-keyboard.js";
 import {
   navigateInPage,
+  reloadInPage,
   waitForLoadStateInPage,
   waitForSelectorInPage,
   waitForURLInPage,
@@ -129,6 +134,8 @@ type PageGotoOptions = {
   timeout?: number;
   waitUntil?: PageGotoWaitUntil;
 };
+
+type PageReloadOptions = Pick<PageGotoOptions, "timeout" | "waitUntil">;
 
 type PageSnapshotOptions = SnapshotOptions;
 
@@ -229,6 +236,10 @@ type OperationGate = {
 type LedgerPort = {
   read(spaceId: number): Promise<PageLedger>;
   discard(spaceId: number): Promise<void>;
+  initializeCreatedSpace(
+    spaceId: number,
+    targetId: string,
+  ): Promise<ManagedPage>;
   addPage(
     spaceId: number,
     targetId: string,
@@ -292,7 +303,16 @@ type PageModelServices = {
     options: { timeoutMs: number; cancel: boolean },
   ): FileChooserInterception;
   drainEvents(sessionId: string): any[];
-  isNetworkDomainEnabled(sessionId: string): boolean;
+  ensureNetworkTracking(
+    sessionIds: string[],
+    timeoutMs?: number,
+  ): Promise<void>;
+  pageNetworkSessions(sessionId: string, timeoutMs?: number): Promise<string[]>;
+  networkActivity(sessionIds: string[]): {
+    tracking: boolean;
+    inflight: number;
+    lastActivityAt: number;
+  };
   ensureSession(targetId: string): Promise<string>;
   ensureFrameSessions(targetId: string): Promise<Map<string, string>>;
   invalidateSession(targetId: string): void;
@@ -320,11 +340,49 @@ export type PageActionReceipt = {
   dialog?: Record<string, unknown>;
 };
 
+export class PageEvaluationTimeoutError extends Error {
+  readonly code = "EGO_PAGE_EVALUATION_TIMED_OUT";
+  readonly timeoutMs: number;
+  readonly executionStopped: boolean;
+  readonly mayHaveLateEffects: boolean;
+  readonly pageResponsive: boolean;
+
+  constructor(
+    message: string,
+    {
+      timeoutMs,
+      executionStopped,
+      mayHaveLateEffects,
+      pageResponsive,
+    }: {
+      timeoutMs: number;
+      executionStopped: boolean;
+      mayHaveLateEffects: boolean;
+      pageResponsive: boolean;
+    },
+  ) {
+    super(message);
+    this.name = "PageEvaluationTimeoutError";
+    this.timeoutMs = timeoutMs;
+    this.executionStopped = executionStopped;
+    this.mayHaveLateEffects = mayHaveLateEffects;
+    this.pageResponsive = pageResponsive;
+  }
+}
+
 const PAGE_CLOSE_CONFIRM_TIMEOUT_MS = 2_000;
 const PAGE_CLOSE_CONFIRM_INTERVAL_MS = 50;
+const CREATED_SPACE_TAB_TIMEOUT_MS = 2_000;
+const CREATED_SPACE_TAB_POLL_INTERVAL_MS = 50;
 const DEFAULT_PAGE_ACTION_TIMEOUT_MS = 3_000;
 const PAGE_ACTION_RESOLUTION_RETRY_MS = 500;
 const CONTROL_POLL_INTERVAL_MS = 20_000;
+const PAGE_EVALUATE_EXECUTION_TIMEOUT_MS = 14_000;
+const PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS = 15_000;
+const PAGE_EVALUATE_HEALTH_TIMEOUT_MS = 250;
+const PAGE_EVALUATE_HEALTH_EXECUTION_TIMEOUT_MS = 200;
+const PAGE_EVALUATE_TERMINATE_TIMEOUT_MS = 1_000;
+const WAIT_FOR_FUNCTION_TRANSPORT_GRACE_MS = 250;
 const CONTROL_WAIT_TIMEOUT_MS = 600_000;
 
 type RawActionRunner = (
@@ -532,6 +590,7 @@ const defaultPageRefs = new PageRefRegistry();
 const unmanagedPageConstructorToken = Symbol("UnmanagedPage");
 const captureUserBoundaryToken = Symbol("captureUserBoundary");
 const initializeTaskSpaceToken = Symbol("initializeTaskSpace");
+const initializeCreatedSpaceToken = Symbol("initializeCreatedSpace");
 
 const defaultGate: OperationGate = {
   withSpace: defaultWithSpace,
@@ -602,7 +661,9 @@ const baseDefaultServices: Omit<PageModelServices, "ledger" | "pageBudget"> = {
   pendingDialog,
   prepareFileChooser,
   drainEvents: drainPageEvents,
-  isNetworkDomainEnabled,
+  ensureNetworkTracking,
+  pageNetworkSessions,
+  networkActivity,
   ensureSession,
   ensureFrameSessions,
   invalidateSession,
@@ -658,10 +719,14 @@ export async function captureTaskSpaceUserBoundary(
   await task.captureUserBoundary(captureUserBoundaryToken);
 }
 
-/** Enable round-local discovery for pages that appear after an action returns. */
+/** Initialize Page state and round-local discovery before exposing a TaskSpace. */
 export async function initializeTaskSpaceHandle(
   task: TaskSpace,
+  options: { created?: boolean } = {},
 ): Promise<void> {
+  if (options.created) {
+    await task.initializeCreatedSpace(initializeCreatedSpaceToken);
+  }
   await task.initializeBackgroundPageDiscovery(initializeTaskSpaceToken);
 }
 
@@ -699,6 +764,52 @@ class TaskSpace {
   /** The tab active at the most recent claim/takeover boundary, if any. */
   userPage(): Page | UnmanagedPage | undefined {
     return this.#userPage;
+  }
+
+  async initializeCreatedSpace(token: symbol): Promise<void> {
+    if (token !== initializeCreatedSpaceToken) {
+      throw new TypeError("created-space initialization is internal");
+    }
+    if (this.ownership !== "agent") {
+      throw new Error("only a newly created Agent TaskSpace can initialize p1");
+    }
+    await this.#services.gate.withSpace(this.id, async () => {
+      const targetId = await this.#waitForCreatedSpaceTab();
+      const page = await this.#services.ledger.initializeCreatedSpace(
+        this.id,
+        targetId,
+      );
+      this.#services.setPreferredTarget(page.targetId);
+    });
+  }
+
+  async #waitForCreatedSpaceTab(): Promise<string> {
+    const deadline = this.#services.now() + CREATED_SPACE_TAB_TIMEOUT_MS;
+    while (true) {
+      const tabs = await this.#services.listTabs();
+      if (tabs.length > 1) {
+        throw new Error(
+          `new task space expected one default tab, found ${tabs.length}`,
+        );
+      }
+      if (tabs.length === 1) {
+        const targetId = tabs[0]?.targetId;
+        if (typeof targetId !== "string" || targetId.length === 0) {
+          throw new Error("new task space default tab returned no targetId");
+        }
+        return targetId;
+      }
+
+      const remainingMs = deadline - this.#services.now();
+      if (remainingMs <= 0) {
+        throw new Error(
+          `new task space did not expose its default tab within ${CREATED_SPACE_TAB_TIMEOUT_MS}ms`,
+        );
+      }
+      await this.#services.sleep(
+        Math.min(CREATED_SPACE_TAB_POLL_INTERVAL_MS, remainingMs),
+      );
+    }
   }
 
   async initializeBackgroundPageDiscovery(token: symbol): Promise<void> {
@@ -1268,6 +1379,23 @@ class Page {
     return receipt;
   }
 
+  async reload(options: PageReloadOptions = {}): Promise<PageActionReceipt> {
+    validatePublicApiOptions("Page.reload", options);
+    const timeoutMs = options.timeout ?? 15_000;
+    const waitUntil = options.waitUntil ?? "load";
+    const page = await this.#resolve();
+    const { receipt } = await this.#runActionBoundary(
+      page,
+      async (sessionId) => {
+        await reloadInPage(this.#services, sessionId, {
+          timeoutMs,
+          waitUntil,
+        });
+      },
+    );
+    return receipt;
+  }
+
   async snapshot(options: PageSnapshotOptions = {}): Promise<string> {
     validatePublicApiOptions("Page.snapshot", options);
     const page = await this.#resolve();
@@ -1359,7 +1487,9 @@ class Page {
           ),
         );
       }, timeoutMs);
-      for (const notice of peekUnhandledPageNotices()) onNotice(notice);
+
+      // Playwright-style event waits observe only future events. Replaying a
+      // pending notice here can return a popup from an earlier action.
 
       // Resolve the source after arming the listener. A stale Page should fail
       // the waiter, but no popup may be lost while that validation is pending.
@@ -1400,6 +1530,19 @@ class Page {
         false,
       );
     });
+  }
+
+  /** Accept the JavaScript dialog currently blocking this Page, if any. */
+  async acceptDialog(promptText?: string): Promise<boolean> {
+    if (promptText !== undefined && typeof promptText !== "string") {
+      throw new TypeError("page.acceptDialog promptText must be a string");
+    }
+    return this.#handleJavaScriptDialog(true, promptText);
+  }
+
+  /** Dismiss the JavaScript dialog currently blocking this Page, if any. */
+  async dismissDialog(): Promise<boolean> {
+    return this.#handleJavaScriptDialog(false);
   }
 
   async evaluate<T = unknown>(
@@ -1454,17 +1597,31 @@ class Page {
       try {
         while (this.#services.now() <= deadline) {
           const remaining = Math.max(1, deadline - this.#services.now());
+          const executionTimeoutMs = remaining;
+          const transportTimeoutMs =
+            remaining + WAIT_FOR_FUNCTION_TRANSPORT_GRACE_MS;
+          const evaluationStartedAt = this.#services.now();
           try {
-            const response = await this.#services.cdp(
-              "Runtime.evaluate",
-              {
-                expression: source,
-                returnByValue: true,
-                awaitPromise: true,
-              },
-              sessionId,
-              Math.min(1_000, remaining),
-            );
+            let response;
+            try {
+              response = await this.#services.cdp(
+                "Runtime.evaluate",
+                {
+                  expression: source,
+                  returnByValue: true,
+                  awaitPromise: true,
+                  timeout: executionTimeoutMs,
+                },
+                sessionId,
+                transportTimeoutMs,
+              );
+            } catch (error) {
+              throw normalizeProtocolExecutionTimeout(
+                error,
+                this.#services.now() - evaluationStartedAt,
+                executionTimeoutMs,
+              );
+            }
             const state = runtimeValue(response, source);
             if (isWaitForFunctionState(state)) {
               lastUrl = state.url;
@@ -1472,6 +1629,17 @@ class Page {
               if (state.matched) return true as const;
             }
           } catch (error) {
+            if (isEvaluationExecutionDeadlineError(error)) {
+              break;
+            }
+            if (isRuntimeEvaluateTransportTimeout(error)) {
+              throw await recoverPageEvaluationTimeout(
+                this.#services,
+                sessionId,
+                "page.waitForFunction",
+                timeoutMs,
+              );
+            }
             if (!isRetryablePageEvaluationError(error)) {
               throw enrichPageCallbackReferenceError(
                 error,
@@ -1590,7 +1758,7 @@ class Page {
   }
 
   async waitForLoadState(
-    state: "domcontentloaded" | "load" | "networkidle",
+    state: "domcontentloaded" | "load" | "networkidle" = "load",
     options: PageWaitForLoadStateOptions = {},
   ): Promise<void> {
     validatePublicApiOptions("Page.waitForLoadState", options);
@@ -1750,21 +1918,17 @@ class Page {
 
   async selectOption(
     selector: string,
-    valueOrValues: string | string[],
+    valueOrValues: PageSelectOption | PageSelectOption[] | null,
     options: { timeout?: number } = {},
   ): Promise<string[]> {
     validatePublicApiOptions("Page.selectOption", options);
-    const values =
-      typeof valueOrValues === "string" ? [valueOrValues] : valueOrValues;
-    if (
-      !Array.isArray(values) ||
-      values.length === 0 ||
-      values.some((value) => typeof value !== "string")
-    ) {
-      throw new TypeError(
-        "page.selectOption valueOrValues must be a string or a non-empty string array",
-      );
-    }
+    const choices =
+      valueOrValues === null
+        ? []
+        : Array.isArray(valueOrValues)
+          ? valueOrValues
+          : [valueOrValues];
+    choices.forEach(validateSelectOptionChoice);
     const timeoutMs = options.timeout ?? DEFAULT_PAGE_ACTION_TIMEOUT_MS;
     const page = await this.#resolve();
     return this.#runInputBoundary(page, async (sessionId) => {
@@ -1780,7 +1944,7 @@ class Page {
             sessionId,
             refMap,
             selector,
-            values,
+            choices,
             iframeSessions,
           );
         } catch (error) {
@@ -1988,8 +2152,24 @@ class Page {
             expression,
             hasArgument,
             serializedArgument,
+            PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS,
+            PAGE_EVALUATE_EXECUTION_TIMEOUT_MS,
           );
         } catch (error) {
+          if (isEvaluationExecutionDeadlineError(error)) {
+            throw evaluationExecutionDeadlineError(
+              "page.evaluate",
+              PAGE_EVALUATE_EXECUTION_TIMEOUT_MS,
+            );
+          }
+          if (isRuntimeEvaluateTransportTimeout(error)) {
+            throw await recoverPageEvaluationTimeout(
+              this.#services,
+              sessionId,
+              "page.evaluate",
+              PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS,
+            );
+          }
           if (typeof expression === "function") {
             throw enrichPageCallbackReferenceError(error, "page.evaluate");
           }
@@ -2075,6 +2255,32 @@ class Page {
     const page = await this.#resolve();
     const { receipt } = await this.#runActionBoundary(page, operation, true);
     return receipt;
+  }
+
+  async #handleJavaScriptDialog(
+    accept: boolean,
+    promptText?: string,
+  ): Promise<boolean> {
+    const page = await this.#resolve();
+    return this.#services.gate.withPage(page, async ({ sessionId }) => {
+      try {
+        await this.#services.cdp(
+          "Page.handleJavaScriptDialog",
+          {
+            accept,
+            ...(promptText === undefined ? {} : { promptText }),
+          },
+          sessionId,
+        );
+        // A handled dialog resumes its callback and may mutate the DOM. A
+        // no-dialog response leaves the page untouched, so its refs stay valid.
+        this.#services.pageRefs.clear(page.targetId);
+        return true;
+      } catch (error) {
+        if (isNoJavaScriptDialogError(error)) return false;
+        throw error;
+      }
+    });
   }
 
   async #runInputBoundary<T>(
@@ -2273,38 +2479,64 @@ async function evaluateInSession<T>(
   hasArgument: boolean,
   serializedArgument?: unknown,
   timeoutMs?: number,
+  executionTimeoutMs?: number,
 ): Promise<T> {
+  const startedAt = services.now();
   if (typeof expression === "string") {
-    const response = await services.cdp(
-      "Runtime.evaluate",
-      {
-        expression,
-        returnByValue: true,
-        awaitPromise: true,
-      },
-      sessionId,
-      timeoutMs,
-    );
+    let response;
+    try {
+      response = await services.cdp(
+        "Runtime.evaluate",
+        {
+          expression,
+          returnByValue: true,
+          awaitPromise: true,
+          ...(executionTimeoutMs === undefined
+            ? {}
+            : { timeout: executionTimeoutMs }),
+        },
+        sessionId,
+        timeoutMs,
+      );
+    } catch (error) {
+      throw normalizeProtocolExecutionTimeout(
+        error,
+        services.now() - startedAt,
+        executionTimeoutMs,
+      );
+    }
     return runtimeValue(response, expression) as T;
   }
 
   const source = expression.toString();
-  const response = await services.cdp(
-    "Runtime.evaluate",
-    {
-      expression: `(async function __egoPageEvaluate() {
+  let response;
+  try {
+    response = await services.cdp(
+      "Runtime.evaluate",
+      {
+        expression: `(async function __egoPageEvaluate() {
         return await ${pageFunctionCallExpression(
           source,
           hasArgument,
           serializedArgument,
         )};
       })()`,
-      returnByValue: true,
-      awaitPromise: true,
-    },
-    sessionId,
-    timeoutMs,
-  );
+        returnByValue: true,
+        awaitPromise: true,
+        ...(executionTimeoutMs === undefined
+          ? {}
+          : { timeout: executionTimeoutMs }),
+      },
+      sessionId,
+      timeoutMs,
+    );
+  } catch (error) {
+    throw normalizeProtocolExecutionTimeout(
+      error,
+      services.now() - startedAt,
+      executionTimeoutMs,
+    );
+  }
   return runtimeValue(response, source) as T;
 }
 
@@ -2403,11 +2635,165 @@ function waitForFunctionTimeoutError(
 function isRetryablePageEvaluationError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   return (
-    error.message.includes("CDP request timed out: Runtime.evaluate") ||
     error.message.includes("Execution context was destroyed") ||
     error.message.includes("Cannot find context with specified id") ||
     error.message.includes("Inspected target navigated")
   );
+}
+
+function isRuntimeEvaluateTransportTimeout(error: unknown): boolean {
+  return (
+    (isCdpRequestTimeoutError(error) && error.method === "Runtime.evaluate") ||
+    (error instanceof Error &&
+      error.message.includes("CDP request timed out: Runtime.evaluate"))
+  );
+}
+
+function isEvaluationExecutionDeadlineError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error as Error & { code?: string }).code === "EGO_PAGE_EXECUTION_DEADLINE"
+  );
+}
+
+function isProtocolExecutionTimeout(
+  error: unknown,
+  elapsedMs?: number,
+  timeoutMs?: number,
+): boolean {
+  return (
+    error instanceof Error &&
+    (/Execution was terminated|Script execution timed out/i.test(
+      error.message,
+    ) ||
+      (error.message === "Internal error" &&
+        timeoutMs !== undefined &&
+        elapsedMs !== undefined &&
+        elapsedMs >= timeoutMs - 100))
+  );
+}
+
+function normalizeProtocolExecutionTimeout(
+  error: unknown,
+  elapsedMs: number,
+  timeoutMs?: number,
+): unknown {
+  if (!isProtocolExecutionTimeout(error, elapsedMs, timeoutMs)) return error;
+  if (error instanceof Error) {
+    (error as Error & { code?: string }).code = "EGO_PAGE_EXECUTION_DEADLINE";
+  }
+  return error;
+}
+
+function evaluationExecutionDeadlineError(
+  apiName: string,
+  timeoutMs: number,
+): PageEvaluationTimeoutError {
+  return new PageEvaluationTimeoutError(
+    `${apiName} exceeded its ${timeoutMs}ms page-execution safety limit. The current JavaScript execution was stopped and the Page is ready for another command, but work scheduled earlier may still produce late side effects.`,
+    {
+      timeoutMs,
+      executionStopped: true,
+      mayHaveLateEffects: true,
+      pageResponsive: true,
+    },
+  );
+}
+
+async function recoverPageEvaluationTimeout(
+  services: PageModelServices,
+  sessionId: string,
+  apiName: string,
+  timeoutMs: number,
+): Promise<PageEvaluationTimeoutError> {
+  if (await pageEvaluationHealthProbe(services, sessionId)) {
+    return new PageEvaluationTimeoutError(
+      `${apiName} timed out after ${timeoutMs}ms while waiting for page JavaScript. The Page is responsive, but the evaluation is still pending and may produce late side effects. Reload or close the Page when that would be unsafe.`,
+      {
+        timeoutMs,
+        executionStopped: false,
+        mayHaveLateEffects: true,
+        pageResponsive: true,
+      },
+    );
+  }
+
+  let terminationSent = false;
+  try {
+    await services.cdp(
+      "Runtime.terminateExecution",
+      {},
+      sessionId,
+      PAGE_EVALUATE_TERMINATE_TIMEOUT_MS,
+    );
+    terminationSent = true;
+  } catch (error) {
+    if (!isCdpRequestTimeoutError(error)) throw error;
+  }
+
+  if (
+    terminationSent &&
+    (await pageEvaluationHealthProbe(services, sessionId))
+  ) {
+    return new PageEvaluationTimeoutError(
+      `${apiName} timed out after ${timeoutMs}ms and the renderer stopped responding. The current execution was stopped and the Page recovered, but work scheduled earlier may still produce late side effects.`,
+      {
+        timeoutMs,
+        executionStopped: true,
+        mayHaveLateEffects: true,
+        pageResponsive: true,
+      },
+    );
+  }
+
+  return new PageEvaluationTimeoutError(
+    `${apiName} timed out after ${timeoutMs}ms and the Page is still unresponsive. Execution could not be confirmed stopped; reload or close the Page before continuing.`,
+    {
+      timeoutMs,
+      executionStopped: false,
+      mayHaveLateEffects: true,
+      pageResponsive: false,
+    },
+  );
+}
+
+async function pageEvaluationHealthProbe(
+  services: PageModelServices,
+  sessionId: string,
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const startedAt = services.now();
+    try {
+      const response = await services.cdp(
+        "Runtime.evaluate",
+        {
+          expression: "1",
+          returnByValue: true,
+          awaitPromise: false,
+          timeout: PAGE_EVALUATE_HEALTH_EXECUTION_TIMEOUT_MS,
+        },
+        sessionId,
+        PAGE_EVALUATE_HEALTH_TIMEOUT_MS,
+      );
+      return response?.result?.value === 1;
+    } catch (error) {
+      if (isRuntimeEvaluateTransportTimeout(error)) return false;
+      if (
+        attempt === 0 &&
+        isProtocolExecutionTimeout(
+          error,
+          services.now() - startedAt,
+          PAGE_EVALUATE_HEALTH_EXECUTION_TIMEOUT_MS,
+        )
+      ) {
+        // Runtime.terminateExecution may consume the next evaluation rather
+        // than the original one. Probe once more before declaring the Page bad.
+        continue;
+      }
+      throw error;
+    }
+  }
+  return false;
 }
 
 function enrichPageCallbackReferenceError(
@@ -2530,6 +2916,52 @@ function looksLikeWaitForFunctionOptions(value: unknown): boolean {
     keys.length > 0 &&
     keys.every((key) => key === "timeout" || key === "polling")
   );
+}
+
+function isNoJavaScriptDialogError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return /no (?:javascript )?dialog (?:is showing|is open|to handle)/i.test(
+    error.message,
+  );
+}
+
+function validateSelectOptionChoice(
+  choice: PageSelectOption,
+  index: number,
+): void {
+  const path = `page.selectOption valueOrValues[${index}]`;
+  if (typeof choice === "string") return;
+  if (!choice || typeof choice !== "object" || Array.isArray(choice)) {
+    throw new TypeError(
+      `${path} must be a string or an object with value, label, or index`,
+    );
+  }
+  const keys = Object.keys(choice);
+  const unknown = keys.find(
+    (key) => key !== "value" && key !== "label" && key !== "index",
+  );
+  if (unknown) {
+    throw new TypeError(`${path} has unknown field ${JSON.stringify(unknown)}`);
+  }
+  if (
+    choice.value === undefined &&
+    choice.label === undefined &&
+    choice.index === undefined
+  ) {
+    throw new TypeError(`${path} must specify value, label, or index`);
+  }
+  if (choice.value !== undefined && typeof choice.value !== "string") {
+    throw new TypeError(`${path}.value must be a string`);
+  }
+  if (choice.label !== undefined && typeof choice.label !== "string") {
+    throw new TypeError(`${path}.label must be a string`);
+  }
+  if (
+    choice.index !== undefined &&
+    (!Number.isInteger(choice.index) || choice.index < 0)
+  ) {
+    throw new TypeError(`${path}.index must be a non-negative integer`);
+  }
 }
 
 function assertUrl(url: string): void {

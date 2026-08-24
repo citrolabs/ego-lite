@@ -45,9 +45,91 @@ export const COMPOSED_TREE_HELPERS = `
   }
 `;
 
+const ACTION_TARGET_STATE_FUNCTIONS = `
+  const nativeActionControlTags = new Set([
+    "BUTTON", "INPUT", "SELECT", "TEXTAREA", "OPTION", "OPTGROUP"
+  ]);
+  const ariaDisabledActionRoles = new Set([
+    "application", "button", "composite", "gridcell", "group", "input",
+    "link", "menuitem", "scrollbar", "separator", "tab", "checkbox",
+    "columnheader", "combobox", "grid", "listbox", "menu", "menubar",
+    "menuitemcheckbox", "menuitemradio", "option", "radio", "radiogroup",
+    "row", "rowheader", "searchbox", "select", "slider", "spinbutton",
+    "switch", "tablist", "textbox", "toolbar", "tree", "treegrid",
+    "treeitem"
+  ]);
+  function actionStateRole(element) {
+    const explicit = String(element?.getAttribute?.("role") || "")
+      .trim().toLowerCase().split(/\\s+/)[0];
+    if (explicit) return explicit;
+    const tag = String(element?.tagName || "").toUpperCase();
+    if (tag === "BUTTON" || tag === "SUMMARY") return "button";
+    if (tag === "INPUT") return "input";
+    if (tag === "SELECT") return "select";
+    if (tag === "TEXTAREA" || element?.isContentEditable) return "textbox";
+    if (tag === "OPTION") return "option";
+    if (tag === "OPTGROUP" || tag === "FIELDSET") return "group";
+    if (
+      (tag === "A" || tag === "AREA") &&
+      element?.hasAttribute?.("href")
+    ) return "link";
+    return "";
+  }
+  function supportsAriaDisabled(element) {
+    return ariaDisabledActionRoles.has(actionStateRole(element));
+  }
+  function actionStateOwner(element) {
+    let current = element;
+    while (current) {
+      if (supportsAriaDisabled(current)) return current;
+      current = composedParent(current);
+    }
+    return null;
+  }
+  function isNativelyDisabledForAction(element) {
+    let current = element;
+    while (current) {
+      const tag = String(current.tagName || "").toUpperCase();
+      if (
+        nativeActionControlTags.has(tag) &&
+        (current.disabled === true || current.matches?.(":disabled"))
+      ) {
+        return true;
+      }
+      current = composedParent(current);
+    }
+    return false;
+  }
+  function hasInheritedAriaDisabled(element) {
+    let current = actionStateOwner(element);
+    while (current) {
+      const value = String(
+        current.getAttribute?.("aria-disabled") ?? ""
+      ).trim().toLowerCase();
+      if (value === "true") return true;
+      if (value === "false") return false;
+      current = composedParent(current);
+    }
+    return false;
+  }
+  function isActionTargetDisabled(element) {
+    return (
+      isNativelyDisabledForAction(element) ||
+      hasInheritedAriaDisabled(element)
+    );
+  }
+`;
+
+/** Browser-side enabled semantics shared by resolution and final input checks. */
+export const ACTION_TARGET_STATE_HELPERS = `
+  ${COMPOSED_PARENT_HELPER}
+  ${ACTION_TARGET_STATE_FUNCTIONS}
+`;
+
 /** Editing semantics layered on top of the shared composed-tree traversal. */
 export const EDIT_ACTION_TARGET_HELPERS = `
   ${COMPOSED_TREE_HELPERS}
+  ${ACTION_TARGET_STATE_FUNCTIONS}
   function isExplicitContentEditable(element) {
     return Boolean(
       element?.hasAttribute?.("contenteditable") &&
@@ -68,14 +150,22 @@ export const EDIT_ACTION_TARGET_HELPERS = `
   }
   function isEditableFocusTarget(element) {
     const tag = String(element?.tagName || "").toUpperCase();
-    if (isFillableActionTarget(element)) return !element.disabled;
-    if (tag === "SELECT") return !element.disabled;
-    return new Set(["textbox", "searchbox", "combobox", "spinbutton"]).has(
+    const editableRole = new Set([
+      "textbox", "searchbox", "combobox", "spinbutton"
+    ]).has(
       String(element?.getAttribute?.("role") || "").toLowerCase()
+    );
+    return (
+      (isFillableActionTarget(element) || tag === "SELECT" || editableRole) &&
+      !isActionTargetDisabled(element)
     );
   }
   function isStrongFocusTarget(element) {
-    if (!element?.isConnected || element.disabled || element.closest?.("[inert]")) {
+    if (
+      !element?.isConnected ||
+      isActionTargetDisabled(element) ||
+      element.closest?.("[inert]")
+    ) {
       return false;
     }
     if (isEditableFocusTarget(element)) return true;
@@ -99,14 +189,8 @@ export const EDIT_ACTION_TARGET_HELPERS = `
 // Keeping one composed-tree definition prevents the two stages from disagreeing
 // about shadow descendants, interactive ancestors, or modal blockers.
 export const HIT_TARGET_HELPERS = `
-  ${COMPOSED_PARENT_HELPER}
+  ${ACTION_TARGET_STATE_HELPERS}
   function isExplicitInteractiveElement(element) {
-    if (
-      element?.matches?.(":disabled") ||
-      element?.getAttribute?.("aria-disabled") === "true"
-    ) {
-      return false;
-    }
     const tag = String(element?.tagName || "").toUpperCase();
     if (["BUTTON", "INPUT", "SELECT", "TEXTAREA", "OPTION", "SUMMARY", "LABEL"].includes(tag)) {
       return true;

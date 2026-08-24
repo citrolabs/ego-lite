@@ -5,6 +5,7 @@ import {
 } from "../element-resolver.js";
 import { RefMap } from "../ref-map.js";
 import {
+  ACTION_TARGET_STATE_HELPERS,
   EDIT_ACTION_TARGET_HELPERS,
   HIT_TARGET_HELPERS,
 } from "./action-target.js";
@@ -37,13 +38,21 @@ export type PageFillOptions = {
   timeout?: number;
 };
 
+export type PageSelectOption =
+  | string
+  | {
+      value?: string;
+      label?: string;
+      index?: number;
+    };
+
 /** Select option values from one visible, enabled select element. */
 export async function selectOptionInPage(
   services: PageActionServices,
   sessionId: string,
   refMap: RefMap,
   selector: string,
-  values: string[],
+  choices: PageSelectOption[],
   iframeSessions = new Map<string, string>(),
 ): Promise<string[]> {
   assertPageSelector(selector);
@@ -53,9 +62,9 @@ export async function selectOptionInPage(
     refMap,
     selector,
     iframeSessions,
-    { strict: true, actionability: "visible" },
+    { strict: true, actionability: "enabled" },
   );
-  const source = `function selectOptionsForAction(values) {
+  const source = `function selectOptionsForAction(choices) {
     ${EDIT_ACTION_TARGET_HELPERS}
     let select = String(this.tagName || "").toUpperCase() === "SELECT"
       ? this
@@ -81,20 +90,47 @@ export async function selectOptionInPage(
       !view || rect.width <= 0 || rect.height <= 0 ||
       style?.display === "none" || style?.visibility === "hidden"
     ) return { error: "element is not visible" };
-    if (select.disabled) return { error: "element is disabled" };
-    if (!select.multiple && values.length > 1) {
-      return { error: "multiple values require a multiple select" };
-    }
+    if (isActionTargetDisabled(select)) return { error: "element is disabled" };
     const options = Array.from(select.options);
     const selected = [];
     const selectedOptions = [];
-    for (const value of values) {
-      const option = options.find((candidate) => candidate.value === value);
-      if (!option) return { error: 'option value "' + value + '" was not found' };
-      if (option.disabled) return { error: 'option value "' + value + '" is disabled' };
+    let remaining = choices.slice();
+    const matches = (choice, candidate, index) =>
+      typeof choice === "string"
+        ? candidate.value === choice || candidate.label === choice
+        : (choice.value === undefined || candidate.value === choice.value) &&
+          (choice.label === undefined || candidate.label === choice.label) &&
+          (choice.index === undefined || index === choice.index);
+    for (let index = 0; index < options.length; index += 1) {
+      const option = options[index];
+      const matchingChoice = remaining.find((choice) =>
+        matches(choice, option, index)
+      );
+      if (matchingChoice === undefined) continue;
       selectedOptions.push(option);
+      if (!select.multiple) {
+        remaining = [];
+        break;
+      }
+      remaining = remaining.filter(
+        (choice) => !matches(choice, option, index),
+      );
     }
-    for (const option of options) option.selected = selectedOptions.includes(option);
+    if (remaining.length > 0) {
+      const available = options
+        .map((candidate, index) =>
+          index + ': value=' + JSON.stringify(candidate.value) +
+          ', label=' + JSON.stringify(candidate.label),
+        )
+        .join('; ');
+      return {
+        error:
+          'option ' + JSON.stringify(remaining[0]) +
+          ' was not found; available options: ' + (available || '(none)'),
+      };
+    }
+    for (const option of options) option.selected = false;
+    for (const option of selectedOptions) option.selected = true;
     for (const option of select.selectedOptions) selected.push(option.value);
     select.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
     select.dispatchEvent(new Event("change", { bubbles: true }));
@@ -106,7 +142,7 @@ export async function selectOptionInPage(
       {
         functionDeclaration: source,
         objectId: resolved.objectId,
-        arguments: [{ value: values }],
+        arguments: [{ value: choices }],
         returnByValue: true,
         awaitPromise: false,
       },
@@ -119,7 +155,8 @@ export async function selectOptionInPage(
         "element is not visible",
         "element is disabled",
       ]);
-      throw transient.has(result.error)
+      throw transient.has(result.error) ||
+        result.error.includes(" was not found;")
         ? new ElementResolutionError(
             `page.selectOption failed: ${result.error}`,
             "transient",
@@ -199,7 +236,10 @@ export async function clickInPage(
     refMap,
     selector,
     iframeSessions,
-    { strict: true, actionability: "pointer" },
+    {
+      strict: true,
+      actionability: options.force ? "enabled" : "pointer-enabled",
+    },
   );
   try {
     let point = await resolveElementPoint(
@@ -210,7 +250,6 @@ export async function clickInPage(
       target.frameId,
       "page.click",
       options.force,
-      true,
     );
     const buttons = pressedButtons(button);
     await dispatchMouseEvent(services, target.sessionId, {
@@ -232,6 +271,12 @@ export async function clickInPage(
         point.local,
       );
       point = { ...pagePoint, local: point.local };
+      await assertElementEnabled(
+        services,
+        target.sessionId,
+        target.objectId,
+        "page.click",
+      );
       await dispatchMouseEvent(services, target.sessionId, {
         type: "mouseMoved",
         x: point.x,
@@ -245,7 +290,16 @@ export async function clickInPage(
       // Moving the pointer or completing an earlier click can change layout.
       // Recheck before every press so hover-created overlays fail closed.
       // A same-process iframe must keep its native move/press sequence
-      // contiguous; the initial check already covered its local hit target.
+      // contiguous; its state was checked immediately before that gesture's
+      // final move.
+      if (!target.frameId || count > 1) {
+        await assertElementEnabled(
+          services,
+          target.sessionId,
+          target.objectId,
+          "page.click",
+        );
+      }
       if (!options.force && !target.frameId) {
         await assertElementReceivesPointerEvents(
           services,
@@ -310,7 +364,7 @@ export async function fillInPage(
     refMap,
     selector,
     iframeSessions,
-    { strict: true, actionability: "visible" },
+    { strict: true, actionability: "enabled" },
   );
   let actionObjectId: string | undefined;
   try {
@@ -320,6 +374,7 @@ export async function fillInPage(
       resolved.objectId,
     );
     const preparationSource = `function fillPreparation(value, clearFirst) {
+      ${ACTION_TARGET_STATE_HELPERS}
       if (!this.isConnected) return { error: "element is not connected" };
       const visibleCursorPoint = () => {
         const rect = this.getBoundingClientRect();
@@ -343,7 +398,7 @@ export async function fillInPage(
         !view || rect.width <= 0 || rect.height <= 0 ||
         style?.visibility === "hidden" || style?.display === "none"
       ) return { error: "element is not visible" };
-      if (this.disabled) return { error: "element is disabled" };
+      if (isActionTargetDisabled(this)) return { error: "element is disabled" };
       if (this.readOnly) return { error: "element is read only" };
 
       if (tag === "input") {
@@ -359,6 +414,7 @@ export async function fillInPage(
         if (directTypes.has(type)) {
           const nextValue = value.trim();
           this.focus();
+          if (isActionTargetDisabled(this)) return { error: "element is disabled" };
           this.value = nextValue;
           if (this.value !== nextValue) return { error: "malformed value" };
           this.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
@@ -370,6 +426,7 @@ export async function fillInPage(
       }
 
       this.focus();
+      if (isActionTargetDisabled(this)) return { error: "element is disabled" };
       const cursorPoint = visibleCursorPoint();
       const kind = this.isContentEditable ? "contenteditable" : tag;
       const details = {
@@ -423,6 +480,12 @@ export async function fillInPage(
       throw new Error("page.fill received an invalid preparation result");
     }
 
+    await assertElementEnabled(
+      services,
+      resolved.sessionId,
+      actionObjectId,
+      "page.fill",
+    );
     await dispatchFillInput(services, resolved.sessionId, value, clearFirst);
     let outcome = await verifyFillOutcome(
       services,
@@ -457,6 +520,12 @@ export async function fillInPage(
       if (result?.status !== "needsinput") {
         throw new Error("page.fill received an invalid preparation result");
       }
+      await assertElementEnabled(
+        services,
+        resolved.sessionId,
+        actionObjectId,
+        "page.fill",
+      );
       await dispatchFillInput(services, resolved.sessionId, value, clearFirst);
       outcome = await verifyFillOutcome(
         services,
@@ -544,7 +613,7 @@ export async function focusInPage(
     refMap,
     selector,
     iframeSessions,
-    { strict: true, actionability: "visible" },
+    { strict: true, actionability: "enabled" },
   );
   const source = `function focusElementForAction() {
     if (!this.isConnected) return { error: "element is not connected" };
@@ -800,7 +869,6 @@ async function clickResolvedElement(
     frameId,
     "page.fill",
     false,
-    true,
   );
   await assertElementReceivesPointerEvents(
     services,
@@ -822,6 +890,17 @@ async function clickResolvedElement(
     buttons: 0,
     modifiers: 0,
   });
+  await assertElementEnabled(services, sessionId, objectId, "page.fill");
+  if (frameId) {
+    await dispatchMouseEvent(services, sessionId, {
+      type: "mouseMoved",
+      x: point.x,
+      y: point.y,
+      button: "none",
+      buttons: 0,
+      modifiers: 0,
+    });
+  }
   await dispatchMouseEvent(services, sessionId, {
     type: "mousePressed",
     x: point.x,
@@ -898,7 +977,10 @@ export async function hoverInPage(
     refMap,
     selector,
     iframeSessions,
-    { strict: true, actionability: "pointer" },
+    {
+      strict: true,
+      actionability: options.force ? "visible" : "pointer",
+    },
   );
   try {
     const point = await resolveElementPoint(
@@ -942,7 +1024,10 @@ export async function dragAndDropInPage(
     refMap,
     sourceSelector,
     iframeSessions,
-    { strict: true, actionability: "pointer" },
+    {
+      strict: true,
+      actionability: options.force ? "visible" : "pointer",
+    },
   );
   let target;
   try {
@@ -952,7 +1037,10 @@ export async function dragAndDropInPage(
       refMap,
       targetSelector,
       iframeSessions,
-      { strict: true, actionability: "pointer" },
+      {
+        strict: true,
+        actionability: options.force ? "visible" : "pointer",
+      },
     );
     const sourcePoint = await resolveElementPoint(
       services,
@@ -1146,7 +1234,6 @@ async function resolveElementPoint(
   frameId?: string,
   actionName = "page.click",
   force = false,
-  checkEnabled = false,
 ): Promise<{ x: number; y: number; local: { x: number; y: number } }> {
   if (
     position !== undefined &&
@@ -1182,11 +1269,6 @@ async function resolveElementPoint(
       point.x >= window.innerWidth || point.y >= window.innerHeight
     ) {
       return { error: "element is not visible in the viewport" };
-    }
-    if (${checkEnabled ? "true" : "false"}) {
-      const disabled = this.matches?.(":disabled") ||
-        this.closest?.('[aria-disabled="true"]');
-      if (disabled) return { error: "element is disabled" };
     }
     const firstRect = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
     await new Promise((resolve) => {
@@ -1310,6 +1392,38 @@ async function assertElementReceivesPointerEvents(
   if (typeof result?.error === "string") {
     throw new ElementResolutionError(
       `page.click failed: ${result.error}`,
+      "transient",
+    );
+  }
+}
+
+async function assertElementEnabled(
+  services: PageActionServices,
+  sessionId: string,
+  objectId: string,
+  actionName: string,
+): Promise<void> {
+  const expression = `function() {
+    ${ACTION_TARGET_STATE_HELPERS}
+    if (!this.isConnected) return { error: "element is not connected" };
+    return isActionTargetDisabled(this)
+      ? { error: "element is disabled" }
+      : { ok: true };
+  }`;
+  const response = await services.cdp(
+    "Runtime.callFunctionOn",
+    {
+      functionDeclaration: expression,
+      objectId,
+      returnByValue: true,
+      awaitPromise: false,
+    },
+    sessionId,
+  );
+  const result = runtimeValue(response, expression);
+  if (typeof result?.error === "string") {
+    throw new ElementResolutionError(
+      `${actionName} failed: ${result.error}`,
       "transient",
     );
   }

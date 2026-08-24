@@ -173,6 +173,14 @@ export async function switchTaskSpace(nameOrId) {
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
 export async function newTaskSpace(name, profileId?: string) {
+  return (await createTaskSpaceResolution(name, profileId)).descriptor;
+}
+
+async function createTaskSpaceResolution(
+  name,
+  profileId?: string,
+  options: { select?: boolean } = {},
+) {
   const ego = globalThis.ego;
   if (!ego || typeof ego.createTaskSpace !== "function") {
     throw new Error("newTaskSpace requires ego.createTaskSpace");
@@ -192,11 +200,18 @@ export async function newTaskSpace(name, profileId?: string) {
   taskSpaceNumericId(created, "newTaskSpace");
   // The native create response currently omits ownership on some Ego Lite
   // builds. Creation through this Agent API is itself authoritative.
-  return selectTaskSpace(
-    ego,
-    { ...created, ownership: created.ownership || "agent" },
-    "newTaskSpace",
-  );
+  const createdByAgent = {
+    ...created,
+    ownership: created.ownership || "agent",
+  };
+  const descriptor =
+    options.select === false
+      ? createdByAgent
+      : await selectTaskSpace(ego, createdByAgent, "newTaskSpace");
+  return {
+    descriptor,
+    created: true,
+  };
 }
 
 /**
@@ -207,23 +222,49 @@ export async function newTaskSpace(name, profileId?: string) {
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
 export async function useOrCreateTaskSpace(nameOrId) {
+  return (await resolveTaskSpace(nameOrId)).descriptor;
+}
+
+async function resolveTaskSpace(nameOrId, options: { select?: boolean } = {}) {
   const spaces = await listTaskSpaces();
   const existing = findMatchingTaskSpace(spaces, nameOrId);
   if (!existing) {
     if (typeof nameOrId === "number") {
       throw new Error(`task space not found: ${nameOrId}`);
     }
-    return newTaskSpace(nameOrId);
+    return createTaskSpaceResolution(nameOrId, undefined, {
+      select: options.select,
+    });
   }
   if (isAgentOwned(existing.ownership)) {
-    return selectTaskSpace(globalThis.ego, existing, "useOrCreateTaskSpace");
+    return {
+      descriptor:
+        options.select === false
+          ? existing
+          : await selectTaskSpace(
+              globalThis.ego,
+              existing,
+              "useOrCreateTaskSpace",
+            ),
+      created: false,
+    };
   }
   if (existing.ownership === "user") {
     // Don't claim user-owned spaces here. Select it as-is; the user stays in
     // control, so EGO_TASK_SPACE_USER_IN_CONTROL surfaces (as ego-browser's owned
     // guidance, not the raw native text). Call claimTaskSpace(nameOrId) to take
     // ownership.
-    return selectTaskSpace(globalThis.ego, existing, "useOrCreateTaskSpace");
+    return {
+      descriptor:
+        options.select === false
+          ? existing
+          : await selectTaskSpace(
+              globalThis.ego,
+              existing,
+              "useOrCreateTaskSpace",
+            ),
+      created: false,
+    };
   }
   throw new Error(
     `useOrCreateTaskSpace cannot use task space ${JSON.stringify(nameOrId)} with ownership ${JSON.stringify(existing.ownership)}`,
@@ -244,10 +285,9 @@ export async function taskSpace(
   validatePublicApiOptions("taskSpace", options);
   const { profileId } = options;
   if (profileId === undefined) {
-    const descriptor = await useOrCreateTaskSpace(nameOrId);
-    const task = createTaskSpaceHandle(descriptor);
-    await initializeTaskSpaceHandle(task);
-    return task;
+    return initializeResolvedTaskSpace(
+      await resolveTaskSpace(nameOrId, { select: false }),
+    );
   }
   if (typeof nameOrId !== "string") {
     throw new TypeError(
@@ -260,10 +300,27 @@ export async function taskSpace(
       `taskSpace profileId only applies when creating a new task space; ${JSON.stringify(nameOrId)} already exists`,
     );
   }
-  const descriptor = await newTaskSpace(nameOrId, profileId);
-  const task = createTaskSpaceHandle(descriptor);
-  await initializeTaskSpaceHandle(task);
-  return task;
+  return initializeResolvedTaskSpace(
+    await createTaskSpaceResolution(nameOrId, profileId, { select: false }),
+  );
+}
+
+async function initializeResolvedTaskSpace(resolution) {
+  const task = createTaskSpaceHandle(resolution.descriptor);
+  if (!resolution.created) {
+    await initializeTaskSpaceHandle(task);
+    return task;
+  }
+
+  try {
+    await initializeTaskSpaceHandle(task, { created: true });
+    return task;
+  } catch (error) {
+    // A fresh space must not survive without its canonical p1 ledger entry.
+    // Preserve the initialization error if native rollback is unavailable.
+    await task.close().catch(() => {});
+    throw error;
+  }
 }
 
 /**

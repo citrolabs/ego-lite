@@ -21,11 +21,14 @@ test("the public API schema contains the v2 entry points and object methods", ()
     "TaskSpace.tabs",
     "TaskSpace.newPage",
     "Page.snapshot",
+    "Page.reload",
     "Page.targetId",
     "Page.waitForEvent",
     "Page.waitForURL",
     "Page.waitForTimeout",
     "Page.waitForFunction",
+    "Page.acceptDialog",
+    "Page.dismissDialog",
     "Page.focus",
     "Page.press",
     "Page.selectOption",
@@ -91,10 +94,15 @@ test("the generated reference contains signatures and option descriptions", () =
   assert.match(markdown, /`await profiles\(\)`/);
   assert.match(markdown, /`await listTaskSpaces\(\)`/);
   assert.match(markdown, /`await taskSpace\(nameOrId, \{ profileId\? \}\)`/);
+  assert.match(markdown, /a new space starts with managed Page p1/);
   assert.match(markdown, /`await task\.newPage\(\)`/);
   assert.match(
     markdown,
     /`await page\.goto\(url, \{ referer\?, timeout\?, waitUntil\? \}\)`/,
+  );
+  assert.match(
+    markdown,
+    /`await page\.reload\(\{ timeout\?, waitUntil\? \}\)`/,
   );
   assert.match(
     markdown,
@@ -112,11 +120,19 @@ test("the generated reference contains signatures and option descriptions", () =
     markdown,
     /const popupPromise = page\.waitForEvent\("popup"\); await page\.click\(selector\)/,
   );
+  assert.match(markdown, /page\.acceptDialog\(promptText\?\)/);
+  assert.match(markdown, /page\.dismissDialog\(\)/);
+  assert.doesNotMatch(markdown, /Page\.handleJavaScriptDialog/);
+  assert.match(markdown, /no state defaults to load/);
+  assert.match(markdown, /value-or-label string/);
+  assert.match(markdown, /\{ value\?, label\?, index\? \}/);
+  assert.match(markdown, /terminal `:has-text\("\.\.\."\)`/);
+  assert.match(markdown, /`loc=role:\.\.\.\[name\*="\.\.\."\]`/);
   assert.doesNotMatch(markdown, /task\.openPage/);
   assert.match(markdown, /Create and durably label a blank Page/);
   assert.match(
     markdown,
-    /Maximum actionability wait in milliseconds; defaults to 3000/,
+    /Maximum wait for the element to become usable in milliseconds; defaults to 3000/,
   );
   assert.match(markdown, /missing parent directories are created/);
 });

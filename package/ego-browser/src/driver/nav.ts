@@ -160,6 +160,9 @@ export async function newTab(url = "about:blank") {
   if (!result.targetId) {
     throw new Error("newTab returned no targetId");
   }
+  // Native createTab activates the new tab. Keep the harness route in sync so
+  // the next target-less helper cannot remain attached to the previous Page.
+  setPreferredTarget(result.targetId);
   return result.targetId;
 }
 

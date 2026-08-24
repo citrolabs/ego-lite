@@ -28,6 +28,40 @@ export function pagePopupWaiterCase() {
       );
       await firstPopup.close();
 
+      await source.evaluate((urls) => {
+        for (const [id, url] of Object.entries(urls)) {
+          const link = document.createElement("a");
+          link.id = id;
+          link.href = url;
+          link.target = "_blank";
+          link.textContent = id;
+          document.body.append(link);
+        }
+      }, {
+        "old-popup-link": baseUrl + "/secondary?popup-waiter=old",
+        "next-popup-link": baseUrl + "/secondary?popup-waiter=next",
+      });
+      const oldReceipt = await source.click("#old-popup-link");
+      const nextPopupPromise = source.waitForEvent("popup", { timeout: 3_000 });
+      const nextReceipt = await source.click("#next-popup-link");
+      const nextPopup = await nextPopupPromise;
+      assert(
+        nextPopup.label !== oldReceipt.popups[0].label,
+        "a new popup waiter ignores an unobserved popup from an earlier action"
+      );
+      assertEqual(
+        nextPopup.label,
+        nextReceipt.popups[0].label,
+        "the popup waiter resolves the popup created after it was armed"
+      );
+      assertIncludes(
+        await nextPopup.url(),
+        "popup-waiter=next",
+        "the future popup Page has the expected URL"
+      );
+      await task.page(oldReceipt.popups[0].label).close();
+      await nextPopup.close();
+
       await source.evaluate((popupUrl) => {
         const link = document.createElement("a");
         link.id = "popup-waiter-link";

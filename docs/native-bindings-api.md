@@ -315,6 +315,9 @@ Callers should use `error_code` to identify the control boundary, then use the
 reason key to choose guidance. Unknown reason keys must fall back to generic
 user-control guidance.
 
+Page-authored JavaScript dialogs must not use this user-control path; see
+[Native JavaScript dialog requirement](native-javascript-dialog-requirement.md).
+
 ## Snapshot
 
 ### `await ego.snapshot(options?)`

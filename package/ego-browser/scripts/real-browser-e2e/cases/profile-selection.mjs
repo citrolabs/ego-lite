@@ -25,11 +25,25 @@ export function profileSelectionCase() {
       profileId: selectedProfile.id,
     });
     try {
-      const page = await newPageAt(explicitTask, baseUrl + "/?profile=explicit");
+      const initialTabs = await explicitTask.tabs();
+      assertEqual(initialTabs.length, 1, "a new TaskSpace starts with one tab");
+      assertEqual(initialTabs[0].label, "p1", "the initial tab is managed as p1");
+      assertEqual(initialTabs[0].openedBy, "agent", "the initial tab is Agent-owned");
+      const initialTargetId = initialTabs[0].targetId;
+
+      const page = explicitTask.page("p1");
+      await page.goto(baseUrl + "/?profile=explicit");
       assertEqual(
         await page.title(),
         "ego-lite helper e2e",
         "the selected Profile TaskSpace is operable"
+      );
+      const navigatedTabs = await explicitTask.tabs();
+      assertEqual(navigatedTabs.length, 1, "using p1 does not create another tab");
+      assertEqual(
+        navigatedTabs[0].targetId,
+        initialTargetId,
+        "p1 keeps the native initial target"
       );
 
       await assertRejects(

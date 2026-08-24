@@ -298,7 +298,16 @@ function resolveSmartModifier(
 
 function keyDefinitionForString(input: string, shift: boolean): KeyDefinition {
   const definition = keyboardLayout.get(input);
-  if (!definition) throw new Error(`Unknown key: ${JSON.stringify(input)}`);
+  if (!definition) {
+    const arrow = new Map([
+      ["Left", "ArrowLeft"],
+      ["Right", "ArrowRight"],
+      ["Up", "ArrowUp"],
+      ["Down", "ArrowDown"],
+    ]).get(input);
+    const hint = arrow ? `. Use ${JSON.stringify(arrow)}` : "";
+    throw new Error(`Unknown key: ${JSON.stringify(input)}${hint}`);
+  }
   return shift && definition.shifted ? definition.shifted : definition;
 }
 

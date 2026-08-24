@@ -95,6 +95,25 @@ export class PageLedgerStore {
     return cloneLedger(ledger);
   }
 
+  /** Replace any stale state for a newly created space with its Agent-owned p1. */
+  async initializeCreatedSpace(
+    spaceId: number,
+    targetId: string,
+  ): Promise<ManagedPage> {
+    assertSpaceId(spaceId);
+    assertTargetId(targetId);
+    const browserInstanceId = await this.#currentBrowserInstanceId();
+    await this.#cleanupExpiredLedgers(browserInstanceId);
+    const ledger = emptyLedger(spaceId, browserInstanceId);
+    const label = nextAutomaticLabel(ledger, new Set());
+    const entry: PageLedgerEntry = { targetId, openedBy: "agent" };
+    ledger.initialized = true;
+    ledger.usedLabels.push(label);
+    ledger.pages[label] = entry;
+    await this.#writeAtomic(spaceId, ledger);
+    return { label, ...entry };
+  }
+
   /** Remove all Page-model state after its task space is finished or closed. */
   async discard(spaceId: number): Promise<void> {
     assertSpaceId(spaceId);

@@ -138,6 +138,25 @@ test("newTab throws when the binding returns no targetId", async () => {
   );
 });
 
+test("newTab makes the created target the preferred Page", async () => {
+  await withEgo(
+    {
+      async createTab() {
+        return { targetId: "target-new" };
+      },
+    },
+    async () => {
+      const restore = setOverrides({ preferredTargetId: "target-old" });
+      try {
+        assert.equal(await newTab("https://example.com/new"), "target-new");
+        assert.equal(state.preferredTargetId, "target-new");
+      } finally {
+        restore();
+      }
+    },
+  );
+});
+
 test("closeTab closes an explicit target and returns its id", async () => {
   const calls = [];
   const restore = setOverrides({
@@ -204,15 +223,28 @@ test("closeTab closes the current tab and invalidates matching session state", a
   ]);
 });
 
-test("browser runtime enables Page events and tracks pending native dialogs", async () => {
+test("browser runtime continuously enables Page and Network events", async () => {
   await withCdpRuntime(async ({ runtime, sent }) => {
     await browserCdp("Runtime.evaluate", { expression: "document.title" });
 
     assert.deepEqual(
       sent.map((request) => request.method),
-      ["Target.attachToTarget", "Page.enable", "Runtime.evaluate"],
+      [
+        "Target.attachToTarget",
+        "Page.enable",
+        "Network.enable",
+        "Target.setAutoAttach",
+        "Runtime.evaluate",
+      ],
     );
     assert.equal(sent[1].sessionId, "session-1");
+    assert.equal(sent[2].sessionId, "session-1");
+    assert.deepEqual(sent[3].params, {
+      autoAttach: true,
+      waitForDebuggerOnStart: true,
+      flatten: true,
+      filter: [{ type: "iframe", exclude: false }, { exclude: true }],
+    });
 
     runtime.emit("Page.javascriptDialogOpening", {
       type: "alert",

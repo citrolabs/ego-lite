@@ -11,8 +11,16 @@ type PageWaitServices = {
     sessionId?: string,
     timeoutMs?: number,
   ): Promise<any>;
-  drainEvents(sessionId: string): any[];
-  isNetworkDomainEnabled(sessionId: string): boolean;
+  ensureNetworkTracking(
+    sessionIds: string[],
+    timeoutMs?: number,
+  ): Promise<void>;
+  pageNetworkSessions(sessionId: string, timeoutMs?: number): Promise<string[]>;
+  networkActivity(sessionIds: string[]): {
+    tracking: boolean;
+    inflight: number;
+    lastActivityAt: number;
+  };
   now(): number;
   sleep(ms: number): Promise<void>;
 };
@@ -46,6 +54,34 @@ export type PageWaitForURLOptions = {
 export type PageWaitForURLHooks = {
   interrupt?: (lastUrl: string) => Error | undefined;
 };
+
+export class PageNavigationTimeoutError extends Error {
+  readonly code = "EGO_NAVIGATION_TIMEOUT";
+  readonly committed: boolean;
+  readonly url?: string;
+  readonly readyState?: string;
+  readonly waitUntil: PageGotoWaitUntil;
+  readonly timeoutMs: number;
+
+  constructor(
+    message: string,
+    details: {
+      committed: boolean;
+      url?: string;
+      readyState?: string;
+      waitUntil: PageGotoWaitUntil;
+      timeoutMs: number;
+    },
+  ) {
+    super(message);
+    this.name = "PageNavigationTimeoutError";
+    this.committed = details.committed;
+    this.url = details.url;
+    this.readyState = details.readyState;
+    this.waitUntil = details.waitUntil;
+    this.timeoutMs = details.timeoutMs;
+  }
+}
 
 const VISIBILITY_FUNCTION =
   "function(){if(typeof this.checkVisibility==='function')return this.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});const s=getComputedStyle(this);const r=this.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0'&&r.width>0&&r.height>0;}";
@@ -196,20 +232,21 @@ export async function navigateInPage(
 ): Promise<void> {
   const { timeoutMs, waitUntil, referer } = options;
   const deadline = services.now() + timeoutMs;
-  const ownsNetworkDomain =
-    waitUntil === "networkidle" && !services.isNetworkDomainEnabled(sessionId);
-  let enabledNetworkDomain = false;
+  let committed = false;
+  let navigation: {
+    frameId?: string;
+    loaderId?: string;
+    errorText?: string;
+    isDownload?: boolean;
+  } = {};
   try {
     // Network tracking must start before Page.navigate or the initial document
     // requests can be missed by a network-idle wait.
-    if (ownsNetworkDomain) {
-      await services.cdp(
-        "Network.enable",
-        {},
-        sessionId,
+    if (waitUntil === "networkidle") {
+      await services.ensureNetworkTracking(
+        [sessionId],
         navigationTimeRemaining(services, deadline, timeoutMs, waitUntil),
       );
-      enabledNetworkDomain = true;
     }
     const response = await services.cdp(
       "Page.navigate",
@@ -220,7 +257,7 @@ export async function navigateInPage(
       sessionId,
       navigationTimeRemaining(services, deadline, timeoutMs, waitUntil),
     );
-    const navigation = response?.result || response || {};
+    navigation = response?.result || response || {};
     if (navigation.errorText) {
       throw new Error(`page.goto failed: ${navigation.errorText}`);
     }
@@ -236,6 +273,7 @@ export async function navigateInPage(
       timeoutMs,
       waitUntil,
     );
+    committed = true;
     if (waitUntil === "commit") return;
 
     await waitForLoadStateInPage(services, sessionId, waitUntil, {
@@ -248,14 +286,143 @@ export async function navigateInPage(
     });
   } catch (error) {
     if (services.now() >= deadline || isLoadStateTimeout(error)) {
-      throw navigationTimeout(timeoutMs, waitUntil);
+      if (!committed && navigation.loaderId) {
+        committed = await navigationMatchesCurrentFrame(
+          services,
+          sessionId,
+          navigation,
+          250,
+        );
+      }
+      const state = committed
+        ? await currentDocumentState(services, sessionId)
+        : {};
+      throw navigationTimeout(timeoutMs, waitUntil, {
+        committed,
+        ...state,
+      });
     }
     throw error;
-  } finally {
-    if (enabledNetworkDomain) {
-      await services.cdp("Network.disable", {}, sessionId).catch(() => {});
-    }
   }
+}
+
+/** Reload one Page and wait for the selected state of the new document. */
+export async function reloadInPage(
+  services: PageWaitServices,
+  sessionId: string,
+  options: Omit<PageNavigationOptions, "referer">,
+): Promise<void> {
+  const { timeoutMs, waitUntil } = options;
+  const deadline = services.now() + timeoutMs;
+  try {
+    const previousFrame = await mainFrame(
+      services,
+      sessionId,
+      reloadTimeRemaining(services, deadline, timeoutMs, waitUntil),
+    );
+    if (waitUntil === "networkidle") {
+      await services.ensureNetworkTracking(
+        [sessionId],
+        reloadTimeRemaining(services, deadline, timeoutMs, waitUntil),
+      );
+    }
+    await services.cdp(
+      "Page.reload",
+      previousFrame.loaderId === undefined
+        ? {}
+        : { loaderId: previousFrame.loaderId },
+      sessionId,
+      reloadTimeRemaining(services, deadline, timeoutMs, waitUntil),
+    );
+    await waitForReloadCommit(
+      services,
+      sessionId,
+      previousFrame,
+      deadline,
+      timeoutMs,
+      waitUntil,
+    );
+    if (waitUntil === "commit") return;
+    await waitForLoadStateInPage(services, sessionId, waitUntil, {
+      timeout: reloadTimeRemaining(services, deadline, timeoutMs, waitUntil),
+    });
+  } catch (error) {
+    if (services.now() >= deadline || isLoadStateTimeout(error)) {
+      throw reloadTimeout(timeoutMs, waitUntil);
+    }
+    throw error;
+  }
+}
+
+type MainFrame = { id?: string; loaderId?: string };
+
+async function mainFrame(
+  services: PageWaitServices,
+  sessionId: string,
+  timeoutMs: number,
+): Promise<MainFrame> {
+  const response = await services.cdp(
+    "Page.getFrameTree",
+    {},
+    sessionId,
+    timeoutMs,
+  );
+  return response?.result?.frameTree?.frame || response?.frameTree?.frame || {};
+}
+
+async function waitForReloadCommit(
+  services: PageWaitServices,
+  sessionId: string,
+  previousFrame: MainFrame,
+  deadline: number,
+  timeoutMs: number,
+  waitUntil: PageGotoWaitUntil,
+): Promise<void> {
+  while (services.now() <= deadline) {
+    const remaining = reloadTimeRemaining(
+      services,
+      deadline,
+      timeoutMs,
+      waitUntil,
+    );
+    try {
+      const frame = await mainFrame(
+        services,
+        sessionId,
+        Math.min(1_000, remaining),
+      );
+      if (
+        frame.loaderId &&
+        (frame.loaderId !== previousFrame.loaderId ||
+          (previousFrame.id && frame.id !== previousFrame.id))
+      ) {
+        return;
+      }
+    } catch (error) {
+      if (!isCdpTimeout(error, "Page.getFrameTree")) throw error;
+    }
+    const waitMs = deadline - services.now();
+    if (waitMs <= 0) break;
+    await services.sleep(Math.min(50, waitMs));
+  }
+  throw reloadTimeout(timeoutMs, waitUntil);
+}
+
+function reloadTimeRemaining(
+  services: PageWaitServices,
+  deadline: number,
+  timeoutMs: number,
+  waitUntil: PageGotoWaitUntil,
+): number {
+  const remaining = deadline - services.now();
+  if (remaining <= 0) throw reloadTimeout(timeoutMs, waitUntil);
+  return remaining;
+}
+
+function reloadTimeout(timeoutMs: number, waitUntil: PageGotoWaitUntil): Error {
+  return new Error(
+    `page.reload timed out after ${timeoutMs}ms waiting for ${waitUntil}`,
+  );
 }
 
 async function waitForNavigationCommit(
@@ -303,6 +470,32 @@ async function waitForNavigationCommit(
   throw navigationTimeout(timeoutMs, waitUntil);
 }
 
+async function navigationMatchesCurrentFrame(
+  services: PageWaitServices,
+  sessionId: string,
+  navigation: { frameId?: string; loaderId?: string },
+  timeoutMs: number,
+): Promise<boolean> {
+  try {
+    const response = await services.cdp(
+      "Page.getFrameTree",
+      {},
+      sessionId,
+      timeoutMs,
+    );
+    const frame =
+      response?.result?.frameTree?.frame || response?.frameTree?.frame;
+    return (
+      Boolean(navigation.loaderId) &&
+      frame?.loaderId === navigation.loaderId &&
+      (!navigation.frameId || frame?.id === navigation.frameId)
+    );
+  } catch {
+    // This is a best-effort timeout diagnostic, not a second navigation path.
+    return false;
+  }
+}
+
 function navigationTimeRemaining(
   services: PageWaitServices,
   deadline: number,
@@ -317,10 +510,63 @@ function navigationTimeRemaining(
 function navigationTimeout(
   timeoutMs: number,
   waitUntil: PageGotoWaitUntil,
-): Error {
-  return new Error(
-    `page.goto timed out after ${timeoutMs}ms waiting for ${waitUntil}`,
+  details: { committed?: boolean; url?: string; readyState?: string } = {},
+): PageNavigationTimeoutError {
+  const committed = details.committed === true;
+  const nextStep = navigationTimeoutNextStep(waitUntil);
+  const state = committed
+    ? `; navigation committed${details.url ? ` at ${JSON.stringify(details.url)}` : ""}${details.readyState ? ` with document.readyState=${JSON.stringify(details.readyState)}` : ""}. ${nextStep}`
+    : "";
+  return new PageNavigationTimeoutError(
+    `page.goto timed out after ${timeoutMs}ms waiting for ${waitUntil}${state}`,
+    {
+      committed,
+      url: details.url,
+      readyState: details.readyState,
+      waitUntil,
+      timeoutMs,
+    },
   );
+}
+
+function navigationTimeoutNextStep(waitUntil: PageGotoWaitUntil): string {
+  if (waitUntil === "commit") {
+    return "Continue on this Page; the requested document has committed.";
+  }
+  if (waitUntil === "networkidle") {
+    return 'Continue when the needed DOM state is observable, or call page.waitForLoadState("networkidle") if network quiescence is required.';
+  }
+  return `Continue on this Page; call page.waitForLoadState(${JSON.stringify(waitUntil)}) if that lifecycle state is still required.`;
+}
+
+async function currentDocumentState(
+  services: PageWaitServices,
+  sessionId: string,
+): Promise<{ url?: string; readyState?: string }> {
+  try {
+    const response = await services.cdp(
+      "Runtime.evaluate",
+      {
+        expression:
+          "({ __egoNavigationState: true, url: location.href, readyState: document.readyState })",
+        returnByValue: true,
+        timeout: 200,
+      },
+      sessionId,
+      250,
+    );
+    const value = response?.result?.value;
+    if (!value || typeof value !== "object") return {};
+    return {
+      ...(typeof value.url === "string" ? { url: value.url } : {}),
+      ...(typeof value.readyState === "string"
+        ? { readyState: value.readyState }
+        : {}),
+    };
+  } catch {
+    // Diagnostics must not replace the navigation timeout.
+    return {};
+  }
 }
 
 function isLoadStateTimeout(error: unknown): boolean {
@@ -376,7 +622,7 @@ async function waitForDocumentReadyState(
         })()`
       : "document.readyState";
   const deadline = services.now() + timeoutMs;
-  while (services.now() <= deadline) {
+  while (services.now() < deadline) {
     const remaining = Math.max(1, deadline - services.now());
     let response;
     try {
@@ -402,8 +648,9 @@ async function waitForDocumentReadyState(
     if (state === "load" && value === "complete") return;
     if (state === "domcontentloaded" && value?.domContentLoaded === true)
       return;
-    if (remaining <= 1) break;
-    await services.sleep(Math.min(100, remaining));
+    const waitMs = deadline - services.now();
+    if (waitMs <= 0) break;
+    await services.sleep(Math.min(100, waitMs));
   }
   throw new Error(
     `page.waitForLoadState(${state}) timed out after ${timeoutMs}ms`,
@@ -439,45 +686,53 @@ async function waitForNetworkIdle(
   timeoutMs: number,
   idleMs: number,
 ): Promise<void> {
-  const ownsNetworkDomain = !services.isNetworkDomainEnabled(sessionId);
   const deadline = services.now() + timeoutMs;
-  let lastActivityAt = services.now();
-  const inflight = new Set<string>();
-  await services.cdp("Network.enable", {}, sessionId);
-  try {
-    while (services.now() <= deadline) {
-      for (const event of services.drainEvents(sessionId)) {
-        const method = event?.method || "";
-        const requestId = event?.params?.requestId;
-        if (method === "Network.requestWillBeSent" && requestId) {
-          inflight.add(requestId);
-          lastActivityAt = services.now();
-        } else if (
-          (method === "Network.loadingFinished" ||
-            method === "Network.loadingFailed") &&
-          requestId
-        ) {
-          inflight.delete(requestId);
-          lastActivityAt = services.now();
-        } else if (method.startsWith("Network.")) {
-          lastActivityAt = services.now();
-        }
-      }
-      if (inflight.size === 0 && services.now() - lastActivityAt >= idleMs) {
+  let sessionIds: string[] = [];
+  while (services.now() <= deadline) {
+    try {
+      // OOPIFs can appear while the Page is loading. Refreshing before every
+      // observation ensures a new child starts its own continuous tracker before
+      // the top-level Page can be declared idle.
+      const discoveryBudget = Math.max(1, deadline - services.now());
+      sessionIds = await services.pageNetworkSessions(
+        sessionId,
+        discoveryBudget,
+      );
+      const trackingBudget = deadline - services.now();
+      if (trackingBudget <= 0) break;
+      await services.ensureNetworkTracking(sessionIds, trackingBudget);
+      const activity = services.networkActivity(sessionIds);
+      if (
+        activity.tracking &&
+        activity.inflight === 0 &&
+        services.now() - activity.lastActivityAt >= idleMs
+      ) {
         return;
       }
-      const remaining = deadline - services.now();
-      if (remaining <= 0) break;
-      await services.sleep(Math.min(50, remaining));
+    } catch (error) {
+      if (!isRetryableNetworkRefreshError(error)) throw error;
+      if (services.now() >= deadline) break;
     }
-    throw new Error(
-      `page.waitForLoadState(networkidle) timed out after ${timeoutMs}ms`,
-    );
-  } finally {
-    if (ownsNetworkDomain) {
-      await services.cdp("Network.disable", {}, sessionId).catch(() => {});
-    }
+    const waitMs = deadline - services.now();
+    if (waitMs <= 0) break;
+    await services.sleep(Math.min(50, waitMs));
   }
+  throw new Error(
+    `page.waitForLoadState(networkidle) timed out after ${timeoutMs}ms`,
+  );
+}
+
+function isRetryableNetworkRefreshError(error: unknown): boolean {
+  if (
+    Boolean(error) &&
+    typeof error === "object" &&
+    (error as { code?: unknown }).code === "EGO_CDP_REQUEST_TIMEOUT"
+  ) {
+    return true;
+  }
+  return /CDP request timed out:|detached Page session|Session (?:with given id )?not found|Target closed|No session/i.test(
+    error instanceof Error ? error.message : String(error),
+  );
 }
 
 function cdpAdapter(services: PageWaitServices) {

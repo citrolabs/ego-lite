@@ -19,7 +19,7 @@ The build emits a single ESM file `dist/out/index.js`. The ego-browser browser d
 ```bash
 ego-browser nodejs <<'EOF'
 const task = await taskSpace('demo')
-const page = await task.newPage()
+const page = task.page('p1')
 await page.goto('https://example.com')
 console.log(await page.snapshot())
 EOF
@@ -92,11 +92,19 @@ existing scripts.
 - The browser runtime owns tabs, task spaces, CDP transport, snapshots, and event delivery. This package keeps only agent-facing ergonomics.
 - Snapshot helpers use the browser runtime contract: `ego.snapshot({ scope, includeActionMarks, includeStableLocator })`.
 - Page selectors search the top document first. Input actions search frames
-  when the top document has no actionable match, then require one actionable
-  frame match.
-- Pointer actions require a real hit target. DOM-backed actions such as
-  `selectOption()` require a rendered, enabled control but may operate on an
-  opacity-zero native control used by a custom widget.
+  when the top document has no match usable for that action, then require one
+  usable frame match.
+- The selector parser supports the documented Ego forms plus a narrow
+  Playwright-compatible subset: `css=`, terminal `:has-text()`, `:text-is()`,
+  `>> nth=N` after CSS/text/href selectors (`N >= 0` or `-1`), and role
+  `name*=` matching.
+- Clicks require an enabled element and a real hit target. Hover and drag keep
+  the hit-target requirement but may address disabled elements. DOM-backed
+  actions such as `selectOption()` require a rendered, enabled control but may
+  operate on an opacity-zero native control used by a custom widget. Like
+  Playwright, `selectOption()` can programmatically choose a disabled option.
+- Network-idle waits use continuous per-Page and OOPIF request state; they do
+  not consume the CDP events returned by `page.events()` or include other Pages.
 - `fill()` verifies that editing took effect, not that application formatting
   preserved the requested string byte-for-byte. Business postconditions remain
   explicit Page reads or waits.

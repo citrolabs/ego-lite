@@ -5,10 +5,12 @@ import { ElementResolutionError } from "../element-resolver.js";
 import { type WaitForLoadOptions, waitForDocumentLoad } from "./load.js";
 import { drainEvents } from "./observe.js";
 import {
-  drainBrowserEvents,
+  ensureNetworkTracking,
   ensureSession,
+  isCdpRequestTimeoutError,
   isBrowserRuntime,
-  isNetworkDomainEnabled,
+  networkActivity,
+  pageNetworkSessions,
 } from "../browser-runtime.js";
 
 type WaitForElementOptions = {
@@ -90,12 +92,9 @@ export async function waitForElement(
 
 /**
  * Wait until network events are idle.
- * Enables the CDP Network domain for the duration of the wait so that network
- * events are actually delivered (previously nothing enabled the domain, so this
- * could report "idle" without ever observing traffic). If the caller had
- * already enabled the domain, it is left enabled on return. Best-effort: if
- * the runtime does not deliver Network events, an idle window of idleMs still
- * resolves true.
+ * In the browser runtime this reads the continuous, Page-scoped tracker without
+ * consuming public events. Compatibility adapters retain the legacy temporary
+ * Network-domain observation and best-effort fallback.
  * @param {{timeout?: number, idleMs?: number}} [options]
  * @returns {Promise<boolean>} True when idle before timeout.
  */
@@ -105,20 +104,92 @@ export async function waitForNetworkIdle(
   const timeout = options.timeout ?? 10.0;
   const idleMs = options.idleMs ?? 500;
   const deadline = state.now() + timeout * 1000;
+  if (isBrowserRuntime()) {
+    return waitForBrowserNetworkIdle(deadline, idleMs);
+  }
+
+  return waitForLegacyNetworkIdle(deadline, idleMs);
+}
+
+async function waitForBrowserNetworkIdle(
+  deadline: number,
+  idleMs: number,
+): Promise<boolean> {
+  const sessionId = await ensureSession(
+    undefined,
+    Math.max(1, deadline - state.now()),
+  );
+  let hasTracked = false;
+  while (state.now() < deadline) {
+    try {
+      const sessionIds = await pageNetworkSessions(
+        sessionId,
+        Math.max(1, deadline - state.now()),
+      );
+      await ensureNetworkTracking(
+        sessionIds,
+        Math.max(1, deadline - state.now()),
+      );
+      const activity = networkActivity(sessionIds);
+      hasTracked ||= activity.tracking;
+      if (
+        activity.tracking &&
+        activity.inflight === 0 &&
+        state.now() - activity.lastActivityAt >= idleMs
+      ) {
+        return true;
+      }
+    } catch (error) {
+      if (!hasTracked && isUnsupportedNetworkTrackingError(error)) {
+        return waitForPassiveIdle(deadline, idleMs);
+      }
+      if (!isRetryableNetworkRefreshError(error)) throw error;
+      // A frame can detach while its sessions are refreshed. Once real
+      // tracking has started, retry instead of converting uncertainty to idle.
+    }
+    const remaining = deadline - state.now();
+    if (remaining <= 0) break;
+    await state.sleep(Math.min(100, remaining));
+  }
+  return false;
+}
+
+function isUnsupportedNetworkTrackingError(error: unknown): boolean {
+  return /Network\.enable.*(?:not found|wasn't found|unsupported|unknown method)/i.test(
+    error instanceof Error ? error.message : String(error),
+  );
+}
+
+function isRetryableNetworkRefreshError(error: unknown): boolean {
+  if (isCdpRequestTimeoutError(error)) return true;
+  return /detached Page session|Session (?:with given id )?not found|Target closed|No session/i.test(
+    error instanceof Error ? error.message : String(error),
+  );
+}
+
+async function waitForPassiveIdle(
+  deadline: number,
+  idleMs: number,
+): Promise<boolean> {
+  const remaining = deadline - state.now();
+  if (remaining < idleMs) return false;
+  await state.sleep(idleMs);
+  return true;
+}
+
+async function waitForLegacyNetworkIdle(
+  deadline: number,
+  idleMs: number,
+): Promise<boolean> {
   let lastActivity = state.now();
   const inflight = new Set();
-  const sessionId = isBrowserRuntime() ? await ensureSession() : undefined;
-  const ownsNetworkDomain = sessionId
-    ? !isNetworkDomainEnabled(sessionId)
-    : !state.networkDomainEnabled;
-  await cdp("Network.enable", {}, sessionId).catch(() => {
+  const ownsNetworkDomain = !state.networkDomainEnabled;
+  await cdp("Network.enable").catch(() => {
     // Domain may be unsupported by the bridge; fall back to passive observation.
   });
   try {
     while (state.now() < deadline) {
-      const events = sessionId
-        ? drainBrowserEvents(sessionId)
-        : await drainEvents();
+      const events = await drainEvents();
       for (const event of events) {
         const method = event.method || "";
         const params = event.params || {};
@@ -143,7 +214,7 @@ export async function waitForNetworkIdle(
     return false;
   } finally {
     if (ownsNetworkDomain) {
-      await cdp("Network.disable", {}, sessionId).catch(() => {
+      await cdp("Network.disable").catch(() => {
         // Best-effort cleanup; keeps the event buffer from accumulating after the wait.
       });
     }
