@@ -2,50 +2,84 @@
 
 Read this file only when ego lite isn't installed yet, or when the user asks to install ego lite. For day-to-day browser work, go back to `SKILL.md`.
 
-The ego-browser skill depends on the ego lite browser: the `ego-browser` command is provided by the ego lite app. Once ego lite is installed and you've gone through onboarding once, the environment is ready and there are no further environment issues.
+The `ego-browser` skill depends on a browser. On **macOS** the `ego-browser` command comes from the ego lite app; on **Linux** it is polyfilled over Chrome/Chromium via CDP (`EGO_LINUX=1` or auto-detect). Once installed, the environment is ready.
 
 ego lite website: https://lite.ego.app/
 
-## Install steps (macOS only)
-
-The install script lives at `scripts/install.sh` in this skill and supports macOS only. It will:
-
-- Download the ego lite installer (a DMG) for your CPU architecture (arm64 / x64).
-- Install `ego lite.app` to `/Applications` (falling back to `~/Applications` when needed).
-- Strip the quarantine attribute to keep Gatekeeper from blocking the first launch.
-- After installing, launch the `ego lite` app.
-
-Run the script (use the script's actual path under this skill's directory):
+## Quick install
 
 ```bash
 sh skills/ego-browser/scripts/install.sh
 ```
 
-After installing, the script opens the ego lite app directly. If ego lite is already installed, the script skips the download and opens the app directly.
+The script auto-detects your OS.
 
-After the script opens the ego lite app, the user completes the first-run onboarding in the app:
+## Platform details
 
-- Choose to import data from Chrome or another browser as needed.
-- Onboarding registers the `ego-browser` command on the PATH (usually under `~/.local/bin`).
+### macOS
 
-Onboarding is a step the user completes in the GUI. After the script opens ego lite, wait for the user to confirm they've finished onboarding before continuing.
+The install script (Darwin branch):
+
+- Downloads the ego lite DMG for your arch (arm64/x64) from `cdn.ego.app`.
+- Installs `ego lite.app` to `/Applications` (or `~/Applications`).
+- Strips quarantine attrs, then `open`-launches the app.
+- On first launch, ego lite asks whether to migrate Chrome data. Say **Yes** to inherit logins/cookies/extensions.
+
+After the app launches, finish onboarding in the GUI, then verify:
+
+```bash
+command -v ego-browser
+ego-browser nodejs <<'EOF'
+console.log('ego-browser ready')
+EOF
+```
+
+### Linux (new)
+
+The CLI is built from source, so this requires a full clone of the `ego-lite` repo (not just the skill installed via `npx skills add`) — `package/ego-browser` must exist alongside `skills/`.
+
+The install script (Linux branch):
+
+- Detects your distro (`apt`/`dnf`/`pacman`/`zypper`).
+- Looks for `google-chrome`, `google-chrome-stable`, `chromium-browser`, or `chromium` on `PATH`.
+- If missing, offers to install `chromium` via your package manager (interactive prompt; set `EGO_BROWSER_ASSUME_YES=1` to auto-confirm in CI).
+- Builds `package/ego-browser` (`npm ci && npm run build`) if not already built.
+- Creates `~/.local/bin/ego-browser` as `exec node <repo>/package/ego-browser/dist/out/index.js "$@"`.
+- Verifies with `node dist/out/index.js --help`.
+
+Requirements on Linux:
+
+- **Chrome or Chromium** (`google-chrome` ≥120 or `chromium` with CDP).
+- **Node.js** ≥22.
+- **Wayland**: if `WAYLAND_DISPLAY` is set, Chrome auto-detects Ozone (`--ozone-platform-hint=auto`). No extra config; the launcher adds it. If you see blank screens, try `google-chrome --ozone-platform-hint=wayland`.
+
+After installing on Linux, verify:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+command -v ego-browser
+node package/ego-browser/scripts/doctor-linux.mjs          # diagnostics
+EGO_LINUX=1 ego-browser nodejs <<'EOF'
+console.log(await pageInfo())
+EOF
+```
+
+The Linux shim uses headless Chrome with an ephemeral `--remote-debugging-port`. Task Spaces map to `Target.createBrowserContext` (isolated cookie jars), not separate processes.
 
 ## After installing: confirm `ego-browser` is available
-
-Once the user has finished onboarding, confirm the command is ready:
 
 ```bash
 command -v ego-browser
 ```
 
-If it reports that the command isn't found, `~/.local/bin` is most likely not on the current PATH. Fix it temporarily and retry:
+If not found, `~/.local/bin` is likely not on `PATH`:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 command -v ego-browser
 ```
 
-Once the command exists, verify the runtime with a minimal heredoc:
+Then verify the runtime:
 
 ```bash
 ego-browser nodejs <<'EOF'
@@ -57,11 +91,37 @@ Printing `ego-browser ready` means the environment is ready.
 
 ## After that, return to the original task
 
-Once the environment is ready, return to the user's original task and continue with the task space flow in `SKILL.md` — start from `taskSpaces.useOrCreate(name)` and proceed as usual.
+Once the environment is ready, return to the user's original task and continue with `SKILL.md` — e.g.:
+
+```js
+const task = await useOrCreateTaskSpace('my task')
+await openOrReuseTab('https://example.com', { wait: true })
+console.log(await pageInfo())
+```
 
 ## Troubleshooting
 
-- **Not macOS**: the script supports macOS only (`uname -s` is `Darwin`). On other platforms, have the user download and install from the ego lite website at https://lite.ego.app/.
-- **Download failed**: the script retries 3 times automatically; if it still fails, it's usually a network issue — have the user check their network and retry.
-- **Gatekeeper still blocks it**: the script already tries to strip quarantine; if the first launch is still blocked, have the user allow ego lite manually under System Settings → Privacy & Security.
-- **Command still unavailable after onboarding**: confirm `~/.local/bin` is on the PATH (see above); or have the user reopen ego lite, finish onboarding, and retry.
+### macOS
+
+- **Download failed**: the script retries 3×; otherwise check your network.
+- **Gatekeeper still blocks it**: allow ego lite under **System Settings → Privacy & Security**.
+- **Command unavailable after onboarding**: ensure `~/.local/bin` is on `PATH`; reopen ego lite and re-run the script.
+
+### Linux
+
+- **Chrome/Chromium not found**: install manually:
+  - Debian/Ubuntu: `sudo apt-get update && sudo apt-get install -y chromium || sudo apt-get install -y chromium-browser`
+  - Fedora: `sudo dnf install -y chromium`
+  - Arch: `sudo pacman -Sy --noconfirm chromium`
+  - Or install Google Chrome from https://www.google.com/chrome/
+- **Sandbox / `--no-sandbox` errors**: the launcher already passes `--no-sandbox` and `--disable-dev-shm-usage` for CI/containers. If you still see sandbox failures inside Docker, run the container with `--shm-size=2g` or `--privileged`.
+- **Wayland blank/offset rendering**: ensure you are not forcing `--ozone-platform-hint=x11`; let the launcher auto-detect. `node package/ego-browser/scripts/doctor-linux.mjs` reports your display server.
+- **Port 9222 in use**: the Linux shim uses an ephemeral port (`--remote-debugging-port=0`), so it does not collide with an existing Chrome or Camofox on `:9377`.
+- **Command still unavailable**: confirm `~/.local/bin` is on `PATH`:
+  ```bash
+  echo ":$PATH:" | grep -q ":$HOME/.local/bin:" || echo "add ~/.local/bin to PATH"
+  ```
+
+### All platforms
+
+- **Command still unavailable after install**: confirm `~/.local/bin` is on `PATH` (see above); or reopen ego lite (macOS) and retry.

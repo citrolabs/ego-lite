@@ -19,6 +19,8 @@
 
 ego (lite) is a browser where you and your AI agents work in parallel. Your agents run multiple browser tasks in their own Spaces while your tabs stay yours, and tasks complete faster on fewer tokens.
 
+> **Linux support is here.** macOS remains primary; Linux is fully automated via Chrome/Chromium + CDP (`EGO_LINUX=1` or auto-detect). See `skills/ego-browser/references/install.md` → *Linux* section. Windows is on the [roadmap](https://lite.ego.app/roadmap).
+
 Existing tools like browser-use and agent-browser are browser automation frameworks: they need a separate browser to drive, logins never carry cleanly, and you and the agent end up fighting for the same tabs. ego lite is one browser designed from the start for the two of you to share. No extra setup, and the agent can always reach your real logins and tabs through `ego-browser`.
 
 ## Demo
@@ -27,7 +29,11 @@ https://github.com/user-attachments/assets/ffe7954b-58ee-411e-b35d-ec30c58a08bc
 
 ## Quick Start
 
-ego lite runs on macOS today. Windows and Linux are on the [roadmap](https://lite.ego.app/roadmap).
+| Platform | Status | Install |
+|---|:---:|---|
+| macOS (Apple Silicon / Intel) | ✅ Stable | DMG from below or `npx skills add citrolabs/ego-lite` |
+| Linux (Chrome/Chromium) | ✅ Stable | `sh skills/ego-browser/scripts/install.sh` (auto-detects apt/dnf/pacman; `EGO_LINUX=1`) |
+| Windows | 🗓️ Roadmap | — |
 
 ### 1. Install
 
@@ -49,6 +55,15 @@ npx skills add citrolabs/ego-lite
 ```
 
 The first time your agent runs a browser task, it walks you through installing the ego lite app.
+
+**Linux:** the CLI is built from source, so this needs a full clone of the repo (not just the skill added via `npx`): `git clone https://github.com/citrolabs/ego-lite && cd ego-lite`. Then run `sh skills/ego-browser/scripts/install.sh` — it auto-detects `apt`/`dnf`/`pacman`/`zypper`, installs or finds Chrome/Chromium, builds the CLI, and creates `~/.local/bin/ego-browser`. Then:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+EGO_LINUX=1 ego-browser nodejs <<'EOF'
+console.log(await pageInfo())
+EOF
+```
 
 **1.3 Let your agent set it up**
 
