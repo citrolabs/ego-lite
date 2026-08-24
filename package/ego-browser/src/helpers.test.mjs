@@ -18,9 +18,18 @@ import {
 function withEgo(ego, fn) {
   const previous = globalThis.ego;
   globalThis.ego = ego;
+  // Disable idle reclamation so task-space helper call sequences stay
+  // deterministic; reclamation has its own suite.
+  const prevReclaimDisable = process.env.EGO_RECLAIM_DISABLE;
+  process.env.EGO_RECLAIM_DISABLE = "1";
   return Promise.resolve()
     .then(fn)
     .finally(() => {
+      if (prevReclaimDisable === undefined) {
+        delete process.env.EGO_RECLAIM_DISABLE;
+      } else {
+        process.env.EGO_RECLAIM_DISABLE = prevReclaimDisable;
+      }
       if (previous === undefined) {
         delete globalThis.ego;
       } else {
