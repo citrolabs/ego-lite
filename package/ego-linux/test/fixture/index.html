@@ -1,0 +1,26 @@
+<meta charset="utf-8" />
+<title>ego linux port fixture</title>
+<h1>Helper e2e fixture</h1>
+<p>Some intro text that must survive the snapshot.</p>
+
+<button id="click-button" onclick="document.getElementById('count').textContent = 'clicked'">
+  Increment counter
+</button>
+<span id="count">0</span>
+
+<label for="name-input">Your name</label>
+<input id="name-input" type="text" placeholder="type a name" />
+
+<input type="checkbox" id="agree" checked />
+<label for="agree">I agree</label>
+
+<a href="/nav-target">Go to nav target</a>
+
+<select id="pick">
+  <option>alpha</option>
+  <option>beta</option>
+</select>
+
+<div style="display: none">hidden text must not appear</div>
+
+<iframe src="./frame.html" title="nested frame" width="400" height="200"></iframe>

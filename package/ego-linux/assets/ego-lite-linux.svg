@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>ego lite (Linux port)</title>
+  <rect width="512" height="512" rx="112" fill="#0B0B0C"/>
+  <!--
+    The ego mark: a disc, an overlapping lens, and a standalone ellipse.
+    evenodd makes the disc/lens overlap read as background, exactly as in
+    assets/logo.png upstream.
+  -->
+  <path fill="#FFFFFF" fill-rule="evenodd" d="
+    M 60,246 a 116,116 0 1,0 232,0 a 116,116 0 1,0 -232,0 Z
+    M 242,246 a 56,118 0 1,0 112,0 a 56,118 0 1,0 -112,0 Z
+    M 396,246 a 29,118 0 1,0 58,0 a 29,118 0 1,0 -58,0 Z
+  "/>
+  <!-- Port badge: marks this as the Linux build, not an upstream macOS one. -->
+  <circle cx="404" cy="418" r="46" fill="#0B0B0C" stroke="#FFFFFF" stroke-width="10"/>
+  <circle cx="404" cy="418" r="22" fill="#F5BD1F"/>
+</svg>
