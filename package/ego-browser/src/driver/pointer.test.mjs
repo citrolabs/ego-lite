@@ -5,6 +5,7 @@ import { setOverrides } from "../../dist/src/state.js";
 import {
   click,
   down,
+  drag,
   hover,
   up,
   wheel,
@@ -377,4 +378,57 @@ test("click absorbs CDP timeout when probe fallback succeeds", async () => {
     probeEvaluateCount >= 2,
     "probe install and finish were called despite CDP timeout",
   );
+});
+
+test("drag waits for a late trusted mouseup instead of re-synthesising it", async () => {
+  // The canvas flake: the trusted mouseup can land after the first probe window
+  // when the machine is loaded (page load, screencast warm-up). Concluding from
+  // one look and re-synthesising delivers the drag twice — a canvas stroke gets
+  // drawn twice. The probe must be peeked at more than once before the fallback
+  // is allowed to fire.
+  const originalEgo = globalThis.ego;
+  globalThis.ego = { sendCDPMessage: () => {} };
+  let installs = 0;
+  let peeks = 0;
+  let finishes = 0;
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method !== "Runtime.evaluate") return {};
+      const expression = params.expression ?? "";
+      if (!expression.includes("__egoBrowserInputProbes")) {
+        if (params.objectGroup === "ego-browser") {
+          return { result: { objectId: "object-1" } };
+        }
+        return { result: { value: { x: 100, y: 200 } } };
+      }
+      if (expression.includes("probe.handler = ")) {
+        installs += 1;
+        return { result: { value: true } };
+      }
+      if (expression.includes("dispatchEvent")) {
+        // The consuming call. `seen: true` means the real mouseup arrived, so
+        // no fallback events are synthesised.
+        finishes += 1;
+        return { result: { value: { seen: true, fallback: false } } };
+      }
+      // A non-consuming peek. The trusted event is late: absent on the first
+      // look, present on the second.
+      peeks += 1;
+      return { result: { value: peeks === 1 ? false : true } };
+    },
+  });
+  try {
+    await drag(["#from", "#to"]);
+  } finally {
+    restore();
+    if (originalEgo === undefined) delete globalThis.ego;
+    else globalThis.ego = originalEgo;
+  }
+
+  assert.equal(installs, 1, "the mouseup probe is installed once");
+  assert.ok(
+    peeks >= 2,
+    `the probe is peeked at again after the first miss (got ${peeks} peek(s))`,
+  );
+  assert.equal(finishes, 1, "the probe is consumed exactly once");
 });
