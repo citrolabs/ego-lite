@@ -57,7 +57,7 @@ export function profileSelectionCase() {
         "profile selection cannot be applied while resuming a numeric space id"
       );
     } finally {
-      await explicitTask.close();
+      await explicitTask.finish({ keep: [] });
     }
 
     let missingProfileId = "__ego_browser_missing_profile__";

@@ -74,7 +74,7 @@ Supported TaskSpace API:
 - State: `spaceId`, `name`, `ownership`, `page(label)`, `userPage()`
 - Pages: `await task.pages()`, `await task.tabs()`, `newPage()`,
   `adopt(page, { as? })`, `release(label)`
-- Control: `waitForControl(options)`, `handOff()`, `finish()`, `close()`
+- Control: `waitForControl(options)`, `handOff()`, `finish({ keep })`
 - Advanced: `cdp(method, params, options)`
 
 Pages receive permanent labels such as `p1`, `p2`, and `p3`. Prefer these labels
@@ -383,8 +383,20 @@ const task = await claimTaskSpace(7);
 const userPage = task.userPage();
 ```
 
-After verifying the result, call `task.close()` by default. Use `task.finish()`
-when the pages must remain available to the user.
+Before returning a successful final response, you must call exactly one
+`await task.finish({ keep: ... })`. Do not report the browser task as complete
+until this call resolves. The `keep` option is required:
+
+```js
+await task.finish({ keep: [] }); // Keep no managed Pages.
+await task.finish({ keep: ["p2"] }); // Keep only p2.
+await task.finish({ keep: "all" }); // Keep every managed Page.
+```
+
+User-created and unmanaged tabs are preserved regardless of this list. Do not
+close unwanted Pages one by one at completion; list the Pages to keep instead.
+Use `page.close()` only while the task is still in progress. Do not call
+`finish()` when the task stops for user control or an error.
 
 If the final output contains `[ego-browser:notice]`, finish the current browser
 task, tell the user an Ego Lite update is available, and run

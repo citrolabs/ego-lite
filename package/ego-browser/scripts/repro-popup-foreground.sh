@@ -70,7 +70,7 @@ try {
   // Leave the result visible briefly, then remove all reproduction state.
   await new Promise((resolve) => setTimeout(resolve, 8_000));
 } finally {
-  await task.close().catch((error) => {
+  await task.finish({ keep: [] }).catch((error) => {
     console.error(`Cleanup failed for TaskSpace ${task.spaceId}: ${error.message}`);
   });
 }

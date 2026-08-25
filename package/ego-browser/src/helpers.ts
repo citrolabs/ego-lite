@@ -19,6 +19,7 @@ import {
   captureTaskSpaceUserBoundary,
   createTaskSpaceHandle,
   initializeTaskSpaceHandle,
+  rollbackCreatedTaskSpace,
 } from "./page-model.js";
 import {
   loadBrowserToolSource,
@@ -318,7 +319,7 @@ async function initializeResolvedTaskSpace(resolution) {
   } catch (error) {
     // A fresh space must not survive without its canonical p1 ledger entry.
     // Preserve the initialization error if native rollback is unavailable.
-    await task.close().catch(() => {});
+    await rollbackCreatedTaskSpace(task).catch(() => {});
     throw error;
   }
 }

@@ -4,6 +4,7 @@ export type PublicApiOptionKind =
   | "finiteNumber"
   | "nonNegativeNumber"
   | "nonEmptyString"
+  | "pageRetention"
   | "positiveInteger"
   | "positiveMilliseconds"
   | "string"
@@ -157,13 +158,15 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   },
   {
     name: "TaskSpace.finish",
-    signature: "await task.finish()",
-    summary: "Finish the task and keep the browser space for the user.",
-  },
-  {
-    name: "TaskSpace.close",
-    signature: "await task.close()",
-    summary: "Close the task space.",
+    signature: "await task.finish({ keep })",
+    summary:
+      "Finish the task and keep selected managed Pages; an empty list closes the space when no protected tabs remain.",
+    options: {
+      keep: option(
+        "pageRetention",
+        'Required Page retention policy: "all" or an array of managed Page labels.',
+      ),
+    },
   },
   {
     name: "TaskSpace.cdp",
@@ -708,6 +711,13 @@ function validateOptionValue(
     case "nonEmptyString":
       valid = typeof value === "string" && value.length > 0;
       break;
+    case "pageRetention":
+      valid =
+        value === "all" ||
+        (Array.isArray(value) &&
+          value.every((item) => typeof item === "string" && item.length > 0) &&
+          new Set(value).size === value.length);
+      break;
     case "positiveInteger":
       valid = Number.isInteger(value) && (value as number) > 0;
       break;
@@ -743,6 +753,11 @@ function validateOptionValue(
     if (specification.kind === "positiveInteger") {
       throw new TypeError(
         `${apiName} ${optionName} must be a positive integer`,
+      );
+    }
+    if (specification.kind === "pageRetention") {
+      throw new TypeError(
+        `${apiName} ${optionName} must be "all" or an array of unique non-empty Page labels`,
       );
     }
     if (specification.kind === "stringRecord") {

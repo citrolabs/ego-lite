@@ -157,6 +157,10 @@ type WaitForControlOptions = {
   timeout?: number;
 };
 
+type FinishOptions = {
+  keep: "all" | string[];
+};
+
 type PageWaitForFileChooserOptions = {
   timeout?: number;
 };
@@ -591,6 +595,7 @@ const unmanagedPageConstructorToken = Symbol("UnmanagedPage");
 const captureUserBoundaryToken = Symbol("captureUserBoundary");
 const initializeTaskSpaceToken = Symbol("initializeTaskSpace");
 const initializeCreatedSpaceToken = Symbol("initializeCreatedSpace");
+const rollbackCreatedTaskSpaceToken = Symbol("rollbackCreatedTaskSpace");
 
 const defaultGate: OperationGate = {
   withSpace: defaultWithSpace,
@@ -728,6 +733,11 @@ export async function initializeTaskSpaceHandle(
     await task.initializeCreatedSpace(initializeCreatedSpaceToken);
   }
   await task.initializeBackgroundPageDiscovery(initializeTaskSpaceToken);
+}
+
+/** Close a newly created space whose Page-model initialization did not commit. */
+export async function rollbackCreatedTaskSpace(task: TaskSpace): Promise<void> {
+  await task[rollbackCreatedTaskSpaceToken]();
 }
 
 class TaskSpace {
@@ -923,24 +933,71 @@ class TaskSpace {
     });
   }
 
-  /** Finish the task, keep its browser space for the user, and drop Page state. */
-  async finish(): Promise<void> {
+  /** Finish the task with an explicit managed-Page retention policy. */
+  async finish(options: FinishOptions): Promise<void> {
+    validatePublicApiOptions("TaskSpace.finish", options);
+    if (!Object.hasOwn(options, "keep") || options.keep === undefined) {
+      throw new TypeError(
+        "task.finish requires the keep option. Expected: await task.finish({ keep })",
+      );
+    }
     await this.#services.gate.withSpace(this.spaceId, async () => {
+      const { ledger, tabs } = await this.#reconcilePages();
+      const keepLabels =
+        options.keep === "all"
+          ? new Set(Object.keys(ledger.pages))
+          : new Set(options.keep);
+      for (const label of keepLabels) {
+        if (!ledger.pages[label]) {
+          // Reuse the ledger's permanent-label diagnostics and validate every
+          // requested label before closing any Page.
+          await this.#services.ledger.getPage(this.spaceId, label);
+        }
+      }
+
+      const managedByTarget = new Map(
+        Object.values(ledger.pages).map((page) => [page.targetId, page]),
+      );
+      const hasProtectedTabs = tabs.some((tab) => {
+        const managed = managedByTarget.get(tab.targetId);
+        return !managed || managed.openedBy === "unknown";
+      });
+
+      if (
+        options.keep !== "all" &&
+        options.keep.length === 0 &&
+        !hasProtectedTabs
+      ) {
+        await this.#services.closeTaskSpace();
+        await this.#discardTerminalState();
+        return;
+      }
+
+      const labelsToClose = Object.entries(ledger.pages)
+        .filter(
+          ([label, page]) =>
+            page.openedBy === "agent" && !keepLabels.has(label),
+        )
+        .map(([label]) => label);
+      for (const label of labelsToClose) {
+        await this.page(label).close();
+      }
       await this.#services.completeTaskSpace();
-      await this.#services.ledger.discard(this.spaceId);
-      this.#stopBackgroundPageDiscovery();
-      clearSpacePageNotices(this.spaceId);
+      await this.#discardTerminalState();
     });
   }
 
-  /** Close the task space and drop its Page state. */
-  async close(): Promise<void> {
+  async [rollbackCreatedTaskSpaceToken](): Promise<void> {
     await this.#services.gate.withSpace(this.spaceId, async () => {
       await this.#services.closeTaskSpace();
-      await this.#services.ledger.discard(this.spaceId);
-      this.#stopBackgroundPageDiscovery();
-      clearSpacePageNotices(this.spaceId);
+      await this.#discardTerminalState();
     });
+  }
+
+  async #discardTerminalState(): Promise<void> {
+    await this.#services.ledger.discard(this.spaceId);
+    this.#stopBackgroundPageDiscovery();
+    clearSpacePageNotices(this.spaceId);
   }
 
   /** Send a Target or Browser domain command within this selected space. */

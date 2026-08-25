@@ -220,7 +220,7 @@ test("taskSpace returns the new object model for a resolved space", async () => 
       assert.equal(typeof task.release, "function");
       assert.equal(typeof task.handOff, "function");
       assert.equal(typeof task.finish, "function");
-      assert.equal(typeof task.close, "function");
+      assert.equal(task.close, undefined);
     },
   );
 });

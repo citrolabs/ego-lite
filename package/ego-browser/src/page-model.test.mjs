@@ -1321,10 +1321,19 @@ test("v2 methods reject option fields that are absent from the public schema", a
       () => page.click("button", { trial: true }),
       /page\.click received unknown option: trial/,
     );
+    await assert.rejects(
+      () => task.finish(),
+      /task\.finish options must be an object/,
+    );
+    await assert.rejects(
+      () => task.finish({}),
+      /task\.finish requires the keep option/,
+    );
+    assert.equal(task.close, undefined, "TaskSpace has one terminal API");
   });
 });
 
-test("TaskSpace uses spaceId and owns handoff, finish, and close", async () => {
+test("TaskSpace uses spaceId and finishes while keeping every managed Page", async () => {
   await withFixture(async (fixture) => {
     const lifecycleCalls = [];
     const ledger = new PageLedgerStore({ rootDir: fixture.rootDir });
@@ -1336,9 +1345,6 @@ test("TaskSpace uses spaceId and owns handoff, finish, and close", async () => {
       async completeTaskSpace() {
         lifecycleCalls.push("finish");
       },
-      async closeTaskSpace() {
-        lifecycleCalls.push("close");
-      },
     };
     const task = taskForRound(fixture, "round-a", services);
 
@@ -1347,23 +1353,134 @@ test("TaskSpace uses spaceId and owns handoff, finish, and close", async () => {
     await task.handOff();
 
     const finishTask = taskForRound(fixture, "round-b", services);
-    await finishTask.newPage();
-    await finishTask.finish();
+    const page = await finishTask.newPage();
+    await finishTask.finish({ keep: "all" });
     assert.deepEqual((await ledger.read(7)).pages, {});
+    assert.equal(fixture.tabs.has(page.targetId), true);
 
-    const closeTask = taskForRound(fixture, "round-c", services);
-    await closeTask.close();
-
-    assert.deepEqual(lifecycleCalls, ["handOff", "finish", "close"]);
-    assert.deepEqual(
-      fixture.calls.filter(([name]) => name === "selectSpace"),
-      [
-        ["selectSpace", 7],
-        ["selectSpace", 7],
-        ["selectSpace", 7],
-        ["selectSpace", 7],
-      ],
+    assert.deepEqual(lifecycleCalls, ["handOff", "finish"]);
+    assert(
+      fixture.calls
+        .filter(([name]) => name === "selectSpace")
+        .every(([, spaceId]) => spaceId === 7),
     );
+  });
+});
+
+test("TaskSpace finish keeps named Pages and protects unknown-origin Pages", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const ledger = new PageLedgerStore({ rootDir: fixture.rootDir });
+    const task = taskForRound(fixture, "round-a", {
+      ledger,
+      async completeTaskSpace() {
+        lifecycleCalls.push("finish");
+      },
+      async closeTaskSpace() {
+        lifecycleCalls.push("close");
+      },
+    });
+    const p1 = await openTestPage(task, "https://example.test/one");
+    const p2 = await openTestPage(task, "https://example.test/two");
+    const p3 = await openTestPage(task, "https://example.test/three");
+    fixture.addExternalTab("target-user", "https://example.test/user");
+    await ledger.addPage(7, "target-user", {
+      as: "user-page",
+      openedBy: "unknown",
+    });
+
+    await task.finish({ keep: ["p2"] });
+
+    assert.deepEqual(lifecycleCalls, ["finish"]);
+    assert.deepEqual([...fixture.tabs.keys()].sort(), [
+      p2.targetId,
+      "target-user",
+    ]);
+    assert.equal(fixture.tabs.has(p1.targetId), false);
+    assert.equal(fixture.tabs.has(p3.targetId), false);
+    assert.deepEqual((await ledger.read(7)).pages, {});
+  });
+});
+
+test("TaskSpace finish closes the whole space when no Pages are retained", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const ledger = new PageLedgerStore({ rootDir: fixture.rootDir });
+    const task = taskForRound(fixture, "round-a", {
+      ledger,
+      async completeTaskSpace() {
+        lifecycleCalls.push("finish");
+      },
+      async closeTaskSpace() {
+        lifecycleCalls.push("close");
+      },
+    });
+    await openTestPage(task, "https://example.test/one");
+
+    await task.finish({ keep: [] });
+
+    assert.deepEqual(lifecycleCalls, ["close"]);
+    assert.equal(
+      fixture.calls.some(
+        ([name, method]) => name === "cdp" && method === "Target.closeTarget",
+      ),
+      false,
+      "closing the whole space does not close its Pages one by one",
+    );
+    assert.deepEqual((await ledger.read(7)).pages, {});
+  });
+});
+
+test("TaskSpace finish keeps protected unmanaged tabs even with an empty keep list", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const ledger = new PageLedgerStore({ rootDir: fixture.rootDir });
+    const task = taskForRound(fixture, "round-a", {
+      ledger,
+      async completeTaskSpace() {
+        lifecycleCalls.push("finish");
+      },
+      async closeTaskSpace() {
+        lifecycleCalls.push("close");
+      },
+    });
+    const agentPage = await openTestPage(task, "https://example.test/agent");
+    fixture.addExternalTab("target-user", "https://example.test/user");
+    await ledger.keepUnmanaged(7, "target-user", "unknown");
+
+    await task.finish({ keep: [] });
+
+    assert.deepEqual(lifecycleCalls, ["finish"]);
+    assert.equal(fixture.tabs.has(agentPage.targetId), false);
+    assert.equal(fixture.tabs.has("target-user"), true);
+  });
+});
+
+test("TaskSpace finish validates every retained label before closing Pages", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const ledger = new PageLedgerStore({ rootDir: fixture.rootDir });
+    const task = taskForRound(fixture, "round-a", {
+      ledger,
+      async completeTaskSpace() {
+        lifecycleCalls.push("finish");
+      },
+      async closeTaskSpace() {
+        lifecycleCalls.push("close");
+      },
+    });
+    const p1 = await openTestPage(task, "https://example.test/one");
+    const p2 = await openTestPage(task, "https://example.test/two");
+
+    await assert.rejects(
+      () => task.finish({ keep: ["p2", "missing"] }),
+      /page label not found: missing/,
+    );
+
+    assert.deepEqual(lifecycleCalls, []);
+    assert.equal(fixture.tabs.has(p1.targetId), true);
+    assert.equal(fixture.tabs.has(p2.targetId), true);
+    assert.deepEqual(Object.keys((await ledger.read(7)).pages), ["p1", "p2"]);
   });
 });
 
@@ -1430,7 +1547,10 @@ test("TaskSpace keeps Page state when native finish fails", async () => {
     });
     await openTestPage(task, "https://example.test/managed");
 
-    await assert.rejects(() => task.finish(), /native finish failed/);
+    await assert.rejects(
+      () => task.finish({ keep: "all" }),
+      /native finish failed/,
+    );
 
     assert.deepEqual((await ledger.read(7)).pages, {
       p1: { targetId: "target-1", openedBy: "agent" },

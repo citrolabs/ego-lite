@@ -178,7 +178,8 @@ stdin JS → runMain() → injected helpers → CDP / DOM / AX resolution → op
 A `Task Space` is an isolated browsing context provided by ego-browser: it owns its own tab set but inherits the user's login state.
 Because every heredoc runs in a fresh Node process, new scripts call
 `taskSpace(nameOrId)` in each round, restore Pages by durable label, and end with
-`task.finish()` or `task.close()`.
+exactly one `task.finish({ keep })` call that explicitly lists which managed
+Pages should remain.
 
 Control is handed to the user with `task.handOff()` and resumed, after user
 approval, with `takeOverTaskSpace(spaceId)`. The old global helpers remain a v1

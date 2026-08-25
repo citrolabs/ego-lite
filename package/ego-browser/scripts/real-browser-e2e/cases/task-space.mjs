@@ -89,27 +89,47 @@ export function taskSpaceCase() {
     await resumedTask.waitForControl({ interval: 100, timeout: 5_000 });
     const boundaryPage = resumedTask.userPage();
     assert(Boolean(boundaryPage), "takeover captures the tab active at the user boundary");
-    const closeSpaceId = resumedTask.spaceId;
-    await resumedTask.close();
+    const handedOffSpaceId = resumedTask.spaceId;
+    await resumedTask.finish({ keep: "all" });
+    assert(
+      (await listTaskSpaces()).some((space) => space.id === handedOffSpaceId),
+      "task.finish keeps the handed-off browser space"
+    );
+    await completeTaskSpace(handedOffSpaceId, { keep: false });
+
+    const closeTask = await taskSpace(taskName + " v2 close through finish");
+    const closeSpaceId = closeTask.spaceId;
+    await closeTask.finish({ keep: [] });
     for (let attempt = 0; attempt < 20; attempt += 1) {
       if (!(await listTaskSpaces()).some((space) => space.id === closeSpaceId)) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     assert(
       !(await listTaskSpaces()).some((space) => space.id === closeSpaceId),
-      "task.close removes the v2 task space"
+      "task.finish with no retained Pages removes the v2 task space"
     );
 
     const finishTask = await taskSpace(taskName + " v2 finish");
-    await finishTask.page("p1").goto(baseUrl + "/secondary?v2-lifecycle=finish");
+    await finishTask.page("p1").goto(baseUrl + "/secondary?v2-lifecycle=discard");
+    const retainedPage = await finishTask.newPage();
+    await retainedPage.goto(baseUrl + "/secondary?v2-lifecycle=retain");
     const finishSpaceId = finishTask.spaceId;
-    await finishTask.finish();
+    await finishTask.finish({ keep: [retainedPage.label] });
     assert(
       (await listTaskSpaces()).some((space) => space.id === finishSpaceId),
-      "task.finish keeps the browser space for the user"
+      "task.finish keeps the browser space when one Page is retained"
     );
     const reclaimedFinishedTask = await claimTaskSpace(finishSpaceId);
-    await reclaimedFinishedTask.close();
+    const retainedTabs = await reclaimedFinishedTask.tabs();
+    assert(
+      retainedTabs.some((tab) => tab.url.includes("v2-lifecycle=retain")),
+      "task.finish keeps the named Page"
+    );
+    assert(
+      !retainedTabs.some((tab) => tab.url.includes("v2-lifecycle=discard")),
+      "task.finish closes unlisted Agent Pages"
+    );
+    await completeTaskSpace(finishSpaceId, { keep: false });
   `;
 }
 
@@ -129,7 +149,7 @@ export function crossSpaceV2Case() {
     assertIncludes(firstInfo.url, "space=first", "cross-space gate keeps the first request in its space");
     assertIncludes(secondInfo.url, "space=second", "cross-space gate keeps the second request in its space");
 
-    await firstTask.close();
-    await secondTask.close();
+    await firstTask.finish({ keep: [] });
+    await secondTask.finish({ keep: [] });
   `;
 }

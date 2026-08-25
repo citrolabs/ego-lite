@@ -20,6 +20,7 @@ test("the public API schema contains the v2 entry points and object methods", ()
     "TaskSpace.pages",
     "TaskSpace.tabs",
     "TaskSpace.newPage",
+    "TaskSpace.finish",
     "Page.snapshot",
     "Page.reload",
     "Page.targetId",
@@ -38,6 +39,7 @@ test("the public API schema contains the v2 entry points and object methods", ()
     assert(names.has(name), `missing public API schema entry: ${name}`);
   }
   assert.equal(names.has("TaskSpace.listPages"), false);
+  assert.equal(names.has("TaskSpace.close"), false);
   assert.equal(names.has("Page.scrollBy"), false);
 });
 
@@ -51,6 +53,9 @@ test("schema-driven option validation rejects unknown and invalid fields", () =>
     timeout: 500,
   });
   validatePublicApiOptions("Page.fetch", { saveAs: "/tmp/image.png" });
+  validatePublicApiOptions("TaskSpace.finish", { keep: [] });
+  validatePublicApiOptions("TaskSpace.finish", { keep: ["p2"] });
+  validatePublicApiOptions("TaskSpace.finish", { keep: "all" });
   for (const waitUntil of [
     "commit",
     "domcontentloaded",
@@ -87,6 +92,14 @@ test("schema-driven option validation rejects unknown and invalid fields", () =>
     () => validatePublicApiOptions("Page.click", { button: "primary" }),
     /button must be one of left, middle, right/,
   );
+  assert.throws(
+    () => validatePublicApiOptions("TaskSpace.finish", { keep: true }),
+    /keep must be "all" or an array of unique non-empty Page labels/,
+  );
+  assert.throws(
+    () => validatePublicApiOptions("TaskSpace.finish", { keep: ["p2", "p2"] }),
+    /keep must be "all" or an array of unique non-empty Page labels/,
+  );
 });
 
 test("the generated reference contains signatures and option descriptions", () => {
@@ -96,6 +109,11 @@ test("the generated reference contains signatures and option descriptions", () =
   assert.match(markdown, /`await taskSpace\(nameOrId, \{ profileId\? \}\)`/);
   assert.match(markdown, /a new space starts with managed Page p1/);
   assert.match(markdown, /`await task\.newPage\(\)`/);
+  assert.match(
+    markdown,
+    /`await task\.finish\(\{ keep \}\)`.*keep selected managed Pages/,
+  );
+  assert.doesNotMatch(markdown, /task\.close/);
   assert.match(
     markdown,
     /`await page\.goto\(url, \{ referer\?, timeout\?, waitUntil\? \}\)`/,
