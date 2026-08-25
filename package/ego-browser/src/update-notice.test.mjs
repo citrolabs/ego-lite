@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { setTimeout as delay } from "node:timers/promises";
 
 import { emitUpdateNotice } from "../dist/src/update-notice.js";
 
@@ -45,10 +46,11 @@ test("version probing stays silent when unsupported, failed, or stalled", async 
     },
     emit,
   );
-  await emitUpdateNotice(
-    { getBrowserVersion: () => new Promise(() => {}) },
-    emit,
-  );
+  // Simulate a stalled probe that outlasts emitUpdateNotice's own race timeout,
+  // but still settles (ref'd, so it keeps the process alive until it does)
+  // instead of dangling forever — Node's test runner fails the run on
+  // promises still pending when the event loop would otherwise be empty.
+  await emitUpdateNotice({ getBrowserVersion: () => delay(1_000) }, emit);
   assert.deepEqual(lines, []);
 });
 
