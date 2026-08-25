@@ -45,11 +45,14 @@ and diagnose the CLI or installation only if it fails.
 
 ## Spaces, rounds, and pages
 
-- Complete the user's goal within one task space.
+- Use exactly one TaskSpace for the entire user goal. Create it once, print its
+  `spaceId`, and resume that same space in later rounds. Use multiple spaces
+  only when the user explicitly requests them.
+- Never use a new TaskSpace to recover from a stuck, blocked, timed-out, or
+  unexpected Page. Recover within the existing space; if it cannot continue,
+  stop and ask the user.
 - Every heredoc starts a new Node.js process. Task spaces, tabs, and Page labels
   persist; JavaScript variables do not.
-- Name a new space after the goal and print `task.spaceId`. In later rounds,
-  resume that ID and restore Pages by label.
 - A new task space starts with Page `p1`; navigate it instead of opening
   another Page.
 - Reuse a Page with `goto()` instead of opening a new Page for every URL.
