@@ -3296,7 +3296,10 @@ test("Page mouse.wheel scrolls the addressed page", async () => {
 
 test("Page keyboard press and type use the addressed target session", async () => {
   await withFixture(async (fixture) => {
-    const task = taskForRound(fixture, "round-a");
+    // Meta+A's native selectAll editing command is only synthesized on
+    // darwin (see driver/keyboard.ts); pin the platform so this assertion
+    // doesn't depend on the host OS actually running the test.
+    const task = taskForRound(fixture, "round-a", { platform: "darwin" });
     const first = await openTestPage(task, "https://example.test/first");
     await openTestPage(task, "https://example.test/second");
 
