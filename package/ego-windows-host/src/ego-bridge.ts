@@ -56,6 +56,8 @@ type BridgeOptions = {
   agentConnection: CdpConnection;
   registry: TaskSpaceRegistry;
   browserVersion?: string;
+  // Open each new task space in its own browser window instead of a tab.
+  spaceWindows?: boolean;
 };
 
 export function createEgoBridge(options: BridgeOptions) {
@@ -162,9 +164,12 @@ export function createEgoBridge(options: BridgeOptions) {
       }
       const space = registry.create(name);
       // A fresh space starts with one blank tab so the runtime always has a
-      // target to attach its session to.
+      // target to attach its session to. Opening it in its own browser window
+      // (opt-in) gives each space the visual separation the macOS Spaces UI
+      // provides, so parallel agents are legible on screen.
       const created = await hostConnection.request("Target.createTarget", {
         url: "about:blank",
+        ...(options.spaceWindows ? { newWindow: true } : {}),
       });
       registry.trackTarget(created.targetId, space.id);
       registry.setActive(created.targetId, space.id);

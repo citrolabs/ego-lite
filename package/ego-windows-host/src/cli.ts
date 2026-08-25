@@ -31,6 +31,7 @@ Environment:
   EGO_HOST_DEBUG_PORT     CDP port for the hosted browser (default: 9522)
   EGO_HOST_STATE_DIR      state root (default: %LOCALAPPDATA%\\ego-windows-host)
   EGO_HOST_HEADLESS       set to 1 to launch the browser headless
+  EGO_HOST_SPACE_WINDOWS  set to 1 to open each task space in its own window
 `;
 
 export function hostConfig(
@@ -47,6 +48,9 @@ export function hostConfig(
     stateDir,
     userDataDir: join(stateDir, "profile"),
     headless: env.EGO_HOST_HEADLESS === "1" || env.EGO_HOST_HEADLESS === "true",
+    spaceWindows:
+      env.EGO_HOST_SPACE_WINDOWS === "1" ||
+      env.EGO_HOST_SPACE_WINDOWS === "true",
   };
 }
 
@@ -94,6 +98,7 @@ export async function main(argv = process.argv.slice(2)) {
     agentConnection,
     registry,
     browserVersion: `${endpoint.Browser || "chromium"} (ego-windows-host)`,
+    spaceWindows: config.spaceWindows,
   });
 
   // The runtime reads globalThis.ego at call time, so the bridge must exist

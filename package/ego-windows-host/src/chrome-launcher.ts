@@ -1,8 +1,14 @@
 import { spawn } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 
 const READY_TIMEOUT_MS = 20000;
 const POLL_INTERVAL_MS = 250;
+// Chromium's own default window is small enough that responsive sites collapse
+// their controls: Wikipedia replaces its search field with a toggle button and
+// leaves a 0x0 unfocusable input behind, so fill() silently writes nothing. A
+// desktop-sized window keeps agent scripts on the layout desktop users see.
+const DEFAULT_WINDOW = { width: 1440, height: 960 };
 
 type EndpointInfo = {
   webSocketDebuggerUrl: string;
@@ -19,6 +25,8 @@ type EnsureBrowserOptions = {
   fetchFn?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
   timeoutMs?: number;
+  exists?: (path: string) => boolean;
+  windowSize?: { width: number; height: number };
 };
 
 /**
@@ -58,12 +66,14 @@ export async function ensureBrowser(options: EnsureBrowserOptions) {
     return { endpoint: existing, launched: false };
   }
   const browserPath = options.browserPath();
+  const windowSize = options.windowSize ?? DEFAULT_WINDOW;
   mkdirSync(options.userDataDir, { recursive: true });
   const args = [
     `--remote-debugging-port=${options.port}`,
     `--user-data-dir=${options.userDataDir}`,
     "--no-first-run",
     "--no-default-browser-check",
+    `--window-size=${windowSize.width},${windowSize.height}`,
     ...(options.headless ? ["--headless=new"] : []),
     "about:blank",
   ];
@@ -73,7 +83,8 @@ export async function ensureBrowser(options: EnsureBrowserOptions) {
     stdio: "ignore",
   });
   child.unref();
-  const deadline = Date.now() + (options.timeoutMs ?? READY_TIMEOUT_MS);
+  const timeoutMs = options.timeoutMs ?? READY_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const endpoint = await browserEndpoint(options.port, fetchFn);
     if (endpoint) {
@@ -82,6 +93,53 @@ export async function ensureBrowser(options: EnsureBrowserOptions) {
     await sleep(POLL_INTERVAL_MS);
   }
   throw new Error(
-    `browser did not expose CDP on port ${options.port} within ${options.timeoutMs ?? READY_TIMEOUT_MS}ms`,
+    `browser did not expose CDP on port ${options.port} within ${timeoutMs}ms.` +
+      diagnoseLaunchFailure({
+        port: options.port,
+        userDataDir: options.userDataDir,
+        browserPath,
+        args,
+        exists: options.exists ?? existsSync,
+      }),
   );
+}
+
+/**
+ * Explain a launch that never came up. Two causes account for nearly all of
+ * them and neither is guessable from the bare timeout:
+ *
+ *  - The profile is already open in another browser process. Chromium forwards
+ *    the command line to the running instance and exits, so the debugging port
+ *    is never bound and no error is printed anywhere.
+ *  - Something else already holds the port, so binding fails silently.
+ *
+ * The launched command line is included so the failure can be reproduced by
+ * hand, which is the fastest way to see the browser's own message.
+ */
+function diagnoseLaunchFailure(context: {
+  port: number;
+  userDataDir: string;
+  browserPath: string;
+  args: string[];
+  exists: (path: string) => boolean;
+}) {
+  const causes: string[] = [];
+  // Chromium writes this while a process holds the profile; a stale one is left
+  // behind by a crash, which is equally worth reporting.
+  if (context.exists(join(context.userDataDir, "lockfile"))) {
+    causes.push(
+      `the profile at ${context.userDataDir} looks locked by another browser process (close it, or use a different EGO_HOST_STATE_DIR)`,
+    );
+  }
+  causes.push(
+    `another process may already hold port ${context.port} (set EGO_HOST_DEBUG_PORT to a free port)`,
+  );
+  return [
+    "",
+    "Possible causes:",
+    ...causes.map((cause) => `  - ${cause}`),
+    "",
+    "Run this by hand to see the browser's own error:",
+    `  "${context.browserPath}" ${context.args.join(" ")}`,
+  ].join("\n");
 }

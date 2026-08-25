@@ -49,12 +49,13 @@ instructions written for `ego-browser nodejs` carry over.
 
 ## Environment
 
-| Variable                | Purpose                                                                     |
-| ----------------------- | --------------------------------------------------------------------------- |
-| `EGO_HOST_BROWSER_PATH` | Full path to `msedge.exe` / `chrome.exe` (default: auto-detect, Edge first) |
-| `EGO_HOST_DEBUG_PORT`   | CDP port for the hosted browser (default `9522`)                            |
-| `EGO_HOST_STATE_DIR`    | State root (default `%LOCALAPPDATA%\ego-windows-host`)                      |
-| `EGO_HOST_HEADLESS`     | `1` to launch the browser headless                                          |
+| Variable                 | Purpose                                                                     |
+| ------------------------ | --------------------------------------------------------------------------- |
+| `EGO_HOST_BROWSER_PATH`  | Full path to `msedge.exe` / `chrome.exe` (default: auto-detect, Edge first) |
+| `EGO_HOST_DEBUG_PORT`    | CDP port for the hosted browser (default `9522`)                            |
+| `EGO_HOST_STATE_DIR`     | State root (default `%LOCALAPPDATA%\ego-windows-host`)                      |
+| `EGO_HOST_HEADLESS`      | `1` to launch the browser headless                                          |
+| `EGO_HOST_SPACE_WINDOWS` | `1` to open each task space in its own browser window instead of a tab      |
 
 ## How task spaces are emulated
 
@@ -88,7 +89,9 @@ State lives in `spaces.json` under the state dir, written atomically.
   import your daily browser's cookies the way ego lite's Chrome migration does.
   This host never touches your daily browser profile.
 - **No Spaces UI.** Ownership is enforced at the bridge, but there is no
-  browser chrome showing which space an agent holds.
+  browser chrome showing which space an agent holds. `EGO_HOST_SPACE_WINDOWS=1`
+  gets part of the way there by giving each space its own browser window, so
+  parallel agents are at least visually separate.
 - **Security.** The browser exposes CDP on a loopback port; any local process
   can connect to it. Do not point `EGO_HOST_DEBUG_PORT` at a non-loopback
   interface, and prefer a dedicated profile (the default) over a copy of a
