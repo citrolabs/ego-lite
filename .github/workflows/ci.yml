@@ -33,11 +33,14 @@ jobs:
       - run: npm audit --registry=https://registry.npmjs.org --audit-level=moderate
       - run: npm test
       - run: npm run validate:site-skills
+      - name: Archive release payload
+        if: env.SHOULD_RELEASE == 'true'
+        run: tar -czf dist/ego-browser-release-payload.tar.gz -C dist/out .
       - uses: actions/upload-artifact@v4
         if: env.SHOULD_RELEASE == 'true'
         with:
           name: ego-browser-release-payload
-          path: package/ego-browser/dist/out
+          path: package/ego-browser/dist/ego-browser-release-payload.tar.gz
 
   release:
     if: github.event_name == 'push' && (github.ref_name == 'dev' || startsWith(github.ref, 'refs/tags/v'))
@@ -56,7 +59,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: ego-browser-release-payload
-          path: package/ego-browser/dist/out
+          path: package/ego-browser/dist
+      - name: Extract release payload
+        run: |
+          mkdir -p dist/out
+          tar -xzf dist/ego-browser-release-payload.tar.gz -C dist/out
       - name: Resolve release channel
         id: release
         run: |
