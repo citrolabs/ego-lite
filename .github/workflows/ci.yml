@@ -9,6 +9,12 @@ on:
       - "v*.*.*"
   pull_request:
 
+permissions:
+  contents: read
+
+env:
+  SHOULD_RELEASE: ${{ github.event_name == 'push' && (github.ref_name == 'dev' || startsWith(github.ref, 'refs/tags/v')) }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -27,6 +33,11 @@ jobs:
       - run: npm audit --registry=https://registry.npmjs.org --audit-level=moderate
       - run: npm test
       - run: npm run validate:site-skills
+      - uses: actions/upload-artifact@v4
+        if: env.SHOULD_RELEASE == 'true'
+        with:
+          name: ego-browser-release-payload
+          path: package/ego-browser/dist/out
 
   release:
     if: github.event_name == 'push' && (github.ref_name == 'dev' || startsWith(github.ref, 'refs/tags/v'))
@@ -42,13 +53,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/download-artifact@v4
         with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: package/ego-browser/package-lock.json
-      - run: npm ci
-      - run: npm run build
+          name: ego-browser-release-payload
+          path: package/ego-browser/dist/out
       - name: Resolve release channel
         id: release
         run: |
@@ -71,23 +79,17 @@ jobs:
               base_version="v0.1.0"
             fi
 
-            version_tag="$base_version-nightly.$(date -u +%Y%m%d).$short_sha"
-            release_tag="$version_tag"
-            title="$version_tag"
+            release_tag="$base_version-nightly.$(date -u +%Y%m%d).$short_sha"
             prerelease="true"
             latest="false"
             previous_tag="$(git tag --merged HEAD --sort=-creatordate --list 'v*.*.*-nightly.*' | grep -v "^$release_tag$" | head -1 || true)"
           elif [[ "$ref_name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$ ]]; then
             release_tag="$ref_name"
-            version_tag="$ref_name"
-            title="Beta $ref_name"
             prerelease="true"
             latest="false"
             previous_tag="$(git tag --merged HEAD --sort=-creatordate --list 'v*.*.*-beta.*' | grep -v "^$release_tag$" | head -1 || true)"
           elif [[ "$ref_name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             release_tag="$ref_name"
-            version_tag="$ref_name"
-            title="ego lite $ref_name"
             prerelease="false"
             latest="true"
             previous_tag="$(git tag --merged HEAD --sort=-creatordate --list 'v*.*.*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v "^$release_tag$" | head -1 || true)"
@@ -99,8 +101,6 @@ jobs:
           {
             echo "supported=$supported"
             echo "release_tag=$release_tag"
-            echo "version_tag=$version_tag"
-            echo "title=$title"
             echo "prerelease=$prerelease"
             echo "latest=$latest"
             echo "previous_tag=$previous_tag"
@@ -108,9 +108,9 @@ jobs:
       - name: Package release payload
         if: steps.release.outputs.supported == 'true'
         run: |
-          version_tag="${{ steps.release.outputs.version_tag }}"
+          release_tag="${{ steps.release.outputs.release_tag }}"
           cd dist/out
-          zip -r "../ego-browser-${version_tag}.zip" .
+          zip -r "../ego-browser-${release_tag}.zip" .
       - name: Create release
         if: steps.release.outputs.supported == 'true'
         env:
@@ -119,13 +119,11 @@ jobs:
           cd "$GITHUB_WORKSPACE"
 
           release_tag="${{ steps.release.outputs.release_tag }}"
-          version_tag="${{ steps.release.outputs.version_tag }}"
-          title="${{ steps.release.outputs.title }}"
           prerelease="${{ steps.release.outputs.prerelease }}"
           latest="${{ steps.release.outputs.latest }}"
           previous_tag="${{ steps.release.outputs.previous_tag }}"
           commit_sha="$(git rev-parse HEAD)"
-          artifact="package/ego-browser/dist/ego-browser-${version_tag}.zip"
+          artifact="package/ego-browser/dist/ego-browser-${release_tag}.zip"
           notes_file="$(mktemp)"
           release_args=()
           notes_args=()
@@ -160,13 +158,13 @@ jobs:
 
           if gh release view "$release_tag" >/dev/null 2>&1; then
             gh release edit "$release_tag" \
-              --title "$title" \
+              --title "$release_tag" \
               --notes-file "$notes_file" \
               "${release_args[@]}"
             gh release upload "$release_tag" "$artifact" --clobber
           else
             gh release create "$release_tag" \
-              --title "$title" \
+              --title "$release_tag" \
               --notes-file "$notes_file" \
               --verify-tag \
               "${release_args[@]}" \

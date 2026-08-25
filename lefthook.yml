@@ -32,7 +32,7 @@ pre-commit:
         cd package/ego-browser && npm audit --registry=https://registry.npmjs.org --audit-level=moderate
     smoke-test:
       run: |
-        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
+        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(package/ego-browser/|skills/ego-browser/)' || exit 0
         cd package/ego-browser && npm test
     site-skill-validation:
       run: |
@@ -40,5 +40,5 @@ pre-commit:
         cd package/ego-browser && npm run validate:site-skills
     e2e-test:
       run: |
-        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
+        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(package/ego-browser/|skills/ego-browser/)' || exit 0
         cd package/ego-browser && npm run e2e
