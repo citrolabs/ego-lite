@@ -41,11 +41,28 @@ export function pageJavaScriptDialogHandlingCase() {
         result.dataset.alert = "closed";
       });
 
+      const uploadButton = document.createElement("button");
+      uploadButton.id = "dialog-upload";
+      uploadButton.textContent = "Upload project";
+      uploadButton.addEventListener("click", () => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.addEventListener("change", () => {
+          result.dataset.uploadAccepted = String(
+            confirm("Replace the current project?")
+          );
+          result.dataset.uploadFile = input.files?.[0]?.name || "";
+        });
+        document.body.append(input);
+        input.click();
+      });
+
       document.body.prepend(
         noDialogButton,
         promptButton,
         confirmButton,
         alertButton,
+        uploadButton,
         result
       );
     });
@@ -93,6 +110,36 @@ export function pageJavaScriptDialogHandlingCase() {
     // Current Ego Lite releases hand control to the user here. A native build
     // with Agent-owned JavaScript dialogs continues through the same case and
     // exercises the complete high-level dialog API instead.
+    const chooserPromise = page.waitForFileChooser({ timeout: 2_000 });
+    await page.click("#dialog-upload");
+    const chooser = await chooserPromise;
+    const uploadReceipt = await chooser.setFiles(uploadPath);
+    assertEqual(
+      uploadReceipt.dialog?.type,
+      "confirm",
+      "an upload reports the JavaScript dialog opened by its change handler"
+    );
+    assertEqual(
+      uploadReceipt.dialog?.message,
+      "Replace the current project?",
+      "an upload preserves the confirmation message"
+    );
+    assertEqual(
+      await page.acceptDialog(),
+      true,
+      "acceptDialog resumes an upload blocked by a confirm"
+    );
+    await page.waitForFunction(
+      () => document.querySelector("#dialog-result")?.dataset.uploadAccepted === "true",
+      undefined,
+      { timeout: 2_000 }
+    );
+    assertEqual(
+      await page.evaluate("document.querySelector('#dialog-result').dataset.uploadFile"),
+      "fixture-upload.txt",
+      "the accepted upload keeps the selected file"
+    );
+
     await page.events();
     const receipt = await page.click("#dialog-prompt");
     assertEqual(receipt.dialog?.type, "prompt", "the action reports the dialog type");

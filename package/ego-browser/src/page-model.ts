@@ -1285,7 +1285,7 @@ class FileChooser {
     return this.#event.mode === "selectMultiple";
   }
 
-  async setFiles(path: string | string[]): Promise<void> {
+  async setFiles(path: string | string[]): Promise<PageActionReceipt> {
     if (this.#handled) throw new Error("this file chooser was already handled");
     const files = normalizeFilePaths(path, "fileChooser.setFiles");
     this.#handled = true;
@@ -1298,6 +1298,12 @@ class FileChooser {
           this.#event.backendNodeId,
         );
       });
+      return {};
+    } catch (error) {
+      if (isPageDialogOpenedError(error)) {
+        return { dialog: error.dialog };
+      }
+      throw error;
     } finally {
       await this.#interception.dispose();
     }

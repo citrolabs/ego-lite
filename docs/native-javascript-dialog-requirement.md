@@ -20,5 +20,7 @@ the user.
 Acceptance: trigger each JavaScript dialog from a real Page click, verify that
 the TaskSpace remains Agent-owned, accept a prompt with `promptText: "agent"`,
 dismiss a confirm, accept an alert, and verify the returned values and opening
-and closing events. Separately verify that location, camera, and device prompts
-still transfer control to the user.
+and closing events. Also set files on an intercepted file input whose change
+handler opens a confirm, then accept it while `DOM.setFileInputFiles` is still
+pending. Separately verify that location, camera, and device prompts still
+transfer control to the user.

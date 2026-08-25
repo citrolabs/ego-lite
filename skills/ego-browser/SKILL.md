@@ -325,8 +325,11 @@ If a click creates the file input, start waiting before the click:
 const chooserPromise = page.waitForFileChooser({ timeout: 10_000 });
 await page.click("button.upload");
 const chooser = await chooserPromise;
-await chooser.setFiles("/absolute/path/report.pdf");
+const result = await chooser.setFiles("/absolute/path/report.pdf");
 ```
+
+An upload-triggered JavaScript dialog may be returned as `result.dialog`; when
+present, handle it with the dialog methods above.
 
 `page.fetch()` runs `window.fetch()` in the Page: relative URLs, cookies, and
 service workers use that Page, and browser CORS still applies. It returns

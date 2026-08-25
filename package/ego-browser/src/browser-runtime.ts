@@ -18,9 +18,13 @@ const OOPIF_AUTO_ATTACH_PARAMS = {
   autoAttach: true,
   waitForDebuggerOnStart: true,
   flatten: true,
-  // The harness owns iframe sessions. Other related targets, such as workers,
-  // keep their browser-managed lifecycle and never need to be paused here.
-  filter: [{ type: "iframe", exclude: false }, { exclude: true }],
+  // Ego Lite can pause an excluded dedicated worker without attaching it,
+  // leaving no session through which the harness can resume that worker.
+  filter: [
+    { type: "iframe", exclude: false },
+    { type: "worker", exclude: false },
+    { exclude: true },
+  ],
 };
 const DIALOG_BLOCKED_METHOD = (method) =>
   method.startsWith("Input.") ||

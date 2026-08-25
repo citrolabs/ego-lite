@@ -890,6 +890,78 @@ test("auto-attached OOPIFs are instrumented and resumed without waiting for Netw
   }
 });
 
+test("dedicated workers are auto-attached and resumed immediately", async () => {
+  const previous = globalThis.ego;
+  const sent = [];
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      sent.push(request);
+      const result =
+        request.method === "Target.attachToTarget"
+          ? { sessionId: "session:page-main" }
+          : {};
+      queueMicrotask(() => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      });
+    },
+  };
+  globalThis.ego = runtime;
+
+  try {
+    const mainSessionId = await ensureSession("page-main");
+    const autoAttach = sent.find(
+      (request) =>
+        request.method === "Target.setAutoAttach" &&
+        request.sessionId === mainSessionId,
+    );
+    assert.deepEqual(autoAttach?.params?.filter, [
+      { type: "iframe", exclude: false },
+      { type: "worker", exclude: false },
+      { exclude: true },
+    ]);
+
+    runtime.onCDPMessage(
+      JSON.stringify({
+        sessionId: mainSessionId,
+        method: "Target.attachedToTarget",
+        params: {
+          sessionId: "session:worker-child",
+          targetInfo: {
+            targetId: "worker-child",
+            type: "worker",
+            parentId: "page-main",
+          },
+          waitingForDebugger: true,
+        },
+      }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.ok(
+      sent.some(
+        (request) =>
+          request.method === "Runtime.runIfWaitingForDebugger" &&
+          request.sessionId === "session:worker-child",
+      ),
+      "a worker paused by auto-attach must be resumed",
+    );
+    assert.equal(
+      sent.some(
+        (request) =>
+          request.method === "Network.enable" &&
+          request.sessionId === "session:worker-child",
+      ),
+      false,
+      "resuming a worker must not opt it into Page network tracking",
+    );
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
 // Gap A: ensureSession() calls the raw listTabs binding to attach a session.
 // When the task is blocked it returns { error, error_code }; the result must
 // surface the ego-browser-owned wording for the code (not the native error

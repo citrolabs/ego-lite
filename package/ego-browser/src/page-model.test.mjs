@@ -39,6 +39,7 @@ function createFixture(rootDir) {
   let systemFileChooserOpened = false;
   let timeoutNextMouseDispatch = false;
   let dialogOnNextClick = null;
+  let dialogOnNextFileSet = null;
   const pendingDialogs = new Map();
   let rejectedClickPointsRemaining = 0;
   let interceptedClickPointsRemaining = 0;
@@ -544,7 +545,20 @@ function createFixture(rootDir) {
         }
         return {};
       }
-      if (method === "DOM.setFileInputFiles") return {};
+      if (method === "DOM.setFileInputFiles") {
+        if (dialogOnNextFileSet) {
+          const dialog = dialogOnNextFileSet;
+          dialogOnNextFileSet = null;
+          pendingDialogs.set(sessionId, dialog);
+          const error = new Error(
+            "a JavaScript dialog opened while DOM.setFileInputFiles was running",
+          );
+          error.code = "EGO_PAGE_DIALOG_OPENED";
+          error.dialog = dialog;
+          throw error;
+        }
+        return {};
+      }
       if (method === "Network.enable") {
         if (!networkSessions.has(sessionId)) {
           networkRequests.set(sessionId, new Set());
@@ -760,6 +774,16 @@ function createFixture(rootDir) {
         type: dialog.type ?? "alert",
         message: dialog.message ?? "Confirm action",
         url: dialog.url ?? "https://example.test/dialog",
+        ...(dialog.defaultPrompt === undefined
+          ? {}
+          : { defaultPrompt: dialog.defaultPrompt }),
+      };
+    },
+    openDialogOnNextFileSet(dialog = {}) {
+      dialogOnNextFileSet = {
+        type: dialog.type ?? "confirm",
+        message: dialog.message ?? "Replace the current project?",
+        url: dialog.url ?? "https://example.test/upload",
         ...(dialog.defaultPrompt === undefined
           ? {}
           : { defaultPrompt: dialog.defaultPrompt }),
@@ -3713,6 +3737,31 @@ test("Page.waitForFileChooser handles a dynamically created file input", async (
     );
     assert.deepEqual(uploadCall[2].files, ["/tmp/one.txt", "/tmp/two.txt"]);
     assert.equal(fixture.systemFileChooserOpened(), false);
+  });
+});
+
+test("FileChooser.setFiles returns a dialog opened by the upload", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(
+      task,
+      "https://example.test/dynamic-upload",
+    );
+    fixture.openFileChooserOnNextClick({ backendNodeId: 93 });
+    fixture.openDialogOnNextFileSet();
+
+    const chooserPromise = page.waitForFileChooser();
+    await page.click("#open-upload");
+    const chooser = await chooserPromise;
+
+    assert.deepEqual(await chooser.setFiles("/tmp/project.sb3"), {
+      dialog: {
+        type: "confirm",
+        message: "Replace the current project?",
+        url: "https://example.test/upload",
+      },
+    });
+    assert.equal(await page.acceptDialog(), true);
   });
 });
 

@@ -489,7 +489,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: "FileChooser.setFiles",
     signature: "await fileChooser.setFiles(pathOrPaths)",
-    summary: "Set files on an intercepted chooser without a system dialog.",
+    summary:
+      "Set files on an intercepted chooser and return any JavaScript dialog opened by the upload.",
   },
   {
     name: "Page.close",

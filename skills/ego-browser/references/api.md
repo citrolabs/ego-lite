@@ -18,7 +18,7 @@ Selectors accept refs, Ego locators, XPath, and raw CSS. A small compatibility s
 | `await claimTaskSpace(spaceId)`             | —                                                                         | Claim a user-owned or inactive space after user approval and return TaskSpace.                                                   |
 | `await takeOverTaskSpace(spaceId)`          | —                                                                         | Resume an Agent-owned space after user approval and return TaskSpace.                                                            |
 | `fileChooser.isMultiple()`                  | —                                                                         | Report whether the chooser accepts multiple files.                                                                               |
-| `await fileChooser.setFiles(pathOrPaths)`   | —                                                                         | Set files on an intercepted chooser without a system dialog.                                                                     |
+| `await fileChooser.setFiles(pathOrPaths)`   | —                                                                         | Set files on an intercepted chooser and return any JavaScript dialog opened by the upload.                                       |
 
 ## TaskSpace
 
