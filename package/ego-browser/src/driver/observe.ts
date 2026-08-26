@@ -35,10 +35,13 @@ type ScreenshotClip = {
   scale?: number;
 };
 
+export type ScreenshotScale = "css";
+
 export type CaptureScreenshotOptions = {
   full?: boolean;
   raw?: boolean;
   clip?: ScreenshotClip;
+  scale?: ScreenshotScale;
 };
 
 export async function drainEvents() {
@@ -92,6 +95,7 @@ export async function captureScreenshot(
   path?: string,
   options: CaptureScreenshotOptions = {},
 ) {
+  assertScreenshotScale(options.scale);
   const sessionId = isBrowserRuntime() ? await ensureSession() : undefined;
   return captureScreenshotForSession(path, options, sessionId);
 }
@@ -105,11 +109,15 @@ export async function captureScreenshotForSession(
   options: CaptureScreenshotOptions = {},
   sessionId?: string,
 ) {
+  assertScreenshotScale(options.scale);
   const outputPath =
     path ??
     join(tmpdir(), `ego-browser-shot-${process.pid}-${++screenshotSeq}.png`);
   const full = options.full ?? false;
-  const raw = options.raw ?? false;
+  // CSS-pixel sizing is the default and the only declarative scale mode. Keep
+  // the legacy raw flag as an internal compatibility escape hatch.
+  const scale = options.scale ?? "css";
+  const raw = scale === "css" ? false : (options.raw ?? false);
   const params: any = {
     format: "png",
     captureBeyondViewport: full,
@@ -170,4 +178,12 @@ export async function captureScreenshotForSession(
   await mkdir(dirname(outputPath), { recursive: true });
   await state.writeFile(outputPath, Buffer.from(result.data, "base64"));
   return outputPath;
+}
+
+function assertScreenshotScale(
+  scale: unknown,
+): asserts scale is ScreenshotScale | undefined {
+  if (scale !== undefined && scale !== "css") {
+    throw new TypeError("captureScreenshot scale must be css");
+  }
 }

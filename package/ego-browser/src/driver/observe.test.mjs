@@ -171,6 +171,40 @@ test("captureScreenshot clips the currently visible scrolled viewport", async ()
   }
 });
 
+test("captureScreenshot keeps CSS-pixel sizing when scale is explicit", async () => {
+  const restore = setOverrides({
+    async writeFile() {},
+  });
+  try {
+    await withCdpRuntime(async ({ sent }) => {
+      await captureScreenshot("/tmp/ego-browser-css-shot.png", {
+        scale: "css",
+      });
+
+      assert.equal(
+        sent.some((request) => request.method === "Runtime.evaluate"),
+        true,
+      );
+      const screenshot = sent.find(
+        (request) => request.method === "Page.captureScreenshot",
+      );
+      assert.equal(screenshot.params.clip.scale, 0.5);
+    });
+  } finally {
+    restore();
+  }
+});
+
+test("captureScreenshot rejects unsupported device scale", async () => {
+  await assert.rejects(
+    () =>
+      captureScreenshot("/tmp/ego-browser-device-shot.png", {
+        scale: "device",
+      }),
+    /captureScreenshot scale must be css/,
+  );
+});
+
 test("captureScreenshot creates missing parent directories", async () => {
   const root = await mkdtemp(join(tmpdir(), "ego-browser-screenshot-test-"));
   const outputPath = join(root, "nested", "screenshots", "page.png");

@@ -2015,6 +2015,24 @@ test("metadata reads stay target-scoped while evaluate and screenshot activate t
       "page.screenshot must map Playwright-style options to the v1 capture driver",
     );
     await assert.rejects(
+      () => first.screenshot({ path: "/tmp/device.png", scale: "device" }),
+      /scale must be one of css/,
+    );
+    assert.equal(
+      await first.screenshot({ path: "/tmp/css.png", scale: "css" }),
+      "/tmp/css.png",
+    );
+    assert(
+      fixture.calls.some(
+        ([kind, path, options, sessionId]) =>
+          kind === "screenshot" &&
+          path === "/tmp/css.png" &&
+          options.scale === "css" &&
+          sessionId === "session:target-1",
+      ),
+      "page.screenshot must forward the explicit scale mode",
+    );
+    await assert.rejects(
       () => first.screenshot("/tmp/legacy.png"),
       /options must be an object/,
     );

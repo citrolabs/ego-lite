@@ -244,7 +244,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   },
   {
     name: "Page.screenshot",
-    signature: "await page.screenshot({ path?, fullPage?, clip?, raw? })",
+    signature:
+      "await page.screenshot({ path?, fullPage?, clip?, scale?, raw? })",
     summary: "Capture this Page to a PNG file.",
     options: {
       path: option(
@@ -253,6 +254,11 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
       ),
       fullPage: option("boolean", "Capture the full scrollable page."),
       clip: option("clip", "CSS-pixel clipping rectangle."),
+      scale: option(
+        "string",
+        "Output scale mode; css uses CSS-pixel sizing and is the default.",
+        ["css"],
+      ),
       raw: option("boolean", "Bypass device-pixel-ratio correction."),
     },
   },

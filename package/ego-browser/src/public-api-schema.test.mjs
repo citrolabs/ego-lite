@@ -53,6 +53,10 @@ test("schema-driven option validation rejects unknown and invalid fields", () =>
     timeout: 500,
   });
   validatePublicApiOptions("Page.fetch", { saveAs: "/tmp/image.png" });
+  validatePublicApiOptions("Page.screenshot", {
+    path: "/tmp/image.png",
+    scale: "css",
+  });
   validatePublicApiOptions("TaskSpace.finish", { keep: [] });
   validatePublicApiOptions("TaskSpace.finish", { keep: ["p2"] });
   validatePublicApiOptions("TaskSpace.finish", { keep: "all" });
@@ -75,6 +79,14 @@ test("schema-driven option validation rejects unknown and invalid fields", () =>
   assert.throws(
     () => validatePublicApiOptions("Page.click", { trial: true }),
     /unknown option: trial\. Expected: await page\.click\(selector, \{ button\?, clickCount\?, delay\?, position\?, force\?, timeout\? \}\)/,
+  );
+  assert.throws(
+    () => validatePublicApiOptions("Page.screenshot", { scale: "invalid" }),
+    /scale must be one of css/,
+  );
+  assert.throws(
+    () => validatePublicApiOptions("Page.screenshot", { scale: "device" }),
+    /scale must be one of css/,
   );
   assert.throws(
     () => validatePublicApiOptions("Page.goto", { timeout: 0 }),
