@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ACTION_TARGET_STATE_HELPERS } from "../../dist/src/driver/action-target.js";
+import {
+  ACTION_TARGET_STATE_HELPERS,
+  HIT_TARGET_HELPERS,
+  SCROLL_TARGET_HELPERS,
+} from "../../dist/src/driver/action-target.js";
 
 function stateHelpers() {
   return Function(`
@@ -132,4 +136,73 @@ test("action enabled state uses the nearest interactive owner for ARIA", () => {
     false,
     "aria-disabled does not disable a target without a supporting role",
   );
+});
+
+test("scroll targeting recognizes an element clipped by a nested scroller", () => {
+  const { scrollRequestForPoint } = Function(`
+    ${SCROLL_TARGET_HELPERS}
+    return { scrollRequestForPoint };
+  `)();
+  const body = { parentElement: null };
+  const documentElement = { parentElement: null };
+  const view = {
+    innerWidth: 800,
+    innerHeight: 600,
+    getComputedStyle() {
+      return { overflowX: "hidden", overflowY: "auto" };
+    },
+  };
+  const ownerDocument = { body, documentElement, defaultView: view };
+  const scroller = {
+    ownerDocument,
+    parentElement: body,
+    scrollLeft: 0,
+    scrollTop: 0,
+    scrollWidth: 300,
+    clientWidth: 300,
+    scrollHeight: 900,
+    clientHeight: 120,
+    getBoundingClientRect() {
+      return { left: 20, top: 100, right: 320, bottom: 220 };
+    },
+  };
+  const target = { ownerDocument, parentElement: scroller };
+
+  assert.deepEqual(scrollRequestForPoint(target, { x: 80, y: 700 }), {
+    x: 170,
+    y: 160,
+    deltaX: 0,
+    deltaY: 540,
+  });
+  assert.equal(scrollRequestForPoint(target, { x: 80, y: 160 }), null);
+});
+
+test("action targeting chooses a real inline fragment instead of the bounding-box gap", () => {
+  const { actionPointForElement } = Function(`
+    ${HIT_TARGET_HELPERS}
+    return { actionPointForElement };
+  `)();
+  const target = {
+    ownerDocument: {
+      defaultView: { innerWidth: 800, innerHeight: 600 },
+    },
+    getClientRects() {
+      return [
+        { left: 700, top: 100, right: 780, bottom: 120, width: 80, height: 20 },
+        { left: 20, top: 140, right: 100, bottom: 160, width: 80, height: 20 },
+      ];
+    },
+    getBoundingClientRect() {
+      return {
+        left: 20,
+        top: 100,
+        right: 780,
+        bottom: 160,
+        width: 760,
+        height: 60,
+      };
+    },
+  };
+
+  assert.deepEqual(actionPointForElement(target), { x: 740, y: 110 });
 });

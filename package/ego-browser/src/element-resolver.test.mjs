@@ -658,7 +658,11 @@ test("pointer action resolution skips a covered Page match for a frame match", a
       new Map([["frame-child", "session:frame-child"]]),
       { strict: true, actionability: "pointer-enabled" },
     ),
-    { objectId: "frame-button", sessionId: "session:frame-child" },
+    {
+      objectId: "frame-button",
+      sessionId: "session:frame-child",
+      frameId: "frame-child",
+    },
   );
 });
 
@@ -752,6 +756,7 @@ test("semantic locators search cross-process iframe sessions", async () => {
   assert.deepEqual(resolved, {
     objectId: "iframe-button",
     sessionId: "session:frame-child",
+    frameId: "frame-child",
   });
 });
 
@@ -894,7 +899,11 @@ test("a unique interactable frame role wins over a blocked Page duplicate", asyn
       new Map([["frame-child", "session:frame-child"]]),
       { actionability: "pointer-enabled" },
     ),
-    { objectId: "node:session:frame-child", sessionId: "session:frame-child" },
+    {
+      objectId: "node:session:frame-child",
+      sessionId: "session:frame-child",
+      frameId: "frame-child",
+    },
   );
 });
 

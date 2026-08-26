@@ -126,6 +126,124 @@ export const ACTION_TARGET_STATE_HELPERS = `
   ${ACTION_TARGET_STATE_FUNCTIONS}
 `;
 
+const SCROLL_TARGET_FUNCTIONS = `
+  function actionPointForElement(target) {
+    const view = target?.ownerDocument?.defaultView;
+    if (!view) return null;
+    const rects = Array.from(target.getClientRects?.() || []).filter(
+      (rect) => rect.width > 0 && rect.height > 0
+    );
+    if (rects.length === 0) {
+      const rect = target.getBoundingClientRect?.();
+      if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+      rects.push(rect);
+    }
+    let best = null;
+    for (const rect of rects) {
+      const left = Math.max(0, rect.left);
+      const top = Math.max(0, rect.top);
+      const right = Math.min(view.innerWidth, rect.right);
+      const bottom = Math.min(view.innerHeight, rect.bottom);
+      const visibleArea = Math.max(0, right - left) * Math.max(0, bottom - top);
+      const centerX = (rect.left + rect.right) / 2;
+      const centerY = (rect.top + rect.bottom) / 2;
+      const distanceX = centerX - Math.max(0, Math.min(view.innerWidth, centerX));
+      const distanceY = centerY - Math.max(0, Math.min(view.innerHeight, centerY));
+      const viewportDistance = distanceX * distanceX + distanceY * distanceY;
+      if (
+        !best ||
+        visibleArea > best.visibleArea ||
+        (visibleArea === best.visibleArea && viewportDistance < best.viewportDistance)
+      ) {
+        best = { rect, left, top, right, bottom, visibleArea, viewportDistance };
+      }
+    }
+    if (best.visibleArea > 0) {
+      return {
+        x: (best.left + best.right) / 2,
+        y: (best.top + best.bottom) / 2,
+      };
+    }
+    return {
+      x: (best.rect.left + best.rect.right) / 2,
+      y: (best.rect.top + best.rect.bottom) / 2,
+    };
+  }
+  function visibleScrollArea(rect, view) {
+    return {
+      left: Math.max(0, rect.left),
+      top: Math.max(0, rect.top),
+      right: Math.min(view.innerWidth, rect.right),
+      bottom: Math.min(view.innerHeight, rect.bottom),
+    };
+  }
+  function scrollRequestForPoint(target, point) {
+    const view = target?.ownerDocument?.defaultView;
+    if (!view) return null;
+    let ancestor = composedParent(target);
+    while (ancestor) {
+      if (
+        ancestor !== target.ownerDocument.body &&
+        ancestor !== target.ownerDocument.documentElement
+      ) {
+        const style = view.getComputedStyle(ancestor);
+        const canScrollX =
+          /^(auto|scroll|overlay)$/.test(style.overflowX) &&
+          ancestor.scrollWidth > ancestor.clientWidth + 1;
+        const canScrollY =
+          /^(auto|scroll|overlay)$/.test(style.overflowY) &&
+          ancestor.scrollHeight > ancestor.clientHeight + 1;
+        if (canScrollX || canScrollY) {
+          const area = visibleScrollArea(ancestor.getBoundingClientRect(), view);
+          if (area.right > area.left && area.bottom > area.top) {
+            let deltaX = canScrollX &&
+                (point.x < area.left || point.x >= area.right)
+              ? point.x - (area.left + area.right) / 2
+              : 0;
+            let deltaY = canScrollY &&
+                (point.y < area.top || point.y >= area.bottom)
+              ? point.y - (area.top + area.bottom) / 2
+              : 0;
+            if (
+              (deltaX < 0 && ancestor.scrollLeft <= 0) ||
+              (deltaX > 0 && ancestor.scrollLeft >= ancestor.scrollWidth - ancestor.clientWidth - 1)
+            ) deltaX = 0;
+            if (
+              (deltaY < 0 && ancestor.scrollTop <= 0) ||
+              (deltaY > 0 && ancestor.scrollTop >= ancestor.scrollHeight - ancestor.clientHeight - 1)
+            ) deltaY = 0;
+            if (deltaX || deltaY) {
+              return {
+                x: (area.left + area.right) / 2,
+                y: (area.top + area.bottom) / 2,
+                deltaX,
+                deltaY,
+              };
+            }
+          }
+        }
+      }
+      ancestor = composedParent(ancestor);
+    }
+    if (
+      point.x >= 0 && point.y >= 0 &&
+      point.x < view.innerWidth && point.y < view.innerHeight
+    ) return null;
+    return {
+      x: Math.max(0, Math.min(view.innerWidth - 1, point.x)),
+      y: Math.max(0, Math.min(view.innerHeight - 1, point.y)),
+      deltaX: point.x - view.innerWidth / 2,
+      deltaY: point.y - view.innerHeight / 2,
+    };
+  }
+`;
+
+/** Browser-side scroll targeting shared by candidate selection and actions. */
+export const SCROLL_TARGET_HELPERS = `
+  ${COMPOSED_PARENT_HELPER}
+  ${SCROLL_TARGET_FUNCTIONS}
+`;
+
 /** Editing semantics layered on top of the shared composed-tree traversal. */
 export const EDIT_ACTION_TARGET_HELPERS = `
   ${COMPOSED_TREE_HELPERS}
@@ -190,6 +308,7 @@ export const EDIT_ACTION_TARGET_HELPERS = `
 // about shadow descendants, interactive ancestors, or modal blockers.
 export const HIT_TARGET_HELPERS = `
   ${ACTION_TARGET_STATE_HELPERS}
+  ${SCROLL_TARGET_FUNCTIONS}
   function isExplicitInteractiveElement(element) {
     const tag = String(element?.tagName || "").toUpperCase();
     if (["BUTTON", "INPUT", "SELECT", "TEXTAREA", "OPTION", "SUMMARY", "LABEL"].includes(tag)) {

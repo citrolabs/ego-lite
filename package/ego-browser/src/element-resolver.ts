@@ -12,6 +12,7 @@ type ElementActionability =
 type PageRuntimeContext = {
   sessionId: string;
   frameId?: string;
+  ownerFrameId?: string;
   contextId?: number;
 };
 
@@ -171,9 +172,7 @@ export async function resolveElementObjectId(
           return {
             objectId,
             sessionId: effectiveSessionId,
-            ...(entry.frameId && effectiveSessionId === sessionId
-              ? { frameId: entry.frameId }
-              : {}),
+            ...(entry.frameId ? { frameId: entry.frameId } : {}),
           };
         }
       } catch {
@@ -205,9 +204,7 @@ export async function resolveElementObjectId(
     return {
       objectId,
       sessionId: effectiveSessionId,
-      ...(entry.frameId && effectiveSessionId === sessionId
-        ? { frameId: entry.frameId }
-        : {}),
+      ...(entry.frameId ? { frameId: entry.frameId } : {}),
     };
   }
 
@@ -561,7 +558,9 @@ async function resolveRawSelectorObjectId(
   return {
     objectId,
     sessionId: match.sessionId,
-    ...(match.frameId ? { frameId: match.frameId } : {}),
+    ...(match.ownerFrameId || match.frameId
+      ? { frameId: match.ownerFrameId || match.frameId }
+      : {}),
   };
 }
 
@@ -747,7 +746,9 @@ function pageSessions(sessionId, iframeSessions) {
 }
 
 function pageContexts(sessionId, iframeSessions) {
-  const contexts = [{ sessionId, frameId: undefined }];
+  const contexts: PageRuntimeContext[] = [
+    { sessionId, frameId: undefined, ownerFrameId: undefined },
+  ];
   const entries =
     iframeSessions instanceof Map
       ? iframeSessions.entries()
@@ -756,6 +757,7 @@ function pageContexts(sessionId, iframeSessions) {
     contexts.push({
       sessionId: frameSessionId,
       frameId: frameSessionId === sessionId ? frameId : undefined,
+      ownerFrameId: frameId,
     });
   }
   return contexts;
@@ -943,7 +945,9 @@ async function resolveLocatorObjectId(
     return {
       objectId,
       sessionId: match.sessionId,
-      ...(match.frameId ? { frameId: match.frameId } : {}),
+      ...(match.ownerFrameId || match.frameId
+        ? { frameId: match.ownerFrameId || match.frameId }
+        : {}),
     };
   }
   const contexts = await runtimePageContexts(cdp, sessionId, iframeSessions);
@@ -970,7 +974,9 @@ async function resolveLocatorObjectId(
   return {
     objectId,
     sessionId: match.sessionId,
-    ...(match.frameId ? { frameId: match.frameId } : {}),
+    ...(match.ownerFrameId || match.frameId
+      ? { frameId: match.ownerFrameId || match.frameId }
+      : {}),
   };
 }
 
@@ -1112,6 +1118,7 @@ async function findUniqueRoleMatch(
           matches.push({
             backendNodeId: node.backendDOMNodeId,
             frameId: context.frameId,
+            ownerFrameId: context.ownerFrameId,
             sessionId: context.sessionId,
           });
         }
@@ -1243,10 +1250,9 @@ async function roleMatchActionability(
             isActionTargetDisabled(this)
           ) return { actionable: false, blocker: "element is disabled" };
           if (${JSON.stringify(actionabilityRequiresPointer(actionability))}) {
-            const point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-            const offscreen = point.x < 0 || point.y < 0 ||
-              point.x >= view.innerWidth || point.y >= view.innerHeight;
-            if (!offscreen) {
+            const point = actionPointForElement(this);
+            if (!point) return { actionable: false };
+            if (!scrollRequestForPoint(this, point)) {
               const interceptor = interceptingElementAtPoint(this, point);
               if (interceptor) {
                 return {
@@ -1592,10 +1598,10 @@ function buildActionableElementsJs(
                 isActionTargetDisabled(element)
               ) return false;
               if (!${JSON.stringify(actionabilityRequiresPointer(actionability))}) return true;
-              const point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-              const offscreen = point.x < 0 || point.y < 0 ||
-                point.x >= view.innerWidth || point.y >= view.innerHeight;
-              return offscreen || !interceptingElementAtPoint(element, point);
+              const point = actionPointForElement(element);
+              if (!point) return false;
+              return Boolean(scrollRequestForPoint(element, point)) ||
+                !interceptingElementAtPoint(element, point);
             });
             return __egoActionableMatches;
           })()`;
@@ -1626,9 +1632,9 @@ async function firstActionabilityBlocker(
               isActionTargetDisabled(element)
             ) return "element is disabled";
             if (!${JSON.stringify(actionabilityRequiresPointer(actionability))}) continue;
-            const point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
-            if (point.x < 0 || point.y < 0 ||
-                point.x >= view.innerWidth || point.y >= view.innerHeight) continue;
+            const point = actionPointForElement(element);
+            if (!point) continue;
+            if (scrollRequestForPoint(element, point)) continue;
             const interceptor = interceptingElementAtPoint(element, point);
             if (interceptor) {
               return describeHitTarget(interceptor) + " intercepts pointer events";

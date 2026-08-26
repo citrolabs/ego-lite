@@ -43,6 +43,7 @@ function createFixture(rootDir) {
   const pendingDialogs = new Map();
   let rejectedClickPointsRemaining = 0;
   let interceptedClickPointsRemaining = 0;
+  let scrollClickPointsRemaining = 0;
   let fillElementKind = "input";
   let fillText = "";
   let fillTransform = null;
@@ -74,6 +75,7 @@ function createFixture(rootDir) {
   const sessionTargets = new Map();
   const snapshotOptions = [];
   const browserEventListeners = new Set();
+  const sleepDurations = [];
 
   function openPendingPopup() {
     if (!popupOnNextClick) return;
@@ -472,6 +474,17 @@ function createFixture(rootDir) {
           };
         }
         if (params.functionDeclaration.includes("getBoundingClientRect")) {
+          if (scrollClickPointsRemaining > 0) {
+            scrollClickPointsRemaining -= 1;
+            return {
+              result: {
+                type: "object",
+                value: {
+                  scroll: { x: 80, y: 300, deltaX: 0, deltaY: 600 },
+                },
+              },
+            };
+          }
           if (
             interceptedClickPointsRemaining > 0 &&
             params.functionDeclaration.includes("elementFromPoint")
@@ -740,6 +753,7 @@ function createFixture(rootDir) {
     },
     now: () => nowMs,
     sleep: async (ms) => {
+      sleepDurations.push(ms);
       nowMs += ms;
     },
   };
@@ -749,6 +763,7 @@ function createFixture(rootDir) {
     gate,
     rootDir,
     services,
+    sleepDurations,
     snapshotOptions,
     tabs,
     addExternalTab(targetId, url, { active = false, ...details } = {}) {
@@ -800,6 +815,9 @@ function createFixture(rootDir) {
     },
     interceptClickPoints(count) {
       interceptedClickPointsRemaining = count;
+    },
+    scrollNextClickPoint(count = 1) {
+      scrollClickPointsRemaining = count;
     },
     navigateOnNextClick(url) {
       navigateOnNextClickUrl = url;
@@ -3298,16 +3316,32 @@ test("Page mouse.wheel scrolls the addressed page", async () => {
     const first = await openTestPage(task, "https://example.test/first");
     await openTestPage(task, "https://example.test/second");
 
+    const sleepCountBeforeWheel = fixture.sleepDurations.length;
     await first.mouse.wheel(0, 450);
 
-    const scrollCall = fixture.calls.find(
+    const scrollCalls = fixture.calls.filter(
       ([kind, method, params]) =>
         kind === "cdp" &&
         method === "Input.dispatchMouseEvent" &&
-        params.type === "mouseWheel" &&
-        params.deltaY === 450,
+        params.type === "mouseWheel",
     );
-    assert.equal(scrollCall[3], `session:${first.targetId}`);
+    assert(
+      scrollCalls.length > 1,
+      "a large wheel delta should be rendered as a short motion",
+    );
+    assert.equal(
+      scrollCalls.reduce((total, [, , params]) => total + params.deltaY, 0),
+      450,
+    );
+    assert(
+      scrollCalls.every((call) => call[3] === `session:${first.targetId}`),
+    );
+    assert(
+      fixture.sleepDurations
+        .slice(sleepCountBeforeWheel)
+        .reduce((total, duration) => total + duration, 0) <= 100,
+      "the visual transition must stay short",
+    );
     assert.equal(fixture.activeTarget(), first.targetId);
   });
 });
@@ -4448,24 +4482,96 @@ test("an unknown Page ref fails after one target-scoped refresh", async () => {
   });
 });
 
-test("Page click scrolls the element into view before computing its point", async () => {
+test("Page click uses the wheel motion engine to bring an element into view", async () => {
   await withFixture(async (fixture) => {
     const task = taskForRound(fixture, "round-a");
     const page = await openTestPage(task, "https://example.test/first");
+    fixture.scrollNextClickPoint();
 
     await page.click("#offscreen");
 
-    const pointCall = fixture.calls.find(
+    const pointCalls = fixture.calls.filter(
       ([kind, method, params]) =>
         kind === "cdp" &&
         method === "Runtime.callFunctionOn" &&
         params.functionDeclaration.includes("getBoundingClientRect"),
     );
-    assert.match(pointCall[2].functionDeclaration, /scrollIntoView/);
+    assert(
+      pointCalls.length >= 2,
+      "the element position is rechecked after scrolling",
+    );
+    assert.doesNotMatch(pointCalls[0][2].functionDeclaration, /scrollIntoView/);
+    const stabilityCall = pointCalls.find(([, , params]) =>
+      params.functionDeclaration.includes("setTimeout(finish, 100)"),
+    );
+    assert(stabilityCall, "the final point check samples element stability");
     assert.match(
-      pointCall[2].functionDeclaration,
+      stabilityCall[2].functionDeclaration,
       /setTimeout\(finish, 100\)/,
       "stability sampling must not wait indefinitely for background animation frames",
+    );
+    const wheelCalls = fixture.calls.filter(
+      ([kind, method, params]) =>
+        kind === "cdp" &&
+        method === "Input.dispatchMouseEvent" &&
+        params.type === "mouseWheel",
+    );
+    assert(wheelCalls.length > 1);
+    assert.equal(
+      wheelCalls.reduce((total, [, , params]) => total + params.deltaY, 0),
+      600,
+    );
+    const wheelEnd = fixture.calls.lastIndexOf(wheelCalls.at(-1));
+    const press = fixture.calls.findIndex(
+      ([kind, method, params]) =>
+        kind === "cdp" &&
+        method === "Input.dispatchMouseEvent" &&
+        params.type === "mousePressed",
+    );
+    assert(
+      wheelEnd < press,
+      "scrolling must finish before the click is dispatched",
+    );
+  });
+});
+
+test("Page fill uses the wheel motion engine to bring an element into view", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+    fixture.scrollNextClickPoint();
+
+    await page.fill("#offscreen-field", "filled");
+
+    const pointCalls = fixture.calls.filter(
+      ([kind, method, params]) =>
+        kind === "cdp" &&
+        method === "Runtime.callFunctionOn" &&
+        params.functionDeclaration.includes("getBoundingClientRect"),
+    );
+    assert(
+      pointCalls.length >= 2,
+      "the field position is rechecked after scrolling",
+    );
+    assert.doesNotMatch(pointCalls[0][2].functionDeclaration, /scrollIntoView/);
+    const wheelCalls = fixture.calls.filter(
+      ([kind, method, params]) =>
+        kind === "cdp" &&
+        method === "Input.dispatchMouseEvent" &&
+        params.type === "mouseWheel",
+    );
+    assert(wheelCalls.length > 1);
+    assert.equal(
+      wheelCalls.reduce((total, [, , params]) => total + params.deltaY, 0),
+      600,
+    );
+    const insertText = fixture.calls.findIndex(
+      ([kind, method]) => kind === "cdp" && method === "Input.insertText",
+    );
+    const wheelEnd = fixture.calls.lastIndexOf(wheelCalls.at(-1));
+    assert(
+      wheelEnd < insertText,
+      "scrolling must finish before text input is dispatched",
     );
   });
 });
@@ -4482,7 +4588,7 @@ test("Page click retries a transient visibility change before dispatching input"
         ([kind, method, params]) =>
           kind === "cdp" &&
           method === "Runtime.callFunctionOn" &&
-          params.functionDeclaration.includes("getBoundingClientRect"),
+          params.functionDeclaration.includes("setTimeout(finish, 100)"),
       ).length,
       2,
     );

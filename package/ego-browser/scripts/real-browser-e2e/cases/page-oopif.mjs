@@ -2,11 +2,44 @@ export function pageOopifActionCase() {
   return `
     const task = await taskSpace(taskName);
     const page = await newPageAt(task, baseUrl + "/?page-api=oopif");
+    const initialFrameState = await page.evaluate(() => {
+      const frame = document.querySelector("#fixture-frame");
+      frame.style.cssText =
+        "display:block;margin-top:1600px;width:500px;height:300px";
+      window.__rootWheelEvents = [];
+      window.addEventListener(
+        "wheel",
+        (event) => window.__rootWheelEvents.push({
+          deltaY: event.deltaY,
+          trusted: event.isTrusted,
+        }),
+        { passive: true }
+      );
+      return {
+        frameTop: frame.getBoundingClientRect().top,
+        viewportHeight: innerHeight,
+      };
+    });
+    assert(
+      initialFrameState.frameTop > initialFrameState.viewportHeight,
+      "the cross-site iframe starts below the viewport"
+    );
     const snapshot = await page.snapshot({ scope: "full_page" });
     assertIncludes(snapshot, "Run iframe action", "snapshot includes cross-site iframe content");
     assertIncludes(snapshot, "Iframe field", "snapshot includes the iframe input");
     await page.click('loc=role:button[name="Run iframe action"]');
     await page.fill('loc=css:#iframe-field', "filled through Page");
+
+    const outerScrollState = await page.evaluate(() => ({
+      scrollY,
+      wheelEvents: window.__rootWheelEvents,
+    }));
+    assert(outerScrollState.scrollY > 0, "Page actions scroll the iframe owner into view");
+    assert(
+      outerScrollState.wheelEvents.length > 0 &&
+        outerScrollState.wheelEvents.every((event) => event.trusted),
+      "the outer document receives trusted wheel input"
+    );
 
     const frame = (await task.cdp("Target.getTargets")).targetInfos.find(
       (target) =>

@@ -206,6 +206,10 @@ When a selector identifies a wrapper, `focus()` and `press()` may use its
 interactive ancestor or unique editable descendant; `fill()` and
 `setInputFiles()` only continue to a unique compatible control.
 
+`click()`, `fill()`, `hover()`, and `dragAndDrop()` automatically bring their
+target into view with browser wheel input. Do not pre-scroll solely to make a
+DOM target actionable.
+
 Snapshot node names are accessibility roles. Use a ref now or `loc=...` to find
 the element again. After the page changes, take a new snapshot. When a useful
 node has no ref, construct a selector from its role, text, or surrounding
@@ -238,8 +242,9 @@ console.log({ screenshot: path });
 Inspect the screenshot with an image-viewing tool. Coordinates use CSS pixels;
 keyboard names and `+`-separated chords follow Playwright syntax. Use
 `ControlOrMeta` for portable shortcuts and verify the resulting page state.
-`mouse.wheel()` sends the event at the current mouse position. In each heredoc,
-move or click over the intended scrollable area before using it.
+`mouse.wheel()` performs a short wheel-input motion at the current mouse
+position and resolves when that motion completes. In each heredoc, move or
+click over the intended scrollable area before using it.
 
 On macOS, `keyboard.paste()` sends the native paste shortcut and then restores
 the user's clipboard. Pass `{ text, html }` when a rich editor needs structured

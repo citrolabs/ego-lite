@@ -8,7 +8,9 @@ import {
   ACTION_TARGET_STATE_HELPERS,
   EDIT_ACTION_TARGET_HELPERS,
   HIT_TARGET_HELPERS,
+  SCROLL_TARGET_HELPERS,
 } from "./action-target.js";
+import { dispatchWheelMotion } from "./scroll-motion.js";
 
 type PageActionServices = {
   cdp(
@@ -210,6 +212,7 @@ type MouseMoveState = PageMouseMoveOptions & {
 const INPUT_EVENT_DELAY_MS = 25;
 const FILL_VERIFICATION_ATTEMPTS = 5;
 const FILL_VERIFICATION_INTERVAL_MS = 50;
+const AUTO_SCROLL_ATTEMPTS = 6;
 type FillOutcome =
   | "exact"
   | "equivalent"
@@ -250,6 +253,7 @@ export async function clickInPage(
       target.frameId,
       "page.click",
       options.force,
+      sessionId,
     );
     const buttons = pressedButtons(button);
     await dispatchMouseEvent(services, target.sessionId, {
@@ -261,7 +265,7 @@ export async function clickInPage(
       modifiers,
     });
     if (target.frameId) {
-      // Moving into a same-process iframe can adjust the outer document's
+      // Moving into an iframe can adjust the outer document's
       // scroll position. Translate the frame-local point again before the
       // press so native input uses the post-hover viewport coordinates.
       const pagePoint = await pagePointForFrame(
@@ -269,6 +273,7 @@ export async function clickInPage(
         target.sessionId,
         target.frameId,
         point.local,
+        sessionId,
       );
       point = { ...pagePoint, local: point.local };
       await assertElementEnabled(
@@ -373,6 +378,16 @@ export async function fillInPage(
       resolved.sessionId,
       resolved.objectId,
     );
+    await resolveElementPoint(
+      services,
+      resolved.sessionId,
+      actionObjectId,
+      undefined,
+      resolved.frameId,
+      "page.fill",
+      true,
+      sessionId,
+    );
     const preparationSource = `function fillPreparation(value, clearFirst) {
       ${ACTION_TARGET_STATE_HELPERS}
       if (!this.isConnected) return { error: "element is not connected" };
@@ -413,7 +428,7 @@ export async function fillInPage(
         }
         if (directTypes.has(type)) {
           const nextValue = value.trim();
-          this.focus();
+          this.focus({ preventScroll: true });
           if (isActionTargetDisabled(this)) return { error: "element is disabled" };
           this.value = nextValue;
           if (this.value !== nextValue) return { error: "malformed value" };
@@ -425,7 +440,7 @@ export async function fillInPage(
         return { error: "element is not an input, textarea, or contenteditable element" };
       }
 
-      this.focus();
+      this.focus({ preventScroll: true });
       if (isActionTargetDisabled(this)) return { error: "element is disabled" };
       const cursorPoint = visibleCursorPoint();
       const kind = this.isContentEditable ? "contenteditable" : tag;
@@ -472,6 +487,7 @@ export async function fillInPage(
         resolved.sessionId,
         resolved.frameId,
         result?.cursorPoint,
+        sessionId,
       ),
     );
     const status = typeof result === "string" ? result : result?.status;
@@ -512,6 +528,7 @@ export async function fillInPage(
         resolved.sessionId,
         actionObjectId,
         resolved.frameId,
+        sessionId,
       );
       result = await prepare();
       if (typeof result?.error === "string") {
@@ -860,6 +877,7 @@ async function clickResolvedElement(
   sessionId: string,
   objectId: string,
   frameId?: string,
+  pageSessionId = sessionId,
 ): Promise<void> {
   const point = await resolveElementPoint(
     services,
@@ -869,6 +887,7 @@ async function clickResolvedElement(
     frameId,
     "page.fill",
     false,
+    pageSessionId,
   );
   await assertElementReceivesPointerEvents(
     services,
@@ -991,6 +1010,7 @@ export async function hoverInPage(
       resolved.frameId,
       "page.hover",
       options.force,
+      sessionId,
     );
     await dispatchMouseEvent(services, resolved.sessionId, {
       type: "mouseMoved",
@@ -1050,6 +1070,7 @@ export async function dragAndDropInPage(
       source.frameId,
       "page.dragAndDrop",
       options.force,
+      sessionId,
     );
     const targetPoint = await resolveElementPoint(
       services,
@@ -1059,6 +1080,7 @@ export async function dragAndDropInPage(
       target.frameId,
       "page.dragAndDrop",
       options.force,
+      sessionId,
     );
     const button = options.button ?? "left";
     const buttons = pressedButtons(button);
@@ -1216,14 +1238,19 @@ export async function wheelInPage(
   if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
     throw new TypeError("page.mouse.wheel requires finite deltaX and deltaY");
   }
-  await dispatchMouseEvent(services, sessionId, {
-    type: "mouseWheel",
-    x,
-    y,
-    modifiers,
-    deltaX,
-    deltaY,
-  });
+  await dispatchWheelMotion(
+    {
+      dispatch: (params) => dispatchMouseEvent(services, sessionId, params),
+      sleep: services.sleep,
+    },
+    {
+      x,
+      y,
+      modifiers,
+      deltaX,
+      deltaY,
+    },
+  );
 }
 
 async function resolveElementPoint(
@@ -1234,6 +1261,7 @@ async function resolveElementPoint(
   frameId?: string,
   actionName = "page.click",
   force = false,
+  pageSessionId = sessionId,
 ): Promise<{ x: number; y: number; local: { x: number; y: number } }> {
   if (
     position !== undefined &&
@@ -1248,28 +1276,17 @@ async function resolveElementPoint(
   }
   const pointExpression = position
     ? "({x:rect.x+position.x,y:rect.y+position.y})"
-    : "({x:rect.x+rect.width/2,y:rect.y+rect.height/2})";
+    : "actionPointForElement(this)";
   const expression = `async function(${position ? "position" : ""}) {
-    ${force ? "" : HIT_TARGET_HELPERS}
+    ${force ? SCROLL_TARGET_HELPERS : HIT_TARGET_HELPERS}
     if (!this.isConnected) return { error: "element is not connected" };
     let rect = this.getBoundingClientRect();
     let point = ${pointExpression};
-    const outsideViewport =
-      rect.width <= 0 || rect.height <= 0 ||
-      point.x < 0 || point.y < 0 ||
-      point.x >= window.innerWidth || point.y >= window.innerHeight;
-    if (outsideViewport) {
-      this.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
-      rect = this.getBoundingClientRect();
-      point = ${pointExpression};
+    if (rect.width <= 0 || rect.height <= 0 || !point) {
+      return { error: "element is not visible" };
     }
-    if (
-      rect.width <= 0 || rect.height <= 0 ||
-      point.x < 0 || point.y < 0 ||
-      point.x >= window.innerWidth || point.y >= window.innerHeight
-    ) {
-      return { error: "element is not visible in the viewport" };
-    }
+    const scroll = scrollRequestForPoint(this, point);
+    if (scroll) return { scroll };
     const firstRect = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
     await new Promise((resolve) => {
       let settled = false;
@@ -1300,34 +1317,167 @@ async function resolveElementPoint(
     }
     return point;
   }`;
-  const response = await services.cdp(
-    "Runtime.callFunctionOn",
-    {
-      functionDeclaration: expression,
-      objectId,
-      arguments: position ? [{ value: position }] : [],
-      returnByValue: true,
-      awaitPromise: true,
-    },
-    sessionId,
+  if (frameId) {
+    await ensureFrameOwnerInView(services, pageSessionId, frameId, actionName);
+  }
+  for (let attempt = 0; attempt <= AUTO_SCROLL_ATTEMPTS; attempt += 1) {
+    const response = await services.cdp(
+      "Runtime.callFunctionOn",
+      {
+        functionDeclaration: expression,
+        objectId,
+        arguments: position ? [{ value: position }] : [],
+        returnByValue: true,
+        awaitPromise: true,
+      },
+      sessionId,
+    );
+    const point = runtimeValue(response, expression);
+    if (typeof point?.error === "string") {
+      throw new ElementResolutionError(
+        `${actionName} failed: ${point.error}`,
+        "transient",
+      );
+    }
+    const scroll = point?.scroll;
+    if (scroll) {
+      if (
+        attempt === AUTO_SCROLL_ATTEMPTS ||
+        !Number.isFinite(scroll.x) ||
+        !Number.isFinite(scroll.y) ||
+        !Number.isFinite(scroll.deltaX) ||
+        !Number.isFinite(scroll.deltaY)
+      ) {
+        throw new ElementResolutionError(
+          `${actionName} failed: element is not visible in the viewport`,
+          "transient",
+        );
+      }
+      const pageScrollPoint = await pagePointForFrame(
+        services,
+        sessionId,
+        frameId,
+        scroll,
+        pageSessionId,
+      );
+      await dispatchWheelMotion(
+        {
+          dispatch: (params) => dispatchMouseEvent(services, sessionId, params),
+          sleep: services.sleep,
+        },
+        {
+          x: pageScrollPoint.x,
+          y: pageScrollPoint.y,
+          deltaX: scroll.deltaX,
+          deltaY: scroll.deltaY,
+        },
+      );
+      continue;
+    }
+    if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) {
+      throw new Error(`${actionName} could not resolve the element position`);
+    }
+    const pagePoint = await pagePointForFrame(
+      services,
+      sessionId,
+      frameId,
+      point,
+      pageSessionId,
+    );
+    return { ...pagePoint, local: point };
+  }
+  throw new ElementResolutionError(
+    `${actionName} failed: element is not visible in the viewport`,
+    "transient",
   );
-  const point = runtimeValue(response, expression);
-  if (typeof point?.error === "string") {
+}
+
+async function ensureFrameOwnerInView(
+  services: PageActionServices,
+  pageSessionId: string,
+  frameId: string,
+  actionName: string,
+): Promise<void> {
+  const owner = await services.cdp(
+    "DOM.getFrameOwner",
+    { frameId },
+    pageSessionId,
+  );
+  const backendNodeId = owner?.backendNodeId;
+  if (backendNodeId === undefined || backendNodeId === null) {
     throw new ElementResolutionError(
-      `${actionName} failed: ${point.error}`,
+      `${actionName} failed: iframe is not available`,
       "transient",
     );
   }
-  if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) {
-    throw new Error(`${actionName} could not resolve the element position`);
-  }
-  const pagePoint = await pagePointForFrame(
-    services,
-    sessionId,
-    frameId,
-    point,
+  const resolved = await services.cdp(
+    "DOM.resolveNode",
+    { backendNodeId, objectGroup: "ego-browser" },
+    pageSessionId,
   );
-  return { ...pagePoint, local: point };
+  const objectId = resolved?.object?.objectId;
+  if (!objectId) {
+    throw new ElementResolutionError(
+      `${actionName} failed: iframe is not available`,
+      "transient",
+    );
+  }
+  const source = `function() {
+    ${SCROLL_TARGET_HELPERS}
+    if (!this.isConnected) return { error: "iframe is not connected" };
+    const rect = this.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return { error: "iframe is not visible" };
+    }
+    const point = actionPointForElement(this);
+    if (!point) return { error: "iframe is not visible" };
+    return { scroll: scrollRequestForPoint(this, point) };
+  }`;
+  try {
+    for (let attempt = 0; attempt <= AUTO_SCROLL_ATTEMPTS; attempt += 1) {
+      const response = await services.cdp(
+        "Runtime.callFunctionOn",
+        {
+          functionDeclaration: source,
+          objectId,
+          returnByValue: true,
+          awaitPromise: false,
+        },
+        pageSessionId,
+      );
+      const result = runtimeValue(response, source);
+      if (typeof result?.error === "string") {
+        throw new ElementResolutionError(
+          `${actionName} failed: ${result.error}`,
+          "transient",
+        );
+      }
+      const scroll = result?.scroll;
+      if (!scroll) return;
+      if (
+        attempt === AUTO_SCROLL_ATTEMPTS ||
+        !Number.isFinite(scroll.x) ||
+        !Number.isFinite(scroll.y) ||
+        !Number.isFinite(scroll.deltaX) ||
+        !Number.isFinite(scroll.deltaY)
+      ) {
+        throw new ElementResolutionError(
+          `${actionName} failed: iframe is not visible in the viewport`,
+          "transient",
+        );
+      }
+      await dispatchWheelMotion(
+        {
+          dispatch: (params) =>
+            dispatchMouseEvent(services, pageSessionId, params),
+          sleep: services.sleep,
+        },
+        scroll,
+      );
+    }
+  } finally {
+    await releaseObject(services, pageSessionId, objectId);
+  }
 }
 
 async function pagePointForFrame(
@@ -1335,6 +1485,7 @@ async function pagePointForFrame(
   sessionId: string,
   frameId: string | undefined,
   point: { x?: unknown; y?: unknown } | null | undefined,
+  pageSessionId = sessionId,
 ): Promise<{ x: number; y: number } | null | undefined> {
   if (
     !point ||
@@ -1342,11 +1493,16 @@ async function pagePointForFrame(
     !Number.isFinite(point.x) ||
     typeof point.y !== "number" ||
     !Number.isFinite(point.y) ||
-    !frameId
+    !frameId ||
+    sessionId !== pageSessionId
   ) {
     return point as { x: number; y: number } | null | undefined;
   }
-  const owner = await services.cdp("DOM.getFrameOwner", { frameId }, sessionId);
+  const owner = await services.cdp(
+    "DOM.getFrameOwner",
+    { frameId },
+    pageSessionId,
+  );
   const backendNodeId = owner?.backendNodeId;
   if (backendNodeId === undefined || backendNodeId === null) {
     throw new Error(`page action could not resolve iframe ${frameId}`);
@@ -1354,7 +1510,7 @@ async function pagePointForFrame(
   const box = await services.cdp(
     "DOM.getBoxModel",
     { backendNodeId },
-    sessionId,
+    pageSessionId,
   );
   const content = box?.model?.content;
   if (!Array.isArray(content) || content.length < 2) {

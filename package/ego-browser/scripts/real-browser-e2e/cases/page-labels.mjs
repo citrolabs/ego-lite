@@ -710,15 +710,16 @@ export function pageActionsAndPopupCase() {
       true,
       "page.mouse.wheel scrolls the addressed document asynchronously"
     );
-    const innerScrollPoint = await source.evaluate(() => {
+    const innerScrollPoint = await source.evaluate(async () => {
       const element = document.querySelector("#inner-scroll");
-      element.scrollIntoView({ block: "center" });
+      element.scrollIntoView({ block: "center", behavior: "instant" });
       element.scrollTop = 0;
+      await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const rect = element.getBoundingClientRect();
       return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
     });
     await source.mouse.move(innerScrollPoint.x, innerScrollPoint.y);
-    await source.mouse.wheel(0, 120);
+    await source.mouse.wheel(0, 300);
     let innerScrolled = false;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       innerScrolled = await source.evaluate(
@@ -731,6 +732,52 @@ export function pageActionsAndPopupCase() {
     assertEqual((await currentTab()).targetId, source.targetId, "Page mouse methods keep their Page active");
 
     await source.evaluate(() => {
+      window.scrollTo(0, 0);
+      window.__preventedWheelEvents = [];
+      const preventWheel = (event) => {
+        window.__preventedWheelEvents.push({
+          deltaY: event.deltaY,
+          trusted: event.isTrusted,
+        });
+        event.preventDefault();
+      };
+      window.__removePreventedWheel = () => {
+        removeEventListener("wheel", preventWheel, true);
+        delete window.__removePreventedWheel;
+      };
+      addEventListener("wheel", preventWheel, { capture: true, passive: false });
+    });
+    await source.mouse.move(10, 10);
+    await source.mouse.wheel(0, 300);
+    const preventedWheel = await source.evaluate(() => {
+      const result = {
+        scrollY,
+        events: window.__preventedWheelEvents,
+      };
+      window.__removePreventedWheel();
+      return result;
+    });
+    assertEqual(preventedWheel.scrollY, 0, "wheel preventDefault still blocks the motion");
+    assert(
+      preventedWheel.events.length > 0 &&
+        preventedWheel.events.every((event) => event.trusted === true),
+      "a prevented motion remains observable as trusted wheel input"
+    );
+
+    await source.evaluate(() => {
+      window.__autoScrollProbe = { scrollIntoViewCalls: 0, wheelEvents: [] };
+      const originalScrollIntoView = Element.prototype.scrollIntoView;
+      Element.prototype.scrollIntoView = function(...args) {
+        window.__autoScrollProbe.scrollIntoViewCalls += 1;
+        return originalScrollIntoView.apply(this, args);
+      };
+      document.addEventListener("wheel", (event) => {
+        window.__autoScrollProbe.wheelEvents.push({
+          deltaX: event.deltaX,
+          deltaY: event.deltaY,
+          trusted: event.isTrusted,
+        });
+      }, true);
       const spacer = document.createElement("div");
       spacer.style.height = "2200px";
       const button = document.createElement("button");
@@ -745,9 +792,72 @@ export function pageActionsAndPopupCase() {
     const offscreenResult = await source.evaluate(() => ({
       trusted: window.__pageOffscreenClickTrusted,
       scrollY,
+      probe: window.__autoScrollProbe,
     }));
     assertEqual(offscreenResult.trusted, true, "offscreen Page click remains a trusted browser event");
     assert(offscreenResult.scrollY > 0, "Page click scrolls an offscreen element into view");
+    assertEqual(
+      offscreenResult.probe.scrollIntoViewCalls,
+      0,
+      "Page actions do not invoke the site's scrollIntoView implementation"
+    );
+    assert(
+      offscreenResult.probe.wheelEvents.length > 1 &&
+        offscreenResult.probe.wheelEvents.every((event) => event.trusted === true),
+      "Page actions bring offscreen elements into view with trusted wheel input"
+    );
+
+    await source.evaluate(() => {
+      window.__autoScrollProbe.wheelEvents = [];
+      const scroller = document.createElement("div");
+      scroller.id = "page-nested-auto-scroll";
+      scroller.style.cssText =
+        "position:fixed;left:20px;top:180px;width:300px;height:120px;" +
+        "overflow:auto;background:white;z-index:2147483647";
+      const content = document.createElement("div");
+      content.style.height = "760px";
+      const input = document.createElement("input");
+      input.id = "page-nested-offscreen-field";
+      const button = document.createElement("button");
+      button.id = "page-nested-offscreen-button";
+      button.textContent = "Nested offscreen action";
+      button.style.marginTop = "680px";
+      button.addEventListener("click", (event) => {
+        window.__pageNestedOffscreenClickTrusted = event.isTrusted;
+      });
+      content.append(input, button);
+      scroller.append(content);
+      document.body.append(scroller);
+    });
+    await source.click("#page-nested-offscreen-button");
+    const nestedScrollResult = await source.evaluate(() => ({
+      trusted: window.__pageNestedOffscreenClickTrusted,
+      scrollTop: document.querySelector("#page-nested-auto-scroll").scrollTop,
+      wheelEvents: window.__autoScrollProbe.wheelEvents,
+    }));
+    assertEqual(
+      nestedScrollResult.trusted,
+      true,
+      "nested offscreen Page click remains a trusted browser event"
+    );
+    assert(
+      nestedScrollResult.scrollTop > 0 && nestedScrollResult.wheelEvents.length > 1,
+      "Page actions scroll the nearest nested container with the shared wheel motion"
+    );
+    await source.evaluate("window.__autoScrollProbe.wheelEvents = []");
+    await source.fill("#page-nested-offscreen-field", "nested fill");
+    const nestedFillResult = await source.evaluate(() => ({
+      value: document.querySelector("#page-nested-offscreen-field").value,
+      scrollTop: document.querySelector("#page-nested-auto-scroll").scrollTop,
+      wheelEvents: window.__autoScrollProbe.wheelEvents,
+    }));
+    assertEqual(nestedFillResult.value, "nested fill", "Page.fill reaches a clipped field");
+    assert(
+      nestedFillResult.scrollTop < nestedScrollResult.scrollTop &&
+        nestedFillResult.wheelEvents.length > 1 &&
+        nestedFillResult.wheelEvents.every((event) => event.trusted === true),
+      "Page.fill uses trusted wheel input before entering text"
+    );
 
     await source.evaluate((popupUrl) => {
       const link = document.createElement("a");

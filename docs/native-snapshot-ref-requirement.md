@@ -24,6 +24,18 @@ groups, an iframe, an image, an SVG, a canvas, and an empty table cell is
 captured twice. The compact output is identical on the second pass, the sibling
 groups remain distinct, and every ref still resolves to its original node.
 
+## Deferred: targeted snapshot scope
+
+A future snapshot API should be able to limit capture to one subtree selected
+by a current ref or selector, including content inside an iframe or OOPIF. The
+browser should apply the scope before serializing the snapshot; filtering a
+full snapshot in JS does not reduce native work or transferred content.
+
+The selected root must resolve uniquely, retain Page and frame provenance, and
+produce refs that remain valid for normal Page actions. A missing or ambiguous
+root should fail clearly. The exact public API is intentionally undecided, and
+this requirement is not scheduled for the current implementation.
+
 ## Snapshot refs for iframe content
 
 `ego.snapshot()` already includes text from ordinary iframes and OOPIFs, but
