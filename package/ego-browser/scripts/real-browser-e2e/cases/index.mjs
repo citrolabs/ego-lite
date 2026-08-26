@@ -10,10 +10,7 @@ import { keyboardRegressionCase } from "./keyboard-regression.mjs";
 import { pageKeyboardInterfaceCase } from "./page-keyboard.mjs";
 import { pageClickHitTargetCase } from "./page-click-hit-target.mjs";
 import { pageDragAndDrawCase } from "./page-drag-and-draw.mjs";
-import {
-  pageJavaScriptDialogHandlingCase,
-  pageJavaScriptDialogRecoveryCase,
-} from "./page-dialogs.mjs";
+import { pageJavaScriptDialogHandlingCase } from "./page-dialogs.mjs";
 import { pageMediaPlaybackCase } from "./page-media-playback.mjs";
 import { pageScrolledScreenshotCase } from "./page-screenshot.mjs";
 import { pageSnapshotLocatorCase } from "./page-snapshot-locators.mjs";
@@ -93,16 +90,6 @@ export const e2eCases = [
   {
     name: "Page JavaScript dialog handling",
     body: pageJavaScriptDialogHandlingCase,
-    expectedTermination: true,
-    markerName: "dialog-hard-stop.json",
-    expectedOutput: "The page has displayed a dialog that requires review.",
-    acceptedCompletionOutput: '"dialogHandled":true',
-    pendingOnExpectedTermination:
-      "installed Ego Lite still hands page-authored JavaScript dialogs to the user",
-  },
-  {
-    name: "Page JavaScript dialog recovery",
-    body: pageJavaScriptDialogRecoveryCase,
   },
   { name: "Page media playback", body: pageMediaPlaybackCase },
   { name: "Page scrolled screenshot", body: pageScrolledScreenshotCase },

@@ -94,6 +94,16 @@ test("unknown user-control reasons fall back without exposing the raw key", () =
   assert.doesNotMatch(message, /future_permission_reason/);
 });
 
+test("the retired site-dialog handoff reason uses generic user-control guidance", () => {
+  const { message } = resolveEgoError({
+    error: "fallback_site_dialog_required_notice",
+    error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
+  });
+  assert.match(message, /The user has taken control/);
+  assert.doesNotMatch(message, /dialog that requires review/);
+  assert.doesNotMatch(message, /fallback_site_dialog_required_notice/);
+});
+
 test("invokeEgo preserves non-user-control native failures", async () => {
   await assert.rejects(
     () =>

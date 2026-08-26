@@ -298,7 +298,6 @@ usb
 serial
 hid
 protocol_handler
-fallback_site_dialog_required_notice
 manual_takeover
 ```
 

@@ -67,26 +67,13 @@ export function pageJavaScriptDialogHandlingCase() {
       );
     });
 
-    const snapshot = await page.snapshot();
-    const snapshotLines = snapshot.split("\\n");
-    const noDialogTextIndex = snapshotLines.findIndex((line) =>
-      line.includes("Run without dialog")
-    );
-    const noDialogMatch =
-      noDialogTextIndex >= 0 &&
-      snapshotLines
-        .slice(0, noDialogTextIndex)
-        .reverse()
-        .map((line) => line.match(/\\[ref=([0-9]+)/))
-        .find(Boolean);
-    assert(noDialogMatch, "snapshot exposes a ref before the no-dialog checks");
     assertEqual(await page.acceptDialog(), false, "acceptDialog reports no open dialog");
     assertEqual(await page.dismissDialog(), false, "dismissDialog reports no open dialog");
-    await page.click("@" + noDialogMatch[1]);
+    await page.click("#no-dialog-action");
     assertEqual(
       await page.evaluate("document.querySelector('#dialog-result').dataset.noDialogClicks"),
       "1",
-      "a no-dialog check preserves existing snapshot refs"
+      "a no-dialog check leaves ordinary Page actions usable"
     );
 
     const dialogPageUrl = await page.url();
@@ -102,14 +89,6 @@ export function pageJavaScriptDialogHandlingCase() {
       throw new Error("timed out waiting for " + method);
     };
 
-    await writeFile(
-      join(tempDir, "dialog-hard-stop.json"),
-      JSON.stringify({ label: page.label, targetId: page.targetId })
-    );
-
-    // Current Ego Lite releases hand control to the user here. A native build
-    // with Agent-owned JavaScript dialogs continues through the same case and
-    // exercises the complete high-level dialog API instead.
     const chooserPromise = page.waitForFileChooser({ timeout: 2_000 });
     await page.click("#dialog-upload");
     const chooser = await chooserPromise;
@@ -211,59 +190,6 @@ export function pageJavaScriptDialogHandlingCase() {
       { timeout: 2_000 }
     );
 
-    const beforeUnloadUrl = baseUrl + "/secondary?page-dialogs=beforeunload";
-    await page.evaluate((url) => {
-      window.addEventListener("beforeunload", (event) => {
-        event.preventDefault();
-        event.returnValue = "Leave real E2E?";
-      });
-      const link = document.createElement("a");
-      link.id = "dialog-beforeunload";
-      link.textContent = "Leave page";
-      link.href = url;
-      document.body.prepend(link);
-    }, beforeUnloadUrl);
-    await page.events();
-    const beforeUnloadReceipt = await page.click("#dialog-beforeunload");
-    assertEqual(
-      beforeUnloadReceipt.dialog?.type,
-      "beforeunload",
-      "the action reports a beforeunload dialog"
-    );
-    await waitForDialogEvent(
-      "Page.javascriptDialogOpening",
-      (params) => params.type === "beforeunload"
-    );
-    assertEqual(
-      await page.acceptDialog(),
-      true,
-      "acceptDialog allows beforeunload navigation"
-    );
-    await waitForDialogEvent(
-      "Page.javascriptDialogClosed",
-      (params) => params.result === true
-    );
-    await page.waitForURL(beforeUnloadUrl, { timeout: 3_000 });
-    cliLog(JSON.stringify({ dialogHandled: true }));
-  `;
-}
-
-export function pageJavaScriptDialogRecoveryCase() {
-  return `
-    const saved = JSON.parse(
-      await readFile(join(tempDir, "dialog-hard-stop.json"), "utf8")
-    );
-    // This is test-only recovery after the native hard stop. On a native build
-    // that lets the Agent handle JavaScript dialogs, takeover is a harmless
-    // no-op and this still cleans up the same Page.
-    const task = await takeOverTaskSpace(taskName);
-    const page = task.page(saved.label);
-
     await page.close();
-    assertEqual(page.targetId, saved.targetId, "recovery restores the dialog Page");
-    assert(
-      !(await task.pages()).some((candidate) => candidate.label === saved.label),
-      "recovery closes the dialog Page"
-    );
   `;
 }

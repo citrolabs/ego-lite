@@ -146,8 +146,6 @@ export async function runRealBrowserE2e() {
     markerName,
     timeoutMs = 45000,
     expectedOutput,
-    acceptedCompletionOutput,
-    pendingOnExpectedTermination,
   ) {
     console.log(`-- ${name}`);
     const source = egoSource(body, {
@@ -179,17 +177,9 @@ export async function runRealBrowserE2e() {
       ]
         .filter(Boolean)
         .join("\n");
-      const completedWithAcceptedOutput =
-        !commandError &&
-        acceptedCompletionOutput &&
-        output.includes(acceptedCompletionOutput);
       const reportedExpectedTermination =
         expectedOutput && output.includes(expectedOutput);
-      if (
-        !commandError &&
-        !reportedExpectedTermination &&
-        !completedWithAcceptedOutput
-      ) {
+      if (!commandError && !reportedExpectedTermination) {
         throw new Error("the browser script completed instead of terminating");
       }
       if (commandError && expectedOutput && !reportedExpectedTermination) {
@@ -200,27 +190,9 @@ export async function runRealBrowserE2e() {
       // The marker is written only after newPage() and goto() have returned. Its presence
       // distinguishes the intended hard stop from an unrelated startup error.
       await stat(join(tempDir, markerName));
-      const assertions = completedWithAcceptedOutput
-        ? (extractAssertionCount(
-            commandResult?.stdout,
-            commandResult?.stderr,
-          ) ?? 1)
-        : 1;
-      const status =
-        !completedWithAcceptedOutput && pendingOnExpectedTermination
-          ? "pending"
-          : "pass";
-      const message =
-        status === "pending" ? pendingOnExpectedTermination : undefined;
-      recordResult(name, status, durationMs, assertions, message);
+      recordResult(name, "pass", durationMs, 1);
       console.log(
-        status === "pending"
-          ? `-- ${name} pending (${formatDuration(durationMs)}): ${message}`
-          : `-- ${name} passed (${formatDuration(durationMs)}, ${
-              completedWithAcceptedOutput
-                ? `${assertions} assertions, accepted completion`
-                : "expected termination"
-            })`,
+        `-- ${name} passed (${formatDuration(durationMs)}, expected termination)`,
       );
     } catch (error) {
       const message = error?.message || String(error);
@@ -244,8 +216,6 @@ export async function runRealBrowserE2e() {
         testCase.markerName,
         testCase.timeoutMs,
         testCase.expectedOutput,
-        testCase.acceptedCompletionOutput,
-        testCase.pendingOnExpectedTermination,
       );
       return;
     }
@@ -417,7 +387,6 @@ function printSummary(results, totalMs) {
   const total = results.length;
   const passed = results.filter((r) => r.status === "pass").length;
   const failed = results.filter((r) => r.status === "fail").length;
-  const pending = results.filter((r) => r.status === "pending").length;
   const skipped = results.filter((r) => r.status === "skip").length;
   const totalAssertions = results.reduce((sum, r) => sum + r.assertionCount, 0);
 
@@ -427,7 +396,6 @@ function printSummary(results, totalMs) {
     `  Passed:   ${passed}/${total}${total > 0 ? `  (${Math.round((passed / total) * 100)}%)` : ""}`,
   );
   if (failed > 0) console.log(`  Failed:   ${failed}/${total}`);
-  if (pending > 0) console.log(`  Pending:  ${pending}/${total}`);
   if (skipped > 0) console.log(`  Skipped:  ${skipped}/${total}`);
   console.log(`  Total time: ${formatDuration(totalMs)}`);
   console.log(`  Assertions: ${totalAssertions}`);
@@ -442,9 +410,7 @@ function printSummary(results, totalMs) {
         ? "PASS"
         : result.status === "fail"
           ? "FAIL"
-          : result.status === "pending"
-            ? "PENDING"
-            : "SKIP";
+          : "SKIP";
     const timing =
       result.status === "skip"
         ? "       "
@@ -464,15 +430,6 @@ function printSummary(results, totalMs) {
     console.log("");
     console.log("  Failures:");
     for (const result of failedResults) {
-      console.log(`    - ${result.name}: ${result.message}`);
-    }
-  }
-
-  const pendingResults = results.filter((r) => r.status === "pending");
-  if (pendingResults.length > 0) {
-    console.log("");
-    console.log("  Pending:");
-    for (const result of pendingResults) {
       console.log(`    - ${result.name}: ${result.message}`);
     }
   }

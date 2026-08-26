@@ -85,9 +85,6 @@ const USER_CONTROL_REASON_MESSAGES = Object.freeze({
   ),
   hid: userPromptGuidance("A browser device chooser for HID has appeared."),
   protocol_handler: permissionPrompt("protocol handler registration"),
-  fallback_site_dialog_required_notice: userPromptGuidance(
-    "The page has displayed a dialog that requires review.",
-  ),
   manual_takeover: USER_CONTROL_GUIDANCE,
 });
 

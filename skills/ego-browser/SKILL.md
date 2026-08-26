@@ -316,9 +316,6 @@ await page.acceptDialog("prompt response");
 // Or: await page.dismissDialog();
 ```
 
-If Ego Lite hands control to the user before returning the dialog, stop and wait
-for the user; do not retry the action.
-
 A receipt describes only the dispatched action and immediate popup or dialog
 observations; it does not verify the resulting application state.
 
