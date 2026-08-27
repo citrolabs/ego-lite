@@ -186,25 +186,79 @@ export async function enrichSnapshotRefFrames(
   }
   if (refsByBackendNode.size === 0) return;
 
-  for (const [frameId, frameSessionId] of iframeSessions) {
-    const sameProcess = frameSessionId === pageSessionId;
+  const pageOwner = "";
+  const ownersByRef = new Map(
+    [...refsByBackendNode.values()]
+      .flat()
+      .map((ref) => [ref, new Set<string>()]),
+  );
+  const contexts = [
+    { frameId: pageOwner, sessionId: pageSessionId, params: {} },
+    ...[...iframeSessions].map(([frameId, frameSessionId]) => ({
+      frameId,
+      sessionId: frameSessionId,
+      params: frameSessionId === pageSessionId ? { frameId } : {},
+    })),
+  ];
+
+  for (const context of contexts) {
     let tree;
     try {
       tree = await services.cdp(
         "Accessibility.getFullAXTree",
-        sameProcess ? { frameId } : {},
-        frameSessionId,
+        context.params,
+        context.sessionId,
       );
     } catch {
-      continue;
+      // Incomplete ownership data cannot safely disambiguate renderer-local ids.
+      return;
     }
     for (const node of tree?.nodes || []) {
       const backendNodeId = node?.backendDOMNodeId;
       const matches = refsByBackendNode.get(backendNodeId);
-      if (matches?.length !== 1 || matches[0].frameId) continue;
-      matches[0].frameId = frameId;
+      if (!matches || node?.ignored) continue;
+      for (const ref of matches) {
+        if (!snapshotRefMatchesAxNode(ref, node)) continue;
+        ownersByRef.get(ref)?.add(context.frameId);
+      }
     }
   }
+
+  for (const [ref, owners] of ownersByRef) {
+    if (owners.size !== 1) continue;
+    const [frameId] = owners;
+    if (frameId) ref.frameId = frameId;
+  }
+}
+
+function snapshotRefMatchesAxNode(ref: SnapshotRef, node: any): boolean {
+  if (
+    typeof ref.role === "string" &&
+    normalizeSnapshotRole(axValue(node?.role)) !==
+      normalizeSnapshotRole(ref.role)
+  ) {
+    return false;
+  }
+  return typeof ref.name !== "string" || axValue(node?.name) === ref.name;
+}
+
+function normalizeSnapshotRole(value: unknown): string {
+  const role = String(value || "").toLowerCase();
+  return (
+    {
+      listboxoption: "option",
+      textfield: "textbox",
+    }[role] || role
+  );
+}
+
+function axValue(value: any): string {
+  const raw = value?.value ?? value;
+  return typeof raw === "string" ||
+    typeof raw === "number" ||
+    typeof raw === "boolean"
+    ? String(raw)
+    : "";
 }
 
 /** Return whether one advertised locator resolves uniquely to its source ref. */
