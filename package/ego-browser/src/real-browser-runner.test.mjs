@@ -5,6 +5,7 @@ import {
   MACOS_EGO_LITE_CLI,
   resolveEgoBrowserCli,
 } from "../scripts/real-browser-e2e/ego-browser-cli.mjs";
+import { pageActionabilityCase } from "../scripts/real-browser-e2e/cases/page-actionability.mjs";
 import { pageScrolledScreenshotCase } from "../scripts/real-browser-e2e/cases/page-screenshot.mjs";
 import { parseOnlyCases } from "../scripts/real-browser-e2e/runner.mjs";
 
@@ -98,9 +99,14 @@ test("the scrolled screenshot fixture is larger than the live viewport", () => {
   assert.match(source, /scrollPosition\.x > 0 && scrollPosition\.y > 0/);
 });
 
-test("the scrolled screenshot case closes its managed Page from finally", () => {
-  assert.match(
+test("Page E2E cases close their managed Page from finally", () => {
+  for (const source of [
     pageScrolledScreenshotCase(),
-    /try\s*\{[\s\S]*\}\s*finally\s*\{\s*await page\.close\(\)/,
-  );
+    pageActionabilityCase(),
+  ]) {
+    assert.match(
+      source,
+      /try\s*\{[\s\S]*\}\s*finally\s*\{\s*await page\.close\(\)/,
+    );
+  }
 });
