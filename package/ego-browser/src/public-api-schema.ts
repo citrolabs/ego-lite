@@ -45,6 +45,10 @@ const position = option(
   "CSS-pixel offset from the element's top-left corner.",
 );
 const force = option("boolean", "Bypass pointer interception checks.");
+const label = option(
+  "nonEmptyString",
+  "Concise user-visible action description shown with the native mouse highlight.",
+);
 
 /**
  * Single source of truth for the v2 surface shown to Agents. Runtime option
@@ -411,7 +415,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: "Page.click",
     signature:
-      "await page.click(selector, { button?, clickCount?, delay?, position?, force?, timeout? })",
+      "await page.click(selector, { button?, clickCount?, delay?, position?, force?, timeout?, label? })",
     summary: "Click an element with native CDP input.",
     options: {
       button,
@@ -420,25 +424,27 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
       position,
       force,
       timeout: actionTimeout,
+      label,
     },
   },
   {
     name: "Page.dblclick",
     signature:
-      "await page.dblclick(selector, { button?, delay?, position?, force?, timeout? })",
+      "await page.dblclick(selector, { button?, delay?, position?, force?, timeout?, label? })",
     summary: "Double-click an element with native CDP input.",
-    options: { button, delay, position, force, timeout: actionTimeout },
+    options: { button, delay, position, force, timeout: actionTimeout, label },
   },
   {
     name: "Page.hover",
-    signature: "await page.hover(selector, { position?, force?, timeout? })",
+    signature:
+      "await page.hover(selector, { position?, force?, timeout?, label? })",
     summary: "Move the mouse over an element.",
-    options: { position, force, timeout: actionTimeout },
+    options: { position, force, timeout: actionTimeout, label },
   },
   {
     name: "Page.dragAndDrop",
     signature:
-      "await page.dragAndDrop(source, target, { button?, sourcePosition?, targetPosition?, force?, timeout? })",
+      "await page.dragAndDrop(source, target, { button?, sourcePosition?, targetPosition?, force?, timeout?, label? })",
     summary: "Drag from one element to another.",
     options: {
       button,
@@ -446,6 +452,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
       targetPosition: position,
       force,
       timeout: actionTimeout,
+      label,
     },
   },
   {
@@ -508,19 +515,24 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   },
   {
     name: "Page.mouse.click",
-    signature: "await page.mouse.click(x, y, { button?, clickCount?, delay? })",
+    signature:
+      "await page.mouse.click(x, y, { button?, clickCount?, delay?, label? })",
     summary: "Click CSS-pixel coordinates with native CDP input.",
     options: {
       button,
       clickCount: option("positiveInteger", "Number of clicks."),
       delay,
+      label,
     },
   },
   {
     name: "Page.mouse.move",
-    signature: "await page.mouse.move(x, y, { steps? })",
+    signature: "await page.mouse.move(x, y, { steps?, label? })",
     summary: "Move the mouse to CSS-pixel coordinates.",
-    options: { steps: option("positiveInteger", "Number of movement steps.") },
+    options: {
+      steps: option("positiveInteger", "Number of movement steps."),
+      label,
+    },
   },
   {
     name: "Page.mouse.down",
@@ -548,9 +560,10 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   },
   {
     name: "Page.mouse.wheel",
-    signature: "await page.mouse.wheel(deltaX, deltaY)",
+    signature: "await page.mouse.wheel(deltaX, deltaY, { label? })",
     summary:
       "Perform a short wheel-input motion at the current Page position; move or click over the intended scroll container first in each process.",
+    options: { label },
   },
   {
     name: "Page.keyboard.down",

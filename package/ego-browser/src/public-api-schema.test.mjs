@@ -38,6 +38,7 @@ test("the public API schema contains the v2 entry points and object methods", ()
   ]) {
     assert(names.has(name), `missing public API schema entry: ${name}`);
   }
+  assert.equal(names.has("showTaskState"), false);
   assert.equal(names.has("TaskSpace.listPages"), false);
   assert.equal(names.has("TaskSpace.close"), false);
   assert.equal(names.has("Page.scrollBy"), false);
@@ -51,6 +52,10 @@ test("schema-driven option validation rejects unknown and invalid fields", () =>
     delay: 0,
     force: true,
     timeout: 500,
+    label: "open account settings",
+  });
+  validatePublicApiOptions("Page.mouse.wheel", {
+    label: "scroll project board",
   });
   validatePublicApiOptions("Page.fetch", { saveAs: "/tmp/image.png" });
   validatePublicApiOptions("Page.screenshot", {
@@ -78,7 +83,7 @@ test("schema-driven option validation rejects unknown and invalid fields", () =>
   );
   assert.throws(
     () => validatePublicApiOptions("Page.click", { trial: true }),
-    /unknown option: trial\. Expected: await page\.click\(selector, \{ button\?, clickCount\?, delay\?, position\?, force\?, timeout\? \}\)/,
+    /unknown option: trial\. Expected: await page\.click\(selector, \{ button\?, clickCount\?, delay\?, position\?, force\?, timeout\?, label\? \}\)/,
   );
   assert.throws(
     () => validatePublicApiOptions("Page.screenshot", { scale: "invalid" }),
@@ -117,6 +122,12 @@ test("schema-driven option validation rejects unknown and invalid fields", () =>
 test("the generated reference contains signatures and option descriptions", () => {
   const markdown = publicApiMarkdown();
   assert.match(markdown, /`await profiles\(\)`/);
+  assert.doesNotMatch(markdown, /`await showTaskState\(state\)`/);
+  assert.match(
+    markdown,
+    /`await page\.click\(selector, \{ button\?, clickCount\?, delay\?, position\?, force\?, timeout\?, label\? \}\)`/,
+  );
+  assert.match(markdown, /`label`.*user-visible action description/);
   assert.match(markdown, /`await listTaskSpaces\(\)`/);
   assert.match(markdown, /`await taskSpace\(nameOrId, \{ profileId\? \}\)`/);
   assert.match(markdown, /a new space starts with managed Page p1/);

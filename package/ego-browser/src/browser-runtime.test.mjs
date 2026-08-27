@@ -114,6 +114,16 @@ test("frame sessions follow one Page target and are invalidated with it", async 
         ["frame-grandchild", "session:frame-grandchild"],
       ],
     );
+    assert.deepEqual(
+      [...first.parentFrameIds],
+      [
+        ["same-process-frame", "page-main"],
+        ["frame-child", "same-process-frame"],
+        ["same-process-inside-child", "frame-child"],
+        ["frame-grandchild", "same-process-inside-child"],
+      ],
+      "frame sessions retain the ancestry needed to render an OOPIF cursor",
+    );
     assert.equal(attachCounts.has("foreign-frame"), false);
 
     invalidateSession("page-main");

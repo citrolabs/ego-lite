@@ -43,6 +43,10 @@ infer Playwright methods such as `locator()`, `getByRole()`, `context()`,
 the documented `page.evaluate()` or `page.cdp()` escape hatches instead of
 guessing another method.
 
+Pointer actions accept an optional `label` with a concise 3-6 word description.
+Pass it with clicks, hovers, drags, or scrolling to keep the action text next to
+the visible agent cursor in sync with the action.
+
 When the user explicitly asks for ego-browser, start with a real browser command
 and diagnose the CLI or installation only if it fails.
 
@@ -233,8 +237,8 @@ spreadsheets, maps, and other interfaces that lack useful DOM semantics:
 
 ```js
 const path = await page.screenshot({ path: "/absolute/path/before.png" });
-await page.mouse.click(420, 260);
-await page.mouse.wheel(0, 600);
+await page.mouse.click(420, 260, { label: "open spreadsheet cell" });
+await page.mouse.wheel(0, 600, { label: "scroll project board" });
 await page.keyboard.paste("hello\tworld");
 console.log({ screenshot: path });
 ```

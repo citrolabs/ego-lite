@@ -49,6 +49,7 @@ import {
   type PageMouseButtonOptions,
   type PageMouseClickOptions,
   type PageMouseMoveOptions,
+  type PageMouseWheelOptions,
   type PageSelectOption,
 } from "./driver/page-actions.js";
 import {
@@ -291,6 +292,7 @@ type PageModelServices = {
     timeoutMs?: number,
   ): Promise<any>;
   showAgentMousePosition(x: number, y: number): Promise<void>;
+  showAgentTaskState(state: string): Promise<void>;
   withTemporaryClipboardText<T>(
     content: PageClipboardContent,
     action: () => Promise<T>,
@@ -498,7 +500,12 @@ class PageMouse {
     this.#lastButton = "none";
   }
 
-  async wheel(deltaX: number, deltaY: number): Promise<void> {
+  async wheel(
+    deltaX: number,
+    deltaY: number,
+    options: PageMouseWheelOptions = {},
+  ): Promise<void> {
+    validatePublicApiOptions("Page.mouse.wheel", options);
     return this.#run((services, sessionId) =>
       wheelInPage(
         services,
@@ -508,6 +515,7 @@ class PageMouse {
         deltaX,
         deltaY,
         this.#modifierMask(),
+        options,
       ),
     );
   }
@@ -659,6 +667,11 @@ const baseDefaultServices: Omit<PageModelServices, "ledger" | "pageBudget"> = {
     await invokeEgo("page.mouse.move", () =>
       ego.animationHighlightMouseToPosition(x, y),
     );
+  },
+  async showAgentTaskState(state) {
+    const ego = browserEgo();
+    if (typeof ego.setAgentTaskState !== "function") return;
+    await invokeEgo("page.mouse.label", () => ego.setAgentTaskState(state));
   },
   withTemporaryClipboardText,
   snapshot: snapshotRaw,
