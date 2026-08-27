@@ -162,105 +162,6 @@ function renderSnapshotTree(
   return output;
 }
 
-/**
- * Add frame provenance that older native snapshots omit.
- *
- * One AX-tree read per frame is enough to map every unique backend node in the
- * snapshot. Repeated backend ids cannot be disambiguated without native
- * `refId`/`frameId` support, so those refs deliberately remain unscoped.
- */
-export async function enrichSnapshotRefFrames(
-  services: SnapshotServices,
-  pageSessionId: string,
-  iframeSessions: Map<string, string>,
-  refs: SnapshotRef[] = [],
-): Promise<void> {
-  if (!(iframeSessions instanceof Map) || iframeSessions.size === 0) return;
-
-  const refsByBackendNode = new Map<number, SnapshotRef[]>();
-  for (const ref of refs) {
-    if (ref.frameId || !Number.isInteger(ref.backendNodeId)) continue;
-    const matches = refsByBackendNode.get(ref.backendNodeId!) || [];
-    matches.push(ref);
-    refsByBackendNode.set(ref.backendNodeId!, matches);
-  }
-  if (refsByBackendNode.size === 0) return;
-
-  const pageOwner = "";
-  const ownersByRef = new Map(
-    [...refsByBackendNode.values()]
-      .flat()
-      .map((ref) => [ref, new Set<string>()]),
-  );
-  const contexts = [
-    { frameId: pageOwner, sessionId: pageSessionId, params: {} },
-    ...[...iframeSessions].map(([frameId, frameSessionId]) => ({
-      frameId,
-      sessionId: frameSessionId,
-      params: frameSessionId === pageSessionId ? { frameId } : {},
-    })),
-  ];
-
-  for (const context of contexts) {
-    let tree;
-    try {
-      tree = await services.cdp(
-        "Accessibility.getFullAXTree",
-        context.params,
-        context.sessionId,
-      );
-    } catch {
-      // Incomplete ownership data cannot safely disambiguate renderer-local ids.
-      return;
-    }
-    for (const node of tree?.nodes || []) {
-      const backendNodeId = node?.backendDOMNodeId;
-      const matches = refsByBackendNode.get(backendNodeId);
-      if (!matches || node?.ignored) continue;
-      for (const ref of matches) {
-        if (!snapshotRefMatchesAxNode(ref, node)) continue;
-        ownersByRef.get(ref)?.add(context.frameId);
-      }
-    }
-  }
-
-  for (const [ref, owners] of ownersByRef) {
-    if (owners.size !== 1) continue;
-    const [frameId] = owners;
-    if (frameId) ref.frameId = frameId;
-  }
-}
-
-function snapshotRefMatchesAxNode(ref: SnapshotRef, node: any): boolean {
-  if (
-    typeof ref.role === "string" &&
-    normalizeSnapshotRole(axValue(node?.role)) !==
-      normalizeSnapshotRole(ref.role)
-  ) {
-    return false;
-  }
-  return typeof ref.name !== "string" || axValue(node?.name) === ref.name;
-}
-
-function normalizeSnapshotRole(value: unknown): string {
-  const role = String(value || "").toLowerCase();
-  return (
-    {
-      listboxoption: "option",
-      textfield: "textbox",
-    }[role] || role
-  );
-}
-
-function axValue(value: any): string {
-  const raw = value?.value ?? value;
-  return typeof raw === "string" ||
-    typeof raw === "number" ||
-    typeof raw === "boolean"
-    ? String(raw)
-    : "";
-}
-
 /** Return whether one advertised locator resolves uniquely to its source ref. */
 export async function validateSnapshotLocator(
   cdp: CdpAdapter,
@@ -349,19 +250,13 @@ function omitSnapshotLineLocator(
   return text;
 }
 
-/** Add frame provenance and validate stable locators for the Page API. */
+/** Preserve native frame provenance and validate stable locators for the Page API. */
 export async function preparePageSnapshotResult(
   services: SnapshotServices,
   pageSessionId: string,
   iframeSessions: Map<string, string>,
   result: SnapshotResult,
 ): Promise<SnapshotResult> {
-  await enrichSnapshotRefFrames(
-    services,
-    pageSessionId,
-    iframeSessions,
-    result?.refs || [],
-  );
   const adapter: CdpAdapter = {
     sendRaw: (method, params = {}, sessionId) =>
       services.cdp(method, params, sessionId),

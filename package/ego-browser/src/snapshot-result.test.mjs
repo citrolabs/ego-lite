@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import {
   compactSnapshotContent,
   compactSnapshotResult,
-  enrichSnapshotRefFrames,
   preparePageSnapshotResult,
   sanitizeSnapshotLocators,
   validateSnapshotLocator,
@@ -378,35 +377,34 @@ test("stable locator validation requires one match for the original backend node
   }
 });
 
-test("snapshot refs inherit their same-process and OOPIF frame ids", async () => {
-  const refs = [
-    { backendNodeId: 10, role: "button", name: "Top" },
-    { backendNodeId: 20, role: "button", name: "Same process" },
-    { backendNodeId: 30, role: "button", name: "OOPIF" },
-  ];
-  const calls = [];
+test("Page snapshots preserve native ref provenance", async () => {
+  const result = {
+    refs: [
+      {
+        refId: 1,
+        backendNodeId: 6,
+        role: "textbox",
+        name: "",
+      },
+      {
+        refId: 17,
+        backendNodeId: 6,
+        role: "textbox",
+        name: "",
+        frameId: "frame-oopif",
+      },
+    ],
+  };
+  const expected = structuredClone(result.refs);
   const services = {
-    async cdp(method, params, sessionId) {
-      calls.push([method, params, sessionId]);
-      assert.equal(method, "Accessibility.getFullAXTree");
-      if (params.frameId === "frame-same") {
-        return {
-          nodes: [
-            {
-              backendDOMNodeId: 20,
-              role: { value: "button" },
-              name: { value: "Same process" },
-            },
-          ],
-        };
-      }
+    async cdp(_method, _params, sessionId) {
       if (sessionId === "session:oopif") {
         return {
           nodes: [
             {
-              backendDOMNodeId: 30,
-              role: { value: "button" },
-              name: { value: "OOPIF" },
+              backendDOMNodeId: 6,
+              role: { value: "textbox" },
+              name: { value: "" },
             },
           ],
         };
@@ -415,69 +413,12 @@ test("snapshot refs inherit their same-process and OOPIF frame ids", async () =>
     },
   };
 
-  await enrichSnapshotRefFrames(
-    services,
-    "session:page",
-    new Map([
-      ["frame-same", "session:page"],
-      ["frame-oopif", "session:oopif"],
-    ]),
-    refs,
-  );
-
-  assert.equal(refs[0].frameId, undefined);
-  assert.equal(refs[1].frameId, "frame-same");
-  assert.equal(refs[2].frameId, "frame-oopif");
-  assert.deepEqual(calls, [
-    ["Accessibility.getFullAXTree", {}, "session:page"],
-    ["Accessibility.getFullAXTree", { frameId: "frame-same" }, "session:page"],
-    ["Accessibility.getFullAXTree", {}, "session:oopif"],
-  ]);
-});
-
-test("snapshot refs stay top-level when a frame repeats their backend node id", async () => {
-  const refs = [
-    { backendNodeId: 21, role: "button", name: "Increment counter" },
-  ];
-  const services = {
-    async cdp(method, params, sessionId) {
-      assert.equal(method, "Accessibility.getFullAXTree");
-      if (sessionId === "session:page" && !params.frameId) {
-        return {
-          nodes: [
-            {
-              backendDOMNodeId: 21,
-              role: { value: "button" },
-              name: { value: "Increment counter" },
-            },
-          ],
-        };
-      }
-      if (sessionId === "session:oopif") {
-        return {
-          nodes: [
-            {
-              backendDOMNodeId: 21,
-              role: { value: "button" },
-              name: { value: "Increment counter" },
-            },
-          ],
-        };
-      }
-      return { nodes: [] };
-    },
-  };
-
-  await enrichSnapshotRefFrames(
+  await preparePageSnapshotResult(
     services,
     "session:page",
     new Map([["frame-oopif", "session:oopif"]]),
-    refs,
+    result,
   );
 
-  assert.equal(
-    refs[0].frameId,
-    undefined,
-    "a renderer-local id collision must not reroute a top-level ref",
-  );
+  assert.deepEqual(result.refs, expected);
 });
