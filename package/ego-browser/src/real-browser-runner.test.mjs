@@ -5,6 +5,8 @@ import {
   MACOS_EGO_LITE_CLI,
   resolveEgoBrowserCli,
 } from "../scripts/real-browser-e2e/ego-browser-cli.mjs";
+import { pageActionabilityCase } from "../scripts/real-browser-e2e/cases/page-actionability.mjs";
+import { pageScrolledScreenshotCase } from "../scripts/real-browser-e2e/cases/page-screenshot.mjs";
 import { parseOnlyCases } from "../scripts/real-browser-e2e/runner.mjs";
 
 test("real-browser E2E honors an explicit Ego Lite CLI", () => {
@@ -87,4 +89,24 @@ test("real-browser E2E rejects an explicitly empty selection", () => {
     () => parseOnlyCases("[]", ["Page API alignment"]),
     /must select at least one/i,
   );
+});
+
+test("the scrolled screenshot fixture is larger than the live viewport", () => {
+  const source = pageScrolledScreenshotCase();
+
+  assert.match(source, /viewportWidth \+ 1000/);
+  assert.match(source, /viewportHeight \+ 100/);
+  assert.match(source, /scrollPosition\.x > 0 && scrollPosition\.y > 0/);
+});
+
+test("Page E2E cases close their managed Page from finally", () => {
+  for (const source of [
+    pageScrolledScreenshotCase(),
+    pageActionabilityCase(),
+  ]) {
+    assert.match(
+      source,
+      /try\s*\{[\s\S]*\}\s*finally\s*\{\s*await page\.close\(\)/,
+    );
+  }
 });

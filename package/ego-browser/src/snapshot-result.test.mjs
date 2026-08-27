@@ -390,10 +390,26 @@ test("snapshot refs inherit their same-process and OOPIF frame ids", async () =>
       calls.push([method, params, sessionId]);
       assert.equal(method, "Accessibility.getFullAXTree");
       if (params.frameId === "frame-same") {
-        return { nodes: [{ backendDOMNodeId: 20 }] };
+        return {
+          nodes: [
+            {
+              backendDOMNodeId: 20,
+              role: { value: "button" },
+              name: { value: "Same process" },
+            },
+          ],
+        };
       }
       if (sessionId === "session:oopif") {
-        return { nodes: [{ backendDOMNodeId: 30 }] };
+        return {
+          nodes: [
+            {
+              backendDOMNodeId: 30,
+              role: { value: "button" },
+              name: { value: "OOPIF" },
+            },
+          ],
+        };
       }
       return { nodes: [] };
     },
@@ -413,7 +429,55 @@ test("snapshot refs inherit their same-process and OOPIF frame ids", async () =>
   assert.equal(refs[1].frameId, "frame-same");
   assert.equal(refs[2].frameId, "frame-oopif");
   assert.deepEqual(calls, [
+    ["Accessibility.getFullAXTree", {}, "session:page"],
     ["Accessibility.getFullAXTree", { frameId: "frame-same" }, "session:page"],
     ["Accessibility.getFullAXTree", {}, "session:oopif"],
   ]);
+});
+
+test("snapshot refs stay top-level when a frame repeats their backend node id", async () => {
+  const refs = [
+    { backendNodeId: 21, role: "button", name: "Increment counter" },
+  ];
+  const services = {
+    async cdp(method, params, sessionId) {
+      assert.equal(method, "Accessibility.getFullAXTree");
+      if (sessionId === "session:page" && !params.frameId) {
+        return {
+          nodes: [
+            {
+              backendDOMNodeId: 21,
+              role: { value: "button" },
+              name: { value: "Increment counter" },
+            },
+          ],
+        };
+      }
+      if (sessionId === "session:oopif") {
+        return {
+          nodes: [
+            {
+              backendDOMNodeId: 21,
+              role: { value: "button" },
+              name: { value: "Increment counter" },
+            },
+          ],
+        };
+      }
+      return { nodes: [] };
+    },
+  };
+
+  await enrichSnapshotRefFrames(
+    services,
+    "session:page",
+    new Map([["frame-oopif", "session:oopif"]]),
+    refs,
+  );
+
+  assert.equal(
+    refs[0].frameId,
+    undefined,
+    "a renderer-local id collision must not reroute a top-level ref",
+  );
 });

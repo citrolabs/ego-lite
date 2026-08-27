@@ -170,6 +170,7 @@ test("profiles rejects malformed native results", async () => {
 
 test("taskspace helper surface exposes public helpers including claimTaskSpace", () => {
   const context = helperContext();
+  assert.equal(context.showTaskState, undefined);
   assert.equal(typeof context.taskSpace, "function");
   assert.equal(typeof context.profiles, "function");
   assert.equal(typeof context.listTaskSpaces, "function");

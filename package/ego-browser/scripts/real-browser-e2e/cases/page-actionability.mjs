@@ -3,6 +3,7 @@ export function pageActionabilityCase() {
     const task = await taskSpace(taskName);
     const page = await newPageAt(task, baseUrl + "/?page-actionability=" + Date.now());
 
+    try {
     await page.evaluate(() => {
       document.body.innerHTML = \
         '<style>' +
@@ -325,5 +326,8 @@ export function pageActionabilityCase() {
       JSON.stringify(["grouped"]),
       "selectOption can programmatically select an option in a disabled optgroup"
     );
+    } finally {
+      await page.close();
+    }
   `;
 }

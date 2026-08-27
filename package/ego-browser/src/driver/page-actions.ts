@@ -20,6 +20,7 @@ type PageActionServices = {
     timeoutMs?: number,
   ): Promise<any>;
   showAgentMousePosition(x: number, y: number): Promise<void>;
+  showAgentTaskState(state: string): Promise<void>;
   sleep(ms: number): Promise<void>;
   platform?: string;
 };
@@ -33,6 +34,7 @@ export type PageClickOptions = {
   position?: { x: number; y: number };
   force?: boolean;
   timeout?: number;
+  label?: string;
 };
 
 export type PageFillOptions = {
@@ -178,6 +180,7 @@ export type PageHoverOptions = {
   position?: { x: number; y: number };
   force?: boolean;
   timeout?: number;
+  label?: string;
 };
 
 export type PageDragAndDropOptions = {
@@ -186,12 +189,14 @@ export type PageDragAndDropOptions = {
   targetPosition?: { x: number; y: number };
   force?: boolean;
   timeout?: number;
+  label?: string;
 };
 
 export type PageMouseClickOptions = {
   button?: MouseButton;
   clickCount?: number;
   delay?: number;
+  label?: string;
 };
 
 export type PageMouseButtonOptions = {
@@ -201,6 +206,11 @@ export type PageMouseButtonOptions = {
 
 export type PageMouseMoveOptions = {
   steps?: number;
+  label?: string;
+};
+
+export type PageMouseWheelOptions = {
+  label?: string;
 };
 
 type MouseMoveState = PageMouseMoveOptions & {
@@ -254,18 +264,34 @@ export async function clickInPage(
       "page.click",
       options.force,
       sessionId,
+      iframeSessions,
+    );
+    const cursorPoint = await cursorPointForElement(
+      services,
+      sessionId,
+      target.sessionId,
+      target.frameId,
+      point,
+      point.local,
+      iframeSessions,
     );
     const buttons = pressedButtons(button);
-    await dispatchMouseEvent(services, target.sessionId, {
-      type: "mouseMoved",
-      x: point.x,
-      y: point.y,
-      button: "none",
-      buttons: 0,
-      modifiers,
-    });
-    if (target.frameId) {
-      // Moving into an iframe can adjust the outer document's
+    showAgentActionLabel(services, options.label ?? "Clicking element");
+    await dispatchMouseEvent(
+      services,
+      target.sessionId,
+      {
+        type: "mouseMoved",
+        x: point.x,
+        y: point.y,
+        button: "none",
+        buttons: 0,
+        modifiers,
+      },
+      cursorPoint,
+    );
+    if (target.frameId && target.sessionId === sessionId) {
+      // Moving into a same-process iframe can adjust the outer document's
       // scroll position. Translate the frame-local point again before the
       // press so native input uses the post-hover viewport coordinates.
       const pagePoint = await pagePointForFrame(
@@ -387,6 +413,7 @@ export async function fillInPage(
       "page.fill",
       true,
       sessionId,
+      iframeSessions,
     );
     const preparationSource = `function fillPreparation(value, clearFirst) {
       ${ACTION_TARGET_STATE_HELPERS}
@@ -529,6 +556,7 @@ export async function fillInPage(
         actionObjectId,
         resolved.frameId,
         sessionId,
+        iframeSessions,
       );
       result = await prepare();
       if (typeof result?.error === "string") {
@@ -878,6 +906,7 @@ async function clickResolvedElement(
   objectId: string,
   frameId?: string,
   pageSessionId = sessionId,
+  iframeSessions = new Map<string, string>(),
 ): Promise<void> {
   const point = await resolveElementPoint(
     services,
@@ -888,6 +917,7 @@ async function clickResolvedElement(
     "page.fill",
     false,
     pageSessionId,
+    iframeSessions,
   );
   await assertElementReceivesPointerEvents(
     services,
@@ -1011,7 +1041,9 @@ export async function hoverInPage(
       "page.hover",
       options.force,
       sessionId,
+      iframeSessions,
     );
+    showAgentActionLabel(services, options.label);
     await dispatchMouseEvent(services, resolved.sessionId, {
       type: "mouseMoved",
       x: point.x,
@@ -1071,6 +1103,7 @@ export async function dragAndDropInPage(
       "page.dragAndDrop",
       options.force,
       sessionId,
+      iframeSessions,
     );
     const targetPoint = await resolveElementPoint(
       services,
@@ -1081,9 +1114,11 @@ export async function dragAndDropInPage(
       "page.dragAndDrop",
       options.force,
       sessionId,
+      iframeSessions,
     );
     const button = options.button ?? "left";
     const buttons = pressedButtons(button);
+    showAgentActionLabel(services, options.label);
     await dispatchMouseEvent(services, source.sessionId, {
       type: "mouseMoved",
       x: sourcePoint.x,
@@ -1143,6 +1178,7 @@ export async function clickPointInPage(
   const button = options.button ?? "left";
   const clickCount = options.clickCount ?? 1;
   const buttons = pressedButtons(button);
+  showAgentActionLabel(services, options.label);
   await dispatchMouseEvent(services, sessionId, {
     type: "mouseMoved",
     x,
@@ -1188,6 +1224,7 @@ export async function moveMouseInPage(
 ): Promise<void> {
   assertPoint(x, y, "page.mouse.move");
   const steps = options.steps ?? 1;
+  showAgentActionLabel(services, options.label);
   for (let step = 1; step <= steps; step += 1) {
     await dispatchMouseEvent(services, sessionId, {
       type: "mouseMoved",
@@ -1233,11 +1270,13 @@ export async function wheelInPage(
   deltaX: number,
   deltaY: number,
   modifiers = 0,
+  options: PageMouseWheelOptions = {},
 ): Promise<void> {
   assertPoint(x, y, "page.mouse.wheel");
   if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY)) {
     throw new TypeError("page.mouse.wheel requires finite deltaX and deltaY");
   }
+  showAgentActionLabel(services, options.label);
   await dispatchWheelMotion(
     {
       dispatch: (params) => dispatchMouseEvent(services, sessionId, params),
@@ -1262,6 +1301,7 @@ async function resolveElementPoint(
   actionName = "page.click",
   force = false,
   pageSessionId = sessionId,
+  iframeSessions = new Map<string, string>(),
 ): Promise<{ x: number; y: number; local: { x: number; y: number } }> {
   if (
     position !== undefined &&
@@ -1318,7 +1358,13 @@ async function resolveElementPoint(
     return point;
   }`;
   if (frameId) {
-    await ensureFrameOwnerInView(services, pageSessionId, frameId, actionName);
+    await ensureFrameOwnerInView(
+      services,
+      pageSessionId,
+      frameId,
+      actionName,
+      iframeSessions,
+    );
   }
   for (let attempt = 0; attempt <= AUTO_SCROLL_ATTEMPTS; attempt += 1) {
     const response = await services.cdp(
@@ -1397,11 +1443,34 @@ async function ensureFrameOwnerInView(
   pageSessionId: string,
   frameId: string,
   actionName: string,
+  iframeSessions: Map<string, string>,
+  visited = new Set<string>(),
 ): Promise<void> {
+  if (visited.has(frameId)) return;
+  visited.add(frameId);
+  const parentFrameIds = (
+    iframeSessions as Map<string, string> & {
+      parentFrameIds?: ReadonlyMap<string, string | undefined>;
+    }
+  ).parentFrameIds;
+  const parentFrameId = parentFrameIds?.get(frameId);
+  if (parentFrameId && iframeSessions.has(parentFrameId)) {
+    await ensureFrameOwnerInView(
+      services,
+      pageSessionId,
+      parentFrameId,
+      actionName,
+      iframeSessions,
+      visited,
+    );
+  }
+  const ownerSessionId = parentFrameId
+    ? iframeSessions.get(parentFrameId) || pageSessionId
+    : pageSessionId;
   const owner = await services.cdp(
     "DOM.getFrameOwner",
     { frameId },
-    pageSessionId,
+    ownerSessionId,
   );
   const backendNodeId = owner?.backendNodeId;
   if (backendNodeId === undefined || backendNodeId === null) {
@@ -1413,7 +1482,7 @@ async function ensureFrameOwnerInView(
   const resolved = await services.cdp(
     "DOM.resolveNode",
     { backendNodeId, objectGroup: "ego-browser" },
-    pageSessionId,
+    ownerSessionId,
   );
   const objectId = resolved?.object?.objectId;
   if (!objectId) {
@@ -1443,7 +1512,7 @@ async function ensureFrameOwnerInView(
           returnByValue: true,
           awaitPromise: false,
         },
-        pageSessionId,
+        ownerSessionId,
       );
       const result = runtimeValue(response, source);
       if (typeof result?.error === "string") {
@@ -1469,14 +1538,14 @@ async function ensureFrameOwnerInView(
       await dispatchWheelMotion(
         {
           dispatch: (params) =>
-            dispatchMouseEvent(services, pageSessionId, params),
+            dispatchMouseEvent(services, ownerSessionId, params),
           sleep: services.sleep,
         },
         scroll,
       );
     }
   } finally {
-    await releaseObject(services, pageSessionId, objectId);
+    await releaseObject(services, ownerSessionId, objectId);
   }
 }
 
@@ -1517,6 +1586,79 @@ async function pagePointForFrame(
     throw new Error(`page action could not resolve iframe ${frameId} position`);
   }
   return { x: point.x + content[0], y: point.y + content[1] };
+}
+
+async function cursorPointForElement(
+  services: PageActionServices,
+  pageSessionId: string,
+  targetSessionId: string,
+  frameId: string | undefined,
+  inputPoint: { x: number; y: number },
+  localPoint: { x: number; y: number },
+  iframeSessions: Map<string, string>,
+): Promise<{ x: number; y: number }> {
+  if (!frameId || targetSessionId === pageSessionId) return inputPoint;
+  const parents = new Map<string, string | undefined>(
+    (
+      iframeSessions as Map<string, string> & {
+        parentFrameIds?: ReadonlyMap<string, string | undefined>;
+      }
+    ).parentFrameIds,
+  );
+  try {
+    const response = await services.cdp("Page.getFrameTree", {}, pageSessionId);
+    const collect = (tree: any, parentId: string | undefined) => {
+      const currentFrameId = tree?.frame?.id;
+      if (typeof currentFrameId !== "string") return;
+      parents.set(currentFrameId, tree.frame.parentId ?? parentId);
+      for (const child of tree.childFrames || []) {
+        collect(child, currentFrameId);
+      }
+    };
+    collect(response?.frameTree, undefined);
+  } catch {
+    // OOPIF ancestry from Target.getTargets remains usable when FrameTree is
+    // unavailable or omits cross-process descendants.
+  }
+
+  try {
+    let point = localPoint;
+    let currentFrameId: string | undefined = frameId;
+    let currentSessionId = targetSessionId;
+    const visited = new Set<string>();
+    while (
+      currentFrameId &&
+      parents.get(currentFrameId) &&
+      !visited.has(currentFrameId)
+    ) {
+      visited.add(currentFrameId);
+      let boundaryFrameId = currentFrameId;
+      let parentFrameId = parents.get(boundaryFrameId);
+      while (
+        parentFrameId &&
+        parents.get(parentFrameId) &&
+        (iframeSessions.get(parentFrameId) || pageSessionId) ===
+          currentSessionId
+      ) {
+        boundaryFrameId = parentFrameId;
+        parentFrameId = parents.get(boundaryFrameId);
+      }
+      const parentSessionId = parentFrameId
+        ? iframeSessions.get(parentFrameId) || pageSessionId
+        : pageSessionId;
+      point = (await pagePointForFrame(
+        services,
+        parentSessionId,
+        boundaryFrameId,
+        point,
+      ))!;
+      currentFrameId = parentFrameId;
+      currentSessionId = parentSessionId;
+    }
+    return point;
+  } catch {
+    return inputPoint;
+  }
 }
 
 async function assertElementReceivesPointerEvents(
@@ -1623,6 +1765,7 @@ async function dispatchMouseEvent(
   services: PageActionServices,
   sessionId: string,
   params: Record<string, unknown>,
+  cursorPoint?: { x: number; y: number },
 ): Promise<void> {
   await services.cdp("Input.dispatchMouseEvent", params, sessionId);
   if (
@@ -1632,7 +1775,7 @@ async function dispatchMouseEvent(
   ) {
     return;
   }
-  showAgentCursor(services, { x: params.x, y: params.y });
+  showAgentCursor(services, cursorPoint || { x: params.x, y: params.y });
 }
 
 function showAgentCursor(
@@ -1654,6 +1797,20 @@ function showAgentCursor(
     // still owns the correct task space, but never let rendering latency or an
     // unavailable overlay affect a completed website action.
     void services.showAgentMousePosition(x, y).catch(() => {});
+  } catch {
+    // Also tolerate an invalid adapter that throws before returning a Promise.
+  }
+}
+
+function showAgentActionLabel(
+  services: PageActionServices,
+  label: string | undefined,
+): void {
+  if (!label) return;
+  try {
+    // Labels are display-only, like the native cursor. Start the update before
+    // the pointer event but never let a rendering problem block the action.
+    void services.showAgentTaskState(label).catch(() => {});
   } catch {
     // Also tolerate an invalid adapter that throws before returning a Promise.
   }

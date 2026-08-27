@@ -571,8 +571,8 @@ export async function ensureSession(
 /**
  * Attach sessions for every live OOPIF that belongs to one top-level Page.
  * Standard CDP reports an iframe target's parent as a frame id. The frame tree
- * is therefore needed to skip same-process frames and recover the nearest
- * Page/OOPIF target ancestor without admitting unrelated iframe targets.
+ * and target metadata together recover the nearest Page/OOPIF target ancestor
+ * without admitting unrelated iframe targets.
  */
 export async function ensureFrameSessions(
   pageTargetId: string,
@@ -712,7 +712,9 @@ export async function ensureFrameSessions(
     sessionByTarget.set(info.targetId, sessionId);
   }
 
-  const sessions = new Map<string, string>();
+  const sessions = new Map<string, string>() as Map<string, string> & {
+    parentFrameIds?: ReadonlyMap<string, string | undefined>;
+  };
   const collectFrameSessions = (
     tree: any,
     inheritedSessionId: string,
@@ -732,6 +734,9 @@ export async function ensureFrameSessions(
       sessions.set(info.targetId, sessionByTarget.get(info.targetId)!);
     }
   }
+  sessions.parentFrameIds = new Map(
+    [...sessions.keys()].map((frameId) => [frameId, parentFrameIdOf(frameId)]),
+  );
   return sessions;
 }
 
