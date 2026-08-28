@@ -31,6 +31,70 @@ const DIALOG_BLOCKED_METHOD = (method) =>
   method.startsWith("Runtime.") ||
   method === "DOM.setFileInputFiles" ||
   method === "Page.navigate";
+const CURRENT_ORIGIN_EXPRESSION = "new URL(await page.url()).origin";
+/**
+ * Raw CDP clears that reach a whole browser profile. A task space picks its
+ * profile when it is created, so a call from an agent space wipes the login
+ * state of every space sharing that profile and of the user's own tabs in it,
+ * with nothing able to restore it. None of these commands takes a scope
+ * parameter, which is why the guidance names the scoped command to use instead
+ * rather than a narrower way to call the same one.
+ */
+const PROFILE_WIDE_CLEAR_GUIDANCE: Record<string, string> = {
+  "Network.clearBrowserCookies": [
+    "Network.clearBrowserCookies empties the cookie jar of the browser profile this",
+    "task space runs in. That jar is shared with the user's own tabs in that profile",
+    "and with every task space using the same profile, and the login state cannot be",
+    "restored.",
+    "",
+    "Clear the site you are working on instead:",
+    '  await page.cdp("Storage.clearDataForOrigin", {',
+    `    origin: ${CURRENT_ORIGIN_EXPRESSION},`,
+    '    storageTypes: "cookies",',
+    "  })",
+    "",
+    "Or delete individual cookies:",
+    '  await page.cdp("Network.deleteCookies", { name, url })',
+  ].join("\n"),
+  "Network.clearBrowserCache": [
+    "Network.clearBrowserCache empties the HTTP cache of the browser profile this task",
+    "space runs in, which the user's own tabs and every task space using the same",
+    "profile share.",
+    "",
+    "To get past a stale document, reload without the cache instead:",
+    '  await page.cdp("Page.reload", { ignoreCache: true })',
+    "",
+    "To drop one site's Cache API entries and service workers:",
+    '  await page.cdp("Storage.clearDataForOrigin", {',
+    `    origin: ${CURRENT_ORIGIN_EXPRESSION},`,
+    '    storageTypes: "cache_storage,service_workers",',
+    "  })",
+  ].join("\n"),
+  "Storage.clearCookies": [
+    "Storage.clearCookies without a browserContextId empties the cookie jar of the",
+    "browser profile this task space runs in. That jar is shared with the user's own",
+    "tabs in that profile and with every task space using the same profile.",
+    "",
+    "Clear the site you are working on instead:",
+    '  await page.cdp("Storage.clearDataForOrigin", {',
+    `    origin: ${CURRENT_ORIGIN_EXPRESSION},`,
+    '    storageTypes: "cookies",',
+    "  })",
+  ].join("\n"),
+};
+/** Guidance for a clear that would reach the whole profile, or undefined when scoped. */
+function profileWideClearGuidance(
+  method: string,
+  params: unknown,
+): string | undefined {
+  if (
+    method === "Storage.clearCookies" &&
+    (params as { browserContextId?: unknown } | null)?.browserContextId
+  ) {
+    return undefined;
+  }
+  return PROFILE_WIDE_CLEAR_GUIDANCE[method];
+}
 let nextMessageId = 1;
 const pending = new Map();
 const browserEvents = [];
@@ -99,6 +163,33 @@ export class PageDialogOpenedError extends Error {
     this.sessionId = sessionId;
     this.dialog = { ...dialog };
   }
+}
+
+/**
+ * Signals that a CDP command was refused because it clears state for the whole
+ * browser profile rather than for one site. The message carries the scoped
+ * command to use instead, so the caller has a route forward.
+ */
+export class ProfileWideCdpClearError extends Error {
+  readonly code = "EGO_CDP_PROFILE_WIDE_CLEAR";
+  readonly method: string;
+
+  constructor(method: string, guidance: string) {
+    super(guidance);
+    this.name = "ProfileWideCdpClearError";
+    this.method = method;
+  }
+}
+
+export function isProfileWideCdpClearError(
+  error: unknown,
+): error is ProfileWideCdpClearError {
+  return (
+    error instanceof ProfileWideCdpClearError ||
+    (Boolean(error) &&
+      typeof error === "object" &&
+      (error as { code?: unknown }).code === "EGO_CDP_PROFILE_WIDE_CLEAR")
+  );
 }
 
 export function isPageDialogOpenedError(
@@ -430,6 +521,13 @@ export async function browserCdp(
   sessionId = undefined,
   timeoutMs = RESPONSE_TIMEOUT_MS,
 ) {
+  // Ahead of cdpOverride: every caller reaches CDP through here — page.cdp(),
+  // task.cdp() and the bare cdp() helper alike — so refusing profile-wide
+  // clears at this one point covers all of them.
+  const profileWideClear = profileWideClearGuidance(method, params);
+  if (profileWideClear) {
+    throw new ProfileWideCdpClearError(method, profileWideClear);
+  }
   // Test mock: cdpOverride bypasses everything including session injection.
   // Include the effective timeout so tests can verify timing contracts without
   // waiting for a real CDP deadline.

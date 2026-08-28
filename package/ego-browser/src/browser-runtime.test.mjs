@@ -1,8 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { setOverrides } from "../dist/src/state.js";
+import { cdp } from "../dist/src/cdp-eval.js";
 import {
   CdpRequestTimeoutError,
+  ProfileWideCdpClearError,
   browserCdp,
   drainBrowserEvents,
   drainPageEvents,
@@ -1680,5 +1683,97 @@ test("file chooser interception suppresses the native picker and returns its inp
   } finally {
     if (previous === undefined) delete globalThis.ego;
     else globalThis.ego = previous;
+  }
+});
+
+test("a profile-wide CDP clear is refused before it reaches the browser", async () => {
+  // Real agent runs reached for these while reasoning about a single site; each
+  // call wiped the cookies and cache of every task space sharing the profile,
+  // along with the user's own tabs in it.
+  const attempted = [];
+  const restore = setOverrides({
+    cdpOverride: async (method) => {
+      attempted.push(method);
+      return {};
+    },
+  });
+  try {
+    for (const method of [
+      "Network.clearBrowserCookies",
+      "Network.clearBrowserCache",
+      "Storage.clearCookies",
+    ]) {
+      await assert.rejects(
+        () => browserCdp(method, {}),
+        (error) => {
+          assert(error instanceof ProfileWideCdpClearError);
+          assert.equal(error.code, "EGO_CDP_PROFILE_WIDE_CLEAR");
+          assert.equal(error.method, method);
+          return true;
+        },
+        `${method} must be refused`,
+      );
+    }
+    assert.deepEqual(attempted, [], "no refused clear reaches the transport");
+  } finally {
+    restore();
+  }
+});
+
+test("the refusal names a scoped command to run instead", async () => {
+  await assert.rejects(
+    () => browserCdp("Network.clearBrowserCookies", {}),
+    (error) => {
+      assert.match(error.message, /Storage\.clearDataForOrigin/);
+      assert.match(error.message, /storageTypes: "cookies"/);
+      return true;
+    },
+  );
+  await assert.rejects(
+    () => browserCdp("Network.clearBrowserCache", {}),
+    (error) => {
+      assert.match(error.message, /Page\.reload.*ignoreCache: true/);
+      return true;
+    },
+  );
+});
+
+test("the bare cdp() helper is guarded like page.cdp and task.cdp", async () => {
+  // Every entry point funnels into browserCdp, so the bare helper — the one most
+  // of the observed calls used — is covered by the same guard.
+  await assert.rejects(
+    () => cdp("Network.clearBrowserCookies"),
+    (error) => {
+      assert.equal(error.code, "EGO_CDP_PROFILE_WIDE_CLEAR");
+      return true;
+    },
+  );
+});
+
+test("a scoped clear still reaches the browser", async () => {
+  const attempted = [];
+  const restore = setOverrides({
+    cdpOverride: async (method) => {
+      attempted.push(method);
+      return {};
+    },
+  });
+  try {
+    await browserCdp("Network.deleteCookies", {
+      name: "session",
+      url: "https://example.com/",
+    });
+    await browserCdp("Storage.clearDataForOrigin", {
+      origin: "https://example.com",
+      storageTypes: "cookies",
+    });
+    await browserCdp("Storage.clearCookies", { browserContextId: "ctx-1" });
+    assert.deepEqual(attempted, [
+      "Network.deleteCookies",
+      "Storage.clearDataForOrigin",
+      "Storage.clearCookies",
+    ]);
+  } finally {
+    restore();
   }
 });
