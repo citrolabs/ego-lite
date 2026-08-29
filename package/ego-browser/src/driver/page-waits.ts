@@ -51,8 +51,13 @@ export type PageWaitForURLOptions = {
   timeout?: number;
 };
 
+export type PageURLMatcher = string | RegExp | ((url: URL) => boolean);
+
 export type PageWaitForURLHooks = {
-  interrupt?: (lastUrl: string) => Error | undefined;
+  interrupt?: (
+    lastUrl: string,
+    matches: (url: string) => boolean,
+  ) => Error | undefined;
 };
 
 export class PageNavigationTimeoutError extends Error {
@@ -157,29 +162,16 @@ export async function waitForSelectorInPage(
   );
 }
 
-/** Wait until one Page reaches an exact URL or matches a regular expression. */
+/** Wait until one Page URL matches an exact string, glob, RegExp, or predicate. */
 export async function waitForURLInPage(
   services: PageWaitServices,
   sessionId: string,
-  expected: string | RegExp,
+  expected: PageURLMatcher,
   options: PageWaitForURLOptions = {},
   hooks: PageWaitForURLHooks = {},
 ): Promise<void> {
-  if (
-    !(
-      (typeof expected === "string" && expected.length > 0) ||
-      expected instanceof RegExp
-    )
-  ) {
-    throw new TypeError(
-      "page.waitForURL expected URL must be a non-empty string or RegExp",
-    );
-  }
+  const matcher = compilePageURLMatcher(expected);
   const timeoutMs = options.timeout ?? 10_000;
-  const pattern =
-    expected instanceof RegExp
-      ? new RegExp(expected.source, expected.flags)
-      : undefined;
   const deadline = services.now() + timeoutMs;
   let lastUrl = "";
   while (services.now() <= deadline) {
@@ -201,26 +193,158 @@ export async function waitForURLInPage(
     }
     if (typeof response?.result?.value === "string") {
       lastUrl = response.result.value;
-      if (typeof expected === "string") {
-        if (lastUrl === expected) return;
-      } else {
-        pattern!.lastIndex = 0;
-        if (pattern!.test(lastUrl)) return;
-      }
+      if (matcher.matches(lastUrl)) return;
     }
-    const interruption = hooks.interrupt?.(lastUrl);
+    const interruption = hooks.interrupt?.(lastUrl, matcher.matches);
     if (interruption) throw interruption;
     const waitMs = deadline - services.now();
     if (waitMs <= 0) break;
     await services.sleep(Math.min(100, waitMs));
   }
-  const expectation =
-    typeof expected === "string"
-      ? JSON.stringify(expected)
-      : expected.toString();
   throw new Error(
-    `page.waitForURL timed out after ${timeoutMs}ms: expected ${expectation}; last URL was ${JSON.stringify(lastUrl)}`,
+    `page.waitForURL timed out after ${timeoutMs}ms: expected ${matcher.description}; last URL was ${JSON.stringify(lastUrl)}`,
   );
+}
+
+function compilePageURLMatcher(expected: PageURLMatcher): {
+  matches(url: string): boolean;
+  description: string;
+} {
+  if (typeof expected === "string") {
+    if (expected.length === 0) {
+      throw invalidPageURLMatcherError();
+    }
+    const pattern = urlGlobToRegExp(expected);
+    return {
+      matches: (url) => pattern.test(url),
+      description: JSON.stringify(expected),
+    };
+  }
+
+  if (expected instanceof RegExp) {
+    const pattern = new RegExp(expected.source, expected.flags);
+    return {
+      matches(url) {
+        pattern.lastIndex = 0;
+        return pattern.test(url);
+      },
+      description: pattern.toString(),
+    };
+  }
+
+  if (typeof expected === "function") {
+    return {
+      matches(url) {
+        let parsed: URL;
+        try {
+          parsed = new URL(url);
+        } catch {
+          return false;
+        }
+        const result = expected(parsed);
+        if (typeof result !== "boolean") {
+          throw new TypeError(
+            "page.waitForURL predicate must return a boolean synchronously",
+          );
+        }
+        return result;
+      },
+      description: "a URL predicate",
+    };
+  }
+
+  throw invalidPageURLMatcherError();
+}
+
+function invalidPageURLMatcherError(): TypeError {
+  return new TypeError(
+    "page.waitForURL expected URL must be a non-empty string, RegExp, or function",
+  );
+}
+
+const URL_REGEX_SPECIAL_CHARS = new Set([
+  "$",
+  "^",
+  "+",
+  ".",
+  "*",
+  "(",
+  ")",
+  "|",
+  "\\",
+  "?",
+  "{",
+  "}",
+  "[",
+  "]",
+]);
+
+/** Compile the URL-glob subset used by Playwright string matchers. */
+function urlGlobToRegExp(glob: string): RegExp {
+  const tokens = ["^"];
+  let inGroup = false;
+
+  for (let index = 0; index < glob.length; index += 1) {
+    const char = glob[index];
+    if (char === "\\" && index + 1 < glob.length) {
+      const escaped = glob[(index += 1)];
+      tokens.push(
+        URL_REGEX_SPECIAL_CHARS.has(escaped) ? `\\${escaped}` : escaped,
+      );
+      continue;
+    }
+
+    if (char === "*") {
+      const charBefore = glob[index - 1];
+      let starCount = 1;
+      while (glob[index + 1] === "*") {
+        starCount += 1;
+        index += 1;
+      }
+      if (starCount === 1) {
+        tokens.push("[^/]*");
+        continue;
+      }
+
+      const charAfter = glob[index + 1];
+      if (charAfter === "/") {
+        tokens.push(charBefore === "/" ? "(?:(?:.+)/)?" : "(?:.*/)");
+        index += 1;
+      } else {
+        tokens.push(".*");
+      }
+      continue;
+    }
+
+    if (char === "{") {
+      if (inGroup) {
+        throw invalidURLGlobError(glob, "nested '{' is not supported");
+      }
+      inGroup = true;
+      tokens.push("(");
+      continue;
+    }
+    if (char === "}") {
+      if (!inGroup) throw invalidURLGlobError(glob, "unmatched '}'");
+      inGroup = false;
+      tokens.push(")");
+      continue;
+    }
+    if (char === "," && inGroup) {
+      tokens.push("|");
+      continue;
+    }
+
+    tokens.push(URL_REGEX_SPECIAL_CHARS.has(char) ? `\\${char}` : char);
+  }
+
+  if (inGroup) throw invalidURLGlobError(glob, "unmatched '{'");
+  tokens.push("$");
+  return new RegExp(tokens.join(""));
+}
+
+function invalidURLGlobError(glob: string, reason: string): TypeError {
+  return new TypeError(`Invalid URL glob ${JSON.stringify(glob)}: ${reason}`);
 }
 
 /** Navigate one Page and wait for the selected state of this navigation. */

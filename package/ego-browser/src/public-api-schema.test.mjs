@@ -155,6 +155,10 @@ test("the generated reference contains signatures and option descriptions", () =
   );
   assert.match(
     markdown,
+    /`await page\.waitForURL\(urlMatcher, \{ timeout\? \}\)`.*Playwright-style glob.*predicate receiving a URL object/,
+  );
+  assert.match(
+    markdown,
     /`await page\.waitForFunction\(fnOrString, argument\?, \{ timeout\?, polling\? \}\)`/,
   );
   assert.match(

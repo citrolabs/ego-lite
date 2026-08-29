@@ -70,6 +70,7 @@ import {
   waitForSelectorInPage,
   waitForURLInPage,
   type PageGotoWaitUntil,
+  type PageURLMatcher,
   type PageWaitForLoadStateOptions,
   type PageWaitForSelectorOptions,
   type PageWaitForURLOptions,
@@ -1505,15 +1506,15 @@ class Page {
   }
 
   async waitForURL(
-    expected: string | RegExp,
+    expected: PageURLMatcher,
     options: PageWaitForURLOptions = {},
   ): Promise<void> {
     validatePublicApiOptions("Page.waitForURL", options);
     const page = await this.#resolve();
     return this.#services.gate.withPage(page, ({ sessionId }) =>
       waitForURLInPage(this.#services, sessionId, expected, options, {
-        interrupt: (lastUrl) =>
-          matchingPopupWaitError(this.spaceId, this.label, lastUrl, expected),
+        interrupt: (lastUrl, matches) =>
+          matchingPopupWaitError(this.spaceId, this.label, lastUrl, matches),
       }),
     );
   }
@@ -3064,14 +3065,14 @@ function matchingPopupWaitError(
   spaceId: number,
   openerLabel: string,
   lastUrl: string,
-  expected: string | RegExp,
+  matches: (url: string) => boolean,
 ): (Error & { code: string }) | undefined {
   const popup = peekUnhandledPageNotices().find(
     (notice) =>
       notice.spaceId === spaceId &&
       notice.openerLabel === openerLabel &&
       typeof notice.url === "string" &&
-      urlMatches(notice.url, expected),
+      matches(notice.url),
   );
   if (!popup) return undefined;
 
@@ -3083,13 +3084,6 @@ function matchingPopupWaitError(
   ) as Error & { code: string };
   error.code = "EGO_URL_OPENED_IN_POPUP";
   return error;
-}
-
-function urlMatches(url: string, expected: string | RegExp): boolean {
-  if (typeof expected === "string") return url === expected;
-  const pattern = new RegExp(expected.source, expected.flags);
-  pattern.lastIndex = 0;
-  return pattern.test(url);
 }
 
 function assertCdpCall(

@@ -273,8 +273,9 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   },
   {
     name: "Page.waitForURL",
-    signature: "await page.waitForURL(urlOrRegExp, { timeout? })",
-    summary: "Wait for an exact URL or regular-expression match.",
+    signature: "await page.waitForURL(urlMatcher, { timeout? })",
+    summary:
+      "Wait for an exact URL, Playwright-style glob, RegExp, or synchronous predicate receiving a URL object.",
     options: { timeout },
   },
   {

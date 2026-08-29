@@ -4180,6 +4180,12 @@ test("Page waitForURL follows a popup from about:blank without activating it", a
 
     await popup.waitForURL(expectedUrl, { timeout: 500 });
     await popup.waitForURL(/delayed-popup$/, { timeout: 1 });
+    await popup.waitForURL("**/delayed-popup", { timeout: 1 });
+    await popup.waitForURL(
+      (url) =>
+        url.hostname === "example.test" && url.pathname === "/delayed-popup",
+      { timeout: 1 },
+    );
 
     assert.equal(await popup.url(), expectedUrl);
     assert.equal(
@@ -4262,7 +4268,7 @@ test("Page.waitForURL immediately reports a matching popup opened by this Page",
     await source.click("#open-popup");
 
     await assert.rejects(
-      source.waitForURL(/\/drive\/home/, { timeout: 15_000 }),
+      source.waitForURL("**/drive/home", { timeout: 15_000 }),
       (error) => {
         assert.equal(error.code, "EGO_URL_OPENED_IN_POPUP");
         assert.match(error.message, /p1 did not navigate/);
@@ -4301,11 +4307,19 @@ test("Page waitForURL validates its matcher and reports the last URL", async () 
     );
     await assert.rejects(
       () => page.waitForURL("", { timeout: 10 }),
-      /non-empty string or RegExp/,
+      /non-empty string, RegExp, or function/,
     );
     await assert.rejects(
       () => page.waitForURL(42, { timeout: 10 }),
-      /non-empty string or RegExp/,
+      /non-empty string, RegExp, or function/,
+    );
+    await assert.rejects(
+      () => page.waitForURL(async () => true, { timeout: 10 }),
+      /predicate must return a boolean synchronously/,
+    );
+    await assert.rejects(
+      () => page.waitForURL("**/{ready", { timeout: 10 }),
+      /Invalid URL glob.*unmatched '\{'/,
     );
     await assert.rejects(
       () => page.waitForURL(/blank/, { timeout: 0 }),

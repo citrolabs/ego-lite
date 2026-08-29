@@ -74,7 +74,9 @@ export function pagePopupWaiterCase() {
       const startedAt = Date.now();
       let waitError;
       try {
-        await source.waitForURL(/popup-waiter=wrong-page$/, { timeout: 15_000 });
+        await source.waitForURL("**/secondary?popup-waiter=wrong-page", {
+          timeout: 15_000,
+        });
       } catch (error) {
         waitError = error;
       }

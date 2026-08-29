@@ -368,7 +368,11 @@ export function pageLoadStatesCase() {
     );
     assert(Boolean(delayedPopup), "background discovery adopts the delayed popup");
     const popup = task.page(delayedPopup[0]);
-    await popup.waitForURL(/page-load-states=delayed-popup$/, { timeout: 3_000 });
+    await popup.waitForURL("**/secondary?page-load-states=*", { timeout: 3_000 });
+    await popup.waitForURL(
+      (url) => url.searchParams.get("page-load-states") === "delayed-popup",
+      { timeout: 3_000 }
+    );
     assertIncludes(
       await popup.url(),
       "page-load-states=delayed-popup",

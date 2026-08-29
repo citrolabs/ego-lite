@@ -48,6 +48,73 @@ test("waitForURLInPage recovers from a transient execution-context change", asyn
   );
 });
 
+test("waitForURLInPage supports Playwright-style URL globs", async () => {
+  let now = 0;
+  let attempt = 0;
+  const services = {
+    async cdp() {
+      attempt += 1;
+      return {
+        result: {
+          value:
+            attempt === 1
+              ? "https://example.test/releases/draft/nested/item?channel=canary"
+              : "https://example.test/releases/ready/item?channel=stable",
+        },
+      };
+    },
+    now: () => now,
+    async sleep(ms) {
+      now += ms;
+    },
+  };
+
+  await waitForURLInPage(
+    services,
+    "session:page",
+    "**/releases/{draft,ready}/*?channel=*",
+    { timeout: 500 },
+  );
+
+  assert.equal(attempt, 2, "a single star must not cross a path separator");
+});
+
+test("waitForURLInPage passes a URL object to a synchronous predicate", async () => {
+  let now = 0;
+  let attempt = 0;
+  const seen = [];
+  const services = {
+    async cdp() {
+      attempt += 1;
+      return {
+        result: {
+          value: `https://example.test/jobs?id=${attempt === 1 ? 41 : 42}`,
+        },
+      };
+    },
+    now: () => now,
+    async sleep(ms) {
+      now += ms;
+    },
+  };
+
+  await waitForURLInPage(
+    services,
+    "session:page",
+    (url) => {
+      assert(url instanceof URL);
+      seen.push(url.href);
+      return url.searchParams.get("id") === "42";
+    },
+    { timeout: 500 },
+  );
+
+  assert.deepEqual(seen, [
+    "https://example.test/jobs?id=41",
+    "https://example.test/jobs?id=42",
+  ]);
+});
+
 test("document load waits do not sleep past the budget after a slow probe", async () => {
   let now = 0;
   let calls = 0;
