@@ -36,6 +36,17 @@ let networkEventUsers = 0;
 let networkEventsOwnDomain = false;
 let networkEnableInFlight: Promise<void> | null = null;
 
+// Responses that stream (headers + partial chunks, never finishing) must not
+// hold waitForResponse hostage. Body priming is best-effort: give the body a
+// bounded grace to complete, then give up. Accessors rethrow the stored
+// "unavailable" error instead of blocking.
+const BODY_PRIME_GRACE_MS = 250;
+
+// Body primes kicked off by waitForResponse. release() waits for these
+// (bounded by BODY_PRIME_GRACE_MS) before disabling the Network domain so the
+// body is cached while the domain is still enabled.
+const pendingBodyPrimes: Set<Promise<void>> = new Set();
+
 /**
  * Sleep for a fixed number of milliseconds.
  * @param {number} [ms=1000] Milliseconds to wait.
@@ -262,6 +273,20 @@ async function waitForNetworkMatch(
       matched = processNetworkEvent(kind, matcher, event, requests, timeout);
       return Boolean(matched);
     }, browserEventTimeout(timeout));
+    // Response bodies are only available while the Network domain is enabled.
+    // Prime the matched facade before release() so later .body()/.text()/.json()
+    // calls do not race Network.disable. Do this while we still hold the domain
+    // refcount — never defer release to the body accessor (that leaks if the
+    // caller never reads the body). The prime is bounded by BODY_PRIME_GRACE_MS:
+    // a streaming response (headers + partial chunks, never finishing) must not
+    // make waitForResponse block for the full caller timeout.
+    if (kind === "response" && matched) {
+      const prime = primeResponseBody(matched);
+      pendingBodyPrimes.add(prime);
+      prime.finally(() => {
+        pendingBodyPrimes.delete(prime);
+      });
+    }
     return matched;
   } catch (error) {
     if (/page\.waitForEvent timed out/i.test(error?.message || "")) {
@@ -363,6 +388,17 @@ function createRequestFacade(info) {
   };
 }
 
+const PRIME_RESPONSE_BODY = Symbol("primeResponseBody");
+
+type CachedResponseBody = {
+  body?: string;
+  base64Encoded?: boolean;
+};
+
+type ResponseBodyState =
+  | { status: "ready"; body: CachedResponseBody }
+  | { status: "error"; error: Error };
+
 function createResponseFacade(info, timeout) {
   const response = info.response || {};
   const request =
@@ -378,6 +414,51 @@ function createResponseFacade(info, timeout) {
     });
   const status = Number(response.status || 0);
   const headers = normalizeHeaders(response.headers);
+  let bodyState: ResponseBodyState | null = null;
+  let bodyLoad: Promise<ResponseBodyState> | null = null;
+
+  function loadBody(): Promise<ResponseBodyState> {
+    if (bodyState) {
+      return Promise.resolve(bodyState);
+    }
+    if (bodyLoad) {
+      return bodyLoad;
+    }
+    bodyLoad = readResponseBody(info.requestId, timeout)
+      .then((body): ResponseBodyState => {
+        bodyState = { status: "ready", body };
+        return bodyState;
+      })
+      .catch((error): ResponseBodyState => {
+        const message =
+          error instanceof Error
+            ? error.message
+            : error == null
+              ? String(error)
+              : String(error);
+        bodyState = {
+          status: "error",
+          error:
+            error instanceof Error &&
+            /response body is unavailable/.test(error.message)
+              ? error
+              : new Error(
+                  `response body is unavailable for request ${info.requestId}: ${message}`,
+                ),
+        };
+        return bodyState;
+      });
+    return bodyLoad;
+  }
+
+  async function requireBody(): Promise<CachedResponseBody> {
+    const state = await loadBody();
+    if (state.status === "error") {
+      throw state.error;
+    }
+    return state.body;
+  }
+
   const facade: any = {
     url: () => response.url || request.url || "",
     status: () => status,
@@ -386,20 +467,31 @@ function createResponseFacade(info, timeout) {
     headers: () => ({ ...headers }),
     request: () => createRequestFacade(request),
     body: async () => {
-      const body = await readResponseBody(info.requestId, timeout);
+      const body = await requireBody();
       return body.base64Encoded
         ? Buffer.from(body.body || "", "base64")
         : Buffer.from(body.body || "", "utf8");
     },
     text: async () => {
-      const body = await readResponseBody(info.requestId, timeout);
+      const body = await requireBody();
       return body.base64Encoded
         ? Buffer.from(body.body || "", "base64").toString("utf8")
         : body.body || "";
     },
   };
   facade.json = async () => JSON.parse(await facade.text());
+  // Internal: waitForNetworkMatch primes the body before Network.disable.
+  facade[PRIME_RESPONSE_BODY] = () => loadBody();
   return facade;
+}
+
+async function primeResponseBody(facade) {
+  const prime = facade?.[PRIME_RESPONSE_BODY];
+  if (typeof prime !== "function") {
+    return;
+  }
+  // Always settle before release(); body accessors rethrow stored errors later.
+  await prime();
 }
 
 async function readResponseBody(requestId, timeout) {
@@ -409,12 +501,19 @@ async function readResponseBody(requestId, timeout) {
   try {
     return await cdp("Network.getResponseBody", { requestId });
   } catch (firstError) {
+    // Bound how long we wait for the body to finish: a response that streams
+    // (headers + partial chunks, never finishing) would otherwise stall the
+    // prime for the full timeout — or forever when timeout is 0.
+    const bodyWait =
+      timeout === 0
+        ? BODY_PRIME_GRACE_MS
+        : Math.min(timeout, BODY_PRIME_GRACE_MS);
     await waitForBrowserEvent(
       (event) =>
         (event?.method === "Network.loadingFinished" ||
           event?.method === "Network.loadingFailed") &&
         event?.params?.requestId === requestId,
-      browserEventTimeout(timeout),
+      bodyWait,
     ).catch(() => null);
     try {
       return await cdp("Network.getResponseBody", { requestId });
@@ -473,6 +572,12 @@ function acquireNetworkEvents() {
         await networkEnableInFlight;
       }
       if (networkEventsOwnDomain) {
+        // Body primes are only useful while the Network domain is enabled.
+        // Wait (bounded — each prime gives up after BODY_PRIME_GRACE_MS) so a
+        // quickly-available body is cached before the domain goes away.
+        if (pendingBodyPrimes.size > 0) {
+          await Promise.allSettled([...pendingBodyPrimes]);
+        }
         networkEventsOwnDomain = false;
         await cdp("Network.disable").catch(() => {
           // Best-effort cleanup; the next wait can enable the domain again.
