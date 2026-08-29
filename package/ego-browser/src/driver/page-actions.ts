@@ -259,12 +259,15 @@ export async function clickInPage(
       services,
       target.sessionId,
       target.objectId,
-      options.position,
-      target.frameId,
-      "page.click",
-      options.force,
-      sessionId,
-      iframeSessions,
+      {
+        position: options.position,
+        frameId: target.frameId,
+        actionName: "page.click",
+        hitTest: !options.force,
+        stability: "recompute",
+        pageSessionId: sessionId,
+        iframeSessions,
+      },
     );
     const cursorPoint = await cursorPointForElement(
       services,
@@ -308,6 +311,14 @@ export async function clickInPage(
         target.objectId,
         "page.click",
       );
+      if (!options.force) {
+        await assertElementReceivesPointerEvents(
+          services,
+          target.sessionId,
+          target.objectId,
+          point.local,
+        );
+      }
       await dispatchMouseEvent(services, target.sessionId, {
         type: "mouseMoved",
         x: point.x,
@@ -404,14 +415,12 @@ export async function fillInPage(
       resolved.sessionId,
       resolved.objectId,
     );
-    await resolveElementPoint(
+    await scrollElementIntoView(
       services,
       resolved.sessionId,
       actionObjectId,
-      undefined,
       resolved.frameId,
       "page.fill",
-      true,
       sessionId,
       iframeSessions,
     );
@@ -908,17 +917,14 @@ async function clickResolvedElement(
   pageSessionId = sessionId,
   iframeSessions = new Map<string, string>(),
 ): Promise<void> {
-  const point = await resolveElementPoint(
-    services,
-    sessionId,
-    objectId,
-    undefined,
+  const point = await resolveElementPoint(services, sessionId, objectId, {
     frameId,
-    "page.fill",
-    false,
+    actionName: "page.fill",
+    hitTest: true,
+    stability: "recompute",
     pageSessionId,
     iframeSessions,
-  );
+  });
   await assertElementReceivesPointerEvents(
     services,
     sessionId,
@@ -1036,12 +1042,15 @@ export async function hoverInPage(
       services,
       resolved.sessionId,
       resolved.objectId,
-      options.position,
-      resolved.frameId,
-      "page.hover",
-      options.force,
-      sessionId,
-      iframeSessions,
+      {
+        position: options.position,
+        frameId: resolved.frameId,
+        actionName: "page.hover",
+        hitTest: !options.force,
+        stability: "strict",
+        pageSessionId: sessionId,
+        iframeSessions,
+      },
     );
     showAgentActionLabel(services, options.label);
     await dispatchMouseEvent(services, resolved.sessionId, {
@@ -1098,23 +1107,29 @@ export async function dragAndDropInPage(
       services,
       source.sessionId,
       source.objectId,
-      options.sourcePosition,
-      source.frameId,
-      "page.dragAndDrop",
-      options.force,
-      sessionId,
-      iframeSessions,
+      {
+        position: options.sourcePosition,
+        frameId: source.frameId,
+        actionName: "page.dragAndDrop",
+        hitTest: !options.force,
+        stability: "strict",
+        pageSessionId: sessionId,
+        iframeSessions,
+      },
     );
     const targetPoint = await resolveElementPoint(
       services,
       target.sessionId,
       target.objectId,
-      options.targetPosition,
-      target.frameId,
-      "page.dragAndDrop",
-      options.force,
-      sessionId,
-      iframeSessions,
+      {
+        position: options.targetPosition,
+        frameId: target.frameId,
+        actionName: "page.dragAndDrop",
+        hitTest: !options.force,
+        stability: "strict",
+        pageSessionId: sessionId,
+        iframeSessions,
+      },
     );
     const button = options.button ?? "left";
     const buttons = pressedButtons(button);
@@ -1292,17 +1307,54 @@ export async function wheelInPage(
   );
 }
 
+// Editing only needs visibility, clicking needs a fresh safe point, and
+// hover/drag retain the stronger static-geometry contract.
+type ElementPointStability = "none" | "recompute" | "strict";
+
+type ResolveElementPointOptions = {
+  position?: { x: number; y: number };
+  frameId?: string;
+  actionName?: string;
+  hitTest?: boolean;
+  stability?: ElementPointStability;
+  pageSessionId?: string;
+  iframeSessions?: Map<string, string>;
+};
+
+async function scrollElementIntoView(
+  services: PageActionServices,
+  sessionId: string,
+  objectId: string,
+  frameId: string | undefined,
+  actionName: string,
+  pageSessionId: string,
+  iframeSessions: Map<string, string>,
+): Promise<void> {
+  await resolveElementPoint(services, sessionId, objectId, {
+    frameId,
+    actionName,
+    hitTest: false,
+    stability: "none",
+    pageSessionId,
+    iframeSessions,
+  });
+}
+
 async function resolveElementPoint(
   services: PageActionServices,
   sessionId: string,
   objectId: string,
-  position?: { x: number; y: number },
-  frameId?: string,
-  actionName = "page.click",
-  force = false,
-  pageSessionId = sessionId,
-  iframeSessions = new Map<string, string>(),
+  options: ResolveElementPointOptions = {},
 ): Promise<{ x: number; y: number; local: { x: number; y: number } }> {
+  const {
+    position,
+    frameId,
+    actionName = "page.click",
+    hitTest = true,
+    stability = "strict",
+    pageSessionId = sessionId,
+    iframeSessions = new Map<string, string>(),
+  } = options;
   if (
     position !== undefined &&
     (!position ||
@@ -1317,18 +1369,10 @@ async function resolveElementPoint(
   const pointExpression = position
     ? "({x:rect.x+position.x,y:rect.y+position.y})"
     : "actionPointForElement(this)";
-  const expression = `async function(${position ? "position" : ""}) {
-    ${force ? SCROLL_TARGET_HELPERS : HIT_TARGET_HELPERS}
-    if (!this.isConnected) return { error: "element is not connected" };
-    let rect = this.getBoundingClientRect();
-    let point = ${pointExpression};
-    if (rect.width <= 0 || rect.height <= 0 || !point) {
-      return { error: "element is not visible" };
-    }
-    const scroll = scrollRequestForPoint(this, point);
-    if (scroll) return { scroll };
-    const firstRect = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
-    await new Promise((resolve) => {
+  const settleExpression =
+    stability === "none"
+      ? ""
+      : `await new Promise((resolve) => {
       let settled = false;
       const finish = () => {
         if (settled) return;
@@ -1339,7 +1383,11 @@ async function resolveElementPoint(
       const timer = setTimeout(finish, 100);
       requestAnimationFrame(() => requestAnimationFrame(finish));
     });
-    rect = this.getBoundingClientRect();
+    rect = this.getBoundingClientRect();`;
+  const strictStabilityExpression =
+    stability === "strict"
+      ? `const firstRect = { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    ${settleExpression}
     if (
       Math.abs(rect.x - firstRect.x) > 0.25 ||
       Math.abs(rect.y - firstRect.y) > 0.25 ||
@@ -1347,9 +1395,21 @@ async function resolveElementPoint(
       Math.abs(rect.height - firstRect.height) > 0.25
     ) {
       return { error: "element is not stable" };
+    }`
+      : settleExpression;
+  const expression = `async function(${position ? "position" : ""}) {
+    ${hitTest ? HIT_TARGET_HELPERS : SCROLL_TARGET_HELPERS}
+    if (!this.isConnected) return { error: "element is not connected" };
+    let rect = this.getBoundingClientRect();
+    let point = ${pointExpression};
+    if (rect.width <= 0 || rect.height <= 0 || !point) {
+      return { error: "element is not visible" };
     }
+    const scroll = scrollRequestForPoint(this, point);
+    if (scroll) return { scroll };
+    ${strictStabilityExpression}
     point = ${pointExpression};
-    if (!${force ? "true" : "false"}) {
+    if (${hitTest ? "true" : "false"}) {
       const interceptor = interceptingElementAtPoint(this, point);
       if (interceptor) {
         return { error: describeHitTarget(interceptor) + " intercepts pointer events" };

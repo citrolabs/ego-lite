@@ -91,9 +91,23 @@ test("Page click translates same-process iframe coordinates to the Page viewport
     ([method, params]) =>
       method === "Input.dispatchMouseEvent" && params.type === "mouseMoved",
   );
+  const initialMoveIndex = calls.findIndex(
+    ([method, params]) =>
+      method === "Input.dispatchMouseEvent" && params.type === "mouseMoved",
+  );
   const pressIndex = calls.findIndex(
     ([method, params]) =>
       method === "Input.dispatchMouseEvent" && params.type === "mousePressed",
+  );
+  assert(
+    calls
+      .slice(initialMoveIndex + 1, moveIndex)
+      .some(
+        ([method, params]) =>
+          method === "Runtime.callFunctionOn" &&
+          params.functionDeclaration.includes("elementsFromPoint"),
+      ),
+    "iframe clicks recheck the frame-local hit target after the initial pointer move",
   );
   assert.equal(
     calls

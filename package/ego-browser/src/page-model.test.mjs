@@ -4510,6 +4510,11 @@ test("Page click uses the wheel motion engine to bring an element into view", as
       /setTimeout\(finish, 100\)/,
       "stability sampling must not wait indefinitely for background animation frames",
     );
+    assert.doesNotMatch(
+      stabilityCall[2].functionDeclaration,
+      /firstRect|element is not stable/,
+      "click safety follows the recomputed hit point instead of requiring a static rectangle",
+    );
     const wheelCalls = fixture.calls.filter(
       ([kind, method, params]) =>
         kind === "cdp" &&
@@ -4554,6 +4559,11 @@ test("Page fill uses the wheel motion engine to bring an element into view", asy
       "the field position is rechecked after scrolling",
     );
     assert.doesNotMatch(pointCalls[0][2].functionDeclaration, /scrollIntoView/);
+    assert.doesNotMatch(
+      pointCalls[0][2].functionDeclaration,
+      /requestAnimationFrame|element is not stable/,
+      "fill scrolling must not block keyboard input on element motion",
+    );
     const wheelCalls = fixture.calls.filter(
       ([kind, method, params]) =>
         kind === "cdp" &&

@@ -9,6 +9,7 @@ import { keyboardCase } from "./keyboard.mjs";
 import { keyboardRegressionCase } from "./keyboard-regression.mjs";
 import { pageKeyboardInterfaceCase } from "./page-keyboard.mjs";
 import { pageClickHitTargetCase } from "./page-click-hit-target.mjs";
+import { pageActionMotionCase } from "./page-action-motion.mjs";
 import { pageDragAndDrawCase } from "./page-drag-and-draw.mjs";
 import { pageJavaScriptDialogHandlingCase } from "./page-dialogs.mjs";
 import { pageMediaPlaybackCase } from "./page-media-playback.mjs";
@@ -86,6 +87,7 @@ export const e2eCases = [
   { name: "page fetch", body: pageFetchCase },
   { name: "page actions and popup adoption", body: pageActionsAndPopupCase },
   { name: "Page click hit target", body: pageClickHitTargetCase },
+  { name: "Page action motion tolerance", body: pageActionMotionCase },
   { name: "Page drag and canvas drawing", body: pageDragAndDrawCase },
   {
     name: "Page JavaScript dialog handling",
