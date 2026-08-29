@@ -1,0 +1,9 @@
+xkcd Script
+Copyright (c) ipython/xkcd-font contributors
+Licensed under Creative Commons Attribution-NonCommercial 3.0
+https://github.com/ipython/xkcd-font
+https://creativecommons.org/licenses/by-nc/3.0/
+
+xkcd-script.woff2 in this directory is that font, subsetted to printable ASCII
+so it can be inlined into the star history SVGs without bloating the repo.
+It is the same face star-history.com renders its charts with.

@@ -1,0 +1,57 @@
+name: Star History
+
+on:
+  schedule:
+    # Daily at 04:17 UTC. Off the hour to avoid the top-of-hour Actions rush.
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+# The stargazers API needs metadata:read + contents:write since GitHub's
+# 2026-06-30 restriction. The built-in token with contents:write covers both,
+# so no PAT is involved.
+permissions:
+  contents: write
+
+concurrency:
+  group: star-history
+  cancel-in-progress: false
+
+jobs:
+  star-history:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to the v1.0.5 commit; the renderer's package-lock.json makes the
+      # npm install deterministic from there. commit is left to us because the
+      # SVGs still need their font embedded before they are worth committing.
+      - id: chart
+        uses: narayann7/star-history-action@a68d8f9d67ca20d55b682a264e69152dcf326e9c
+        with:
+          repos: ${{ github.repository }}
+          output-dir: assets/star-history
+          type: Date
+          themes: light,dark
+          commit: false
+
+      # The action strips the @font-face, believing GitHub blocks it. It does
+      # not — see the note in embed-font.py. Without this the chart renders in
+      # the browser's fallback sans-serif instead of the star-history look.
+      - name: Embed chart font
+        if: steps.chart.outputs.changed == 'true'
+        run: python3 .github/star-history/embed-font.py assets/star-history
+
+      - name: Commit chart
+        if: steps.chart.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add assets/star-history README.md
+          if git diff --cached --quiet; then
+            echo "Nothing to commit."
+            exit 0
+          fi
+          git commit -m 'chore: update star history [skip ci]'
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
