@@ -1236,22 +1236,36 @@ async function roleMatchActionability(
       {
         functionDeclaration: `function() {
           ${actionabilityRequiresPointer(actionability) ? HIT_TARGET_HELPERS : ACTION_TARGET_STATE_HELPERS}
-          if (!this.isConnected) return { actionable: false };
-          const rect = this.getBoundingClientRect();
+          if (!this.isConnected) {
+            return { actionable: false, blocker: "element is detached from the DOM" };
+          }
+          if (this.closest?.("[hidden], [inert]")) {
+            return { actionable: false, blocker: "element is hidden or inert" };
+          }
           const view = this.ownerDocument?.defaultView;
-          if (!view || rect.width <= 0 || rect.height <= 0) return { actionable: false };
+          if (!view) {
+            return { actionable: false, blocker: "element has no browsing context" };
+          }
+          const rect = this.getBoundingClientRect();
+          if (rect.width <= 0 || rect.height <= 0) {
+            return { actionable: false, blocker: "element has a zero-sized bounding box" };
+          }
           const style = view.getComputedStyle(this);
-          const visible = !this.closest?.("[hidden], [inert]") &&
-            style.display !== "none" &&
-            style.visibility !== "hidden";
-          if (!visible) return { actionable: false };
+          if (style.display === "none") {
+            return { actionable: false, blocker: "element has display: none" };
+          }
+          if (style.visibility === "hidden") {
+            return { actionable: false, blocker: "element has visibility: hidden" };
+          }
           if (
             ${JSON.stringify(actionabilityRequiresEnabled(actionability))} &&
             isActionTargetDisabled(this)
           ) return { actionable: false, blocker: "element is disabled" };
           if (${JSON.stringify(actionabilityRequiresPointer(actionability))}) {
             const point = actionPointForElement(this);
-            if (!point) return { actionable: false };
+            if (!point) {
+              return { actionable: false, blocker: "element has no actionable point" };
+            }
             if (!scrollRequestForPoint(this, point)) {
               const interceptor = interceptingElementAtPoint(this, point);
               if (interceptor) {
@@ -1621,19 +1635,24 @@ async function firstActionabilityBlocker(
         `(() => {
           ${actionabilityRequiresPointer(actionability) ? HIT_TARGET_HELPERS : ACTION_TARGET_STATE_HELPERS}
           for (const element of Array.from(${elementsExpression} || [])) {
-            if (!element?.isConnected || element.closest?.("[hidden], [inert]")) continue;
+            if (!element?.isConnected) return "element is detached from the DOM";
+            if (element.closest?.("[hidden], [inert]")) return "element is hidden or inert";
             const view = element.ownerDocument?.defaultView;
+            if (!view) return "element has no browsing context";
             const rect = element.getBoundingClientRect();
-            const style = view?.getComputedStyle(element);
-            if (!view || rect.width <= 0 || rect.height <= 0 ||
-                style.display === "none" || style.visibility === "hidden") continue;
+            if (rect.width <= 0 || rect.height <= 0) {
+              return "element has a zero-sized bounding box";
+            }
+            const style = view.getComputedStyle(element);
+            if (style.display === "none") return "element has display: none";
+            if (style.visibility === "hidden") return "element has visibility: hidden";
             if (
               ${JSON.stringify(actionabilityRequiresEnabled(actionability))} &&
               isActionTargetDisabled(element)
             ) return "element is disabled";
             if (!${JSON.stringify(actionabilityRequiresPointer(actionability))}) continue;
             const point = actionPointForElement(element);
-            if (!point) continue;
+            if (!point) return "element has no actionable point";
             if (scrollRequestForPoint(element, point)) continue;
             const interceptor = interceptingElementAtPoint(element, point);
             if (interceptor) {

@@ -691,6 +691,97 @@ test("enabled action resolution permits opacity-zero native controls", async () 
   );
 });
 
+test("action resolution reports hidden and zero-sized blockers", async () => {
+  for (const blocker of [
+    "element is hidden or inert",
+    "element has a zero-sized bounding box",
+  ]) {
+    const cdp = new FakeCDP(async (method, params) => {
+      if (method !== "Runtime.evaluate") return {};
+      if (params.expression.includes("for (const element")) {
+        assert.match(params.expression, /element is hidden or inert/);
+        assert.match(
+          params.expression,
+          /element has a zero-sized bounding box/,
+        );
+        return { result: { value: blocker } };
+      }
+      if (params.expression.includes("__egoActionableMatches")) {
+        return { result: { value: 0 } };
+      }
+      return { result: { value: 1 } };
+    });
+
+    await assert.rejects(
+      () =>
+        resolveElementObjectId(
+          cdp,
+          "session:page",
+          new RefMap(),
+          "button.save",
+          new Map(),
+          { strict: true, actionability: "pointer-enabled" },
+        ),
+      (error) => {
+        assert.ok(error instanceof ElementResolutionError);
+        assert.equal(error.kind, "transient");
+        assert.match(error.message, new RegExp(blocker));
+        return true;
+      },
+    );
+  }
+});
+
+test("role action resolution reports visibility blockers", async () => {
+  const cdp = new FakeCDP(async (method, params) => {
+    if (method === "Accessibility.getFullAXTree") {
+      return {
+        nodes: [
+          {
+            role: { value: "button" },
+            name: { value: "Hidden" },
+            backendDOMNodeId: 101,
+          },
+        ],
+      };
+    }
+    if (method === "DOM.resolveNode") {
+      return { object: { objectId: "hidden-button" } };
+    }
+    if (method === "Runtime.callFunctionOn") {
+      assert.match(params.functionDeclaration, /element is hidden or inert/);
+      assert.match(
+        params.functionDeclaration,
+        /element has a zero-sized bounding box/,
+      );
+      return {
+        result: {
+          value: { actionable: false, blocker: "element is hidden or inert" },
+        },
+      };
+    }
+    return {};
+  });
+
+  await assert.rejects(
+    () =>
+      resolveElementObjectId(
+        cdp,
+        "session:page",
+        new RefMap(),
+        'loc=role:button[name="Hidden"]',
+        new Map(),
+        { actionability: "pointer-enabled" },
+      ),
+    (error) => {
+      assert.ok(error instanceof ElementResolutionError);
+      assert.equal(error.kind, "transient");
+      assert.match(error.message, /element is hidden or inert/);
+      return true;
+    },
+  );
+});
+
 test("ambiguous raw XPath selectors fail instead of choosing the first match", async () => {
   const cdp = new FakeCDP(async (method, params) => {
     if (method === "Runtime.evaluate") {

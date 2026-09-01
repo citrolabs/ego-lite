@@ -10,6 +10,8 @@ export function pageActionabilityCase() {
         '  .action-row { display: flex; gap: 12px; margin: 12px; min-height: 40px; }' +
         '  .drag-box { width: 80px; height: 40px; background: #ddd; }' +
         '</style>' +
+        '<button id="hidden-action" hidden>Hidden action</button>' +
+        '<button id="zero-size-action" style="width:0;height:0;padding:0;border:0">Zero-size action</button>' +
         '<div class="action-row">' +
         '  <button id="nested-disabled" disabled><span>Nested disabled action</span></button>' +
         '  <button id="native-disabled" disabled aria-disabled="false">Native disabled</button>' +
@@ -123,8 +125,19 @@ export function pageActionabilityCase() {
       });
     });
 
-    await assertRejectsAny(
+    await assertRejects(
+      () => page.click("#hidden-action", { timeout: 150 }),
+      "element is hidden or inert",
+      "click explains that a matching element is hidden"
+    );
+    await assertRejects(
+      () => page.click("#zero-size-action", { timeout: 150 }),
+      "element has a zero-sized bounding box",
+      "click explains that a matching element has no usable size"
+    );
+    await assertRejects(
       () => page.click('text="Nested disabled action"', { timeout: 150 }),
+      "element is disabled",
       "click rejects a disabled control reached through its child"
     );
     assertEqual(
