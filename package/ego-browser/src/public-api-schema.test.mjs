@@ -25,6 +25,14 @@ test("the public API schema contains the v2 entry points and object methods", ()
     "Page.reload",
     "Page.targetId",
     "Page.waitForEvent",
+    "Download.page",
+    "Download.url",
+    "Download.suggestedFilename",
+    "Download.saveAs",
+    "Download.path",
+    "Download.failure",
+    "Download.cancel",
+    "Download.delete",
     "Page.waitForURL",
     "Page.waitForTimeout",
     "Page.waitForFunction",
@@ -151,7 +159,7 @@ test("the generated reference contains signatures and option descriptions", () =
   );
   assert.match(
     markdown,
-    /`await page\.waitForEvent\("popup", \{ timeout\? \}\)`/,
+    /`await page\.waitForEvent\(event, \{ timeout\? \}\)`.*"popup" or "download"/,
   );
   assert.match(
     markdown,
@@ -163,7 +171,7 @@ test("the generated reference contains signatures and option descriptions", () =
   );
   assert.match(
     markdown,
-    /const popupPromise = page\.waitForEvent\("popup"\); await page\.click\(selector\)/,
+    /const downloadPromise = page\.waitForEvent\("download"\); await page\.click\(selector\)/,
   );
   assert.match(markdown, /page\.acceptDialog\(promptText\?\)/);
   assert.match(markdown, /page\.dismissDialog\(\)/);

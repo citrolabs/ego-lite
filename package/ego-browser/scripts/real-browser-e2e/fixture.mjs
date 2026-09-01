@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 
 export async function closeFixtureServer(fixtureServer) {
@@ -14,6 +15,10 @@ export async function closeFixtureServer(fixtureServer) {
 }
 
 export async function startFixtureServer(taskName) {
+  // Source: https://cdn.openai.com/papers/gpt-4-system-card.pdf
+  const pdfFixture = await readFile(
+    new URL("./fixtures/openai-gpt-4-system-card.pdf", import.meta.url),
+  );
   let crossSiteBaseUrl = "";
   const fixtureServer = createServer((req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
@@ -46,6 +51,36 @@ export async function startFixtureServer(taskName) {
         "access-control-allow-origin": "*",
       });
       res.end("server text fixture");
+      return;
+    }
+    if (url.pathname === "/api/download") {
+      const requestedSpace = url.searchParams.get("space");
+      const space =
+        requestedSpace === "first" || requestedSpace === "second"
+          ? requestedSpace
+          : undefined;
+      const body = space
+        ? `ego-browser ${space} TaskSpace download\n`
+        : "ego-browser download fixture\n";
+      const filename = space ? `ego-${space}-download.txt` : "ego-download.txt";
+      res.writeHead(200, {
+        "content-type": "text/plain",
+        "content-length": Buffer.byteLength(body),
+        "content-disposition": `attachment; filename="${filename}"`,
+        "cache-control": "no-store",
+      });
+      res.end(body);
+      return;
+    }
+    if (url.pathname === "/api/openai-gpt-4-system-card.pdf") {
+      res.writeHead(200, {
+        "content-type": "application/pdf",
+        "content-length": pdfFixture.length,
+        "content-disposition":
+          'inline; filename="openai-gpt-4-system-card.pdf"',
+        "cache-control": "no-store",
+      });
+      res.end(pdfFixture);
       return;
     }
     if (url.pathname === "/api/image.png") {
@@ -197,6 +232,17 @@ export async function startFixtureServer(taskName) {
     if (url.pathname === "/secondary") {
       res.writeHead(200, { "content-type": "text/html" });
       res.end(pageHtml("secondary"));
+      return;
+    }
+    if (url.pathname === "/download-entry") {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(`<!doctype html>
+        <html>
+          <head><title>Download entry</title></head>
+          <body>
+            <a href="/api/openai-gpt-4-system-card.pdf" target="_blank">Preview report</a>
+          </body>
+        </html>`);
       return;
     }
     if (url.pathname === "/same-origin-frame") {

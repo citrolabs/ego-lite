@@ -14,6 +14,7 @@ import {
   pageNetworkSessions,
   prepareFileChooser,
   subscribeBrowserEvents,
+  subscribePageEvents,
 } from "../dist/src/browser-runtime.js";
 
 test("browserCdp exposes a typed transport timeout", async () => {
@@ -1497,6 +1498,61 @@ test("browser event subscribers are isolated and can unsubscribe", async () => {
     unsubscribe();
     unsubscribeThrowing();
     console.error = originalConsoleError;
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
+test("page event subscribers receive only events from their target", async () => {
+  const previous = globalThis.ego;
+  const received = [];
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      const result =
+        request.method === "Target.attachToTarget"
+          ? { sessionId: `session:${request.params.targetId}` }
+          : {};
+      queueMicrotask(() => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      });
+    },
+    emit(event) {
+      runtime.onCDPMessage(JSON.stringify(event));
+    },
+  };
+  globalThis.ego = runtime;
+
+  const unsubscribe = subscribePageEvents("target-a", (event) =>
+    received.push(event),
+  );
+  try {
+    const sessionA = await ensureSession("target-a");
+    const sessionB = await ensureSession("target-b");
+    runtime.emit({
+      sessionId: sessionB,
+      method: "Page.downloadWillBegin",
+      params: { guid: "download-b" },
+    });
+    runtime.emit({
+      sessionId: sessionA,
+      method: "Page.downloadWillBegin",
+      params: { guid: "download-a" },
+    });
+    unsubscribe();
+    runtime.emit({
+      sessionId: sessionA,
+      method: "Page.downloadProgress",
+      params: { guid: "download-a", state: "completed" },
+    });
+
+    assert.deepEqual(
+      received.map((event) => event.params.guid),
+      ["download-a"],
+    );
+  } finally {
+    unsubscribe();
+    invalidateSession();
     if (previous === undefined) delete globalThis.ego;
     else globalThis.ego = previous;
   }

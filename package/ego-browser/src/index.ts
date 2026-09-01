@@ -19,6 +19,7 @@ import { runMain } from "./run.js";
 import { installStaleEgoBrowserGuard } from "./skill-migration.js";
 import { emitUpdateNotice } from "./update-notice.js";
 import { installPageContextGuard } from "./page-context-guard.js";
+import { disposeDownloadArtifacts } from "./driver/downloads.js";
 
 type HelperFunction = (...args: unknown[]) => unknown;
 type EgoRuntime = Record<string, unknown> & {
@@ -42,6 +43,7 @@ export { runMain } from "./run.js";
 
 /** Release native callbacks before the host discards an embedded Node context. */
 export async function disposeEgoSdk(target: InstallTarget = globalThis) {
+  disposeDownloadArtifacts();
   disposeBrowserRuntime(target.ego);
 }
 
@@ -145,6 +147,8 @@ if (isDirectCli()) {
   } catch (error) {
     console.error(error?.stack || error?.message || String(error));
     process.exitCode = 1;
+  } finally {
+    disposeDownloadArtifacts();
   }
 } else {
   installEgoSdk();

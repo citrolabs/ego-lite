@@ -18,6 +18,7 @@ import {
   prepareFileChooser,
   setPreferredTarget,
   subscribeBrowserEvents,
+  subscribePageEvents,
   type FileChooserInterception,
   type FileChooserOpenedEvent,
 } from "./browser-runtime.js";
@@ -57,6 +58,11 @@ import {
   setFilesOnBackendNode,
   setInputFilesInPage,
 } from "./driver/page-input.js";
+import {
+  preparePageDownload,
+  type DownloadArtifact,
+  type DownloadInterception,
+} from "./driver/downloads.js";
 import {
   PageKeyboardController,
   type PageClipboardContent,
@@ -326,6 +332,14 @@ type PageModelServices = {
   setPreferredTarget(targetId: string): void;
   supportsBackgroundPageDiscovery(): boolean;
   subscribeBrowserEvents(listener: (event: any) => void): () => void;
+  subscribePageEvents(
+    targetId: string,
+    listener: (event: any) => void,
+  ): () => void;
+  prepareDownload(
+    targetId: string,
+    options: { timeoutMs: number },
+  ): DownloadInterception;
   now(): number;
   sleep(ms: number): Promise<void>;
   platform: string;
@@ -689,6 +703,17 @@ const baseDefaultServices: Omit<PageModelServices, "ledger" | "pageBudget"> = {
   setPreferredTarget,
   supportsBackgroundPageDiscovery: isBrowserRuntime,
   subscribeBrowserEvents,
+  subscribePageEvents,
+  prepareDownload(targetId, options) {
+    return preparePageDownload(
+      {
+        cdp: baseDefaultServices.cdp,
+        subscribePageEvents,
+      },
+      targetId,
+      options,
+    );
+  },
   now: () => state.now(),
   async sleep(ms) {
     await state.sleep(ms);
@@ -1333,6 +1358,15 @@ type PendingFileChooser = {
   arm: Promise<ArmedFileChooser>;
 };
 
+type ArmedDownload = {
+  page: PageTarget;
+  interception: DownloadInterception;
+};
+
+type PendingDownload = {
+  arm: Promise<ArmedDownload>;
+};
+
 /** A file chooser intercepted before Chromium can open a native dialog. */
 class FileChooser {
   readonly #services: PageModelServices;
@@ -1381,6 +1415,49 @@ class FileChooser {
   }
 }
 
+/** A Page download backed by a round-local artifact. */
+class Download {
+  readonly #pageHandle: Page;
+  readonly #artifact: DownloadArtifact;
+
+  constructor(page: Page, artifact: DownloadArtifact) {
+    this.#pageHandle = page;
+    this.#artifact = artifact;
+  }
+
+  page(): Page {
+    return this.#pageHandle;
+  }
+
+  url(): string {
+    return this.#artifact.url;
+  }
+
+  suggestedFilename(): string {
+    return this.#artifact.suggestedFilename;
+  }
+
+  saveAs(path: string): Promise<void> {
+    return this.#artifact.saveAs(path);
+  }
+
+  path(): Promise<string> {
+    return this.#artifact.path();
+  }
+
+  failure(): Promise<string | null> {
+    return this.#artifact.failure();
+  }
+
+  cancel(): Promise<void> {
+    return this.#artifact.cancel();
+  }
+
+  delete(): Promise<void> {
+    return this.#artifact.delete();
+  }
+}
+
 class Page {
   readonly label: string;
   readonly spaceId: number;
@@ -1392,6 +1469,8 @@ class Page {
   #targetId?: string;
   #openedBy?: PageOrigin;
   #pendingFileChooser?: PendingFileChooser;
+  #pendingDownload?: PendingDownload;
+  #activeDownload?: Promise<void>;
 
   constructor(
     task: TaskSpace,
@@ -1519,16 +1598,19 @@ class Page {
     );
   }
 
-  /** Wait for the next popup opened by this Page. */
+  /** Wait for the next popup or download started by this Page. */
   waitForEvent(
-    event: "popup",
+    event: "popup" | "download",
     options: PageWaitForEventOptions = {},
-  ): Promise<Page> {
-    if (event !== "popup") {
-      throw new TypeError("page.waitForEvent only supports the popup event");
+  ): Promise<Page | Download> {
+    if (event !== "popup" && event !== "download") {
+      throw new TypeError(
+        "page.waitForEvent only supports the popup and download events",
+      );
     }
     validatePublicApiOptions("Page.waitForEvent", options);
     const timeoutMs = options.timeout ?? 10_000;
+    if (event === "download") return this.#waitForDownload(timeoutMs);
 
     // Subscribe synchronously so the common `const pending = waitForEvent();
     // await click()` pattern cannot miss a popup created by the click.
@@ -1574,6 +1656,52 @@ class Page {
         void this.#resolve().catch((error) => finish(() => reject(error)));
       }
     });
+  }
+
+  #waitForDownload(timeoutMs: number): Promise<Download> {
+    if (this.#pendingDownload || this.#activeDownload) {
+      throw new Error("this Page already has an active download wait");
+    }
+    const pending: PendingDownload = {
+      arm: (async () => {
+        const page = await this.#resolve();
+        return this.#services.gate.withPage(page, async ({ sessionId }) => {
+          const interception = this.#services.prepareDownload(page.targetId, {
+            timeoutMs,
+          });
+          try {
+            await interception.ready(sessionId);
+            return { page, interception };
+          } catch (error) {
+            await interception.dispose(asError(error));
+            throw error;
+          }
+        });
+      })(),
+    };
+    this.#pendingDownload = pending;
+    return (async () => {
+      let armed: ArmedDownload | undefined;
+      try {
+        armed = await pending.arm;
+        const artifact = await armed.interception.event;
+        const active = artifact.finished.finally(() => {
+          if (this.#activeDownload === active) {
+            this.#activeDownload = undefined;
+          }
+        });
+        this.#activeDownload = active;
+        void active.catch(() => {});
+        return new Download(this, artifact);
+      } catch (error) {
+        if (armed) await armed.interception.dispose(asError(error));
+        throw error;
+      } finally {
+        if (this.#pendingDownload === pending) {
+          this.#pendingDownload = undefined;
+        }
+      }
+    })();
   }
 
   /** Wait without activating this Page or occupying the native operation gate. */
@@ -2379,6 +2507,13 @@ class Page {
     operation: (sessionId: string) => Promise<T>,
     guardFileChooser = false,
   ): Promise<{ value: T; receipt: PageActionReceipt }> {
+    const explicitDownload = this.#pendingDownload;
+    const armedDownload = explicitDownload
+      ? await explicitDownload.arm
+      : undefined;
+    if (armedDownload && armedDownload.page.targetId !== page.targetId) {
+      throw new Error("download waiter belongs to a different Page");
+    }
     const explicitFileChooser = guardFileChooser
       ? this.#pendingFileChooser
       : undefined;
@@ -2390,6 +2525,7 @@ class Page {
     }
     return this.#services.gate.withPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId);
+      await armedDownload?.interception.ready(sessionId);
       const fileChooserGuard =
         guardFileChooser && !explicitFileChooser
           ? this.#services.prepareFileChooser(sessionId, {

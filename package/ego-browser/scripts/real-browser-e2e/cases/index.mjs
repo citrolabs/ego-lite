@@ -19,6 +19,13 @@ import { pageShadowDomCase } from "./page-shadow-dom.mjs";
 import { pageTextLocatorCase } from "./page-text-locators.mjs";
 import { pageSelectorCompatibilityCase } from "./page-selector-compatibility.mjs";
 import { pagePopupWaiterCase } from "./page-popup-waiter.mjs";
+import {
+  concurrentTaskSpaceDownloadCase,
+  pageDownloadCase,
+  pageDownloadPrepareRoundCase,
+  pagePdfViewerDownloadCase,
+  pageDownloadResumeRoundCase,
+} from "./page-download.mjs";
 import { pageOopifActionCase, pageOopifRestoreCase } from "./page-oopif.mjs";
 import { pageLoadStatesCase } from "./page-load-states.mjs";
 import { pageDedicatedWorkerCase } from "./page-workers.mjs";
@@ -103,6 +110,23 @@ export const e2eCases = [
     body: pageSelectorCompatibilityCase,
   },
   { name: "Page popup waiter and URL diagnostic", body: pagePopupWaiterCase },
+  { name: "Page download lifecycle", body: pageDownloadCase },
+  {
+    name: "Concurrent TaskSpace downloads",
+    body: concurrentTaskSpaceDownloadCase,
+  },
+  {
+    name: "Page Chromium PDF viewer download",
+    body: pagePdfViewerDownloadCase,
+  },
+  {
+    name: "Page download across rounds: prepare",
+    body: pageDownloadPrepareRoundCase,
+  },
+  {
+    name: "Page download across rounds: resume",
+    body: pageDownloadResumeRoundCase,
+  },
   { name: "Page OOPIF actions", body: pageOopifActionCase },
   { name: "Page OOPIF restore and close", body: pageOopifRestoreCase },
   { name: "Page load states", body: pageLoadStatesCase },
