@@ -525,7 +525,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: "Page.press",
     signature: "await page.press(selector, chord, { delay?, timeout? })",
-    summary: "Focus one element and press a key or shortcut chord.",
+    summary:
+      "Focus one element and press a key or shortcut chord. Named keys are case-insensitive; single-character keys preserve case.",
     options: { delay, timeout: actionTimeout },
   },
   {
@@ -621,7 +622,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: "Page.keyboard.press",
     signature: "await page.keyboard.press(chord, { delay? })",
-    summary: "Press and release a key or portable shortcut chord.",
+    summary:
+      "Press and release a key or portable shortcut chord. Named keys are case-insensitive; single-character keys preserve case.",
     options: { delay },
   },
   {

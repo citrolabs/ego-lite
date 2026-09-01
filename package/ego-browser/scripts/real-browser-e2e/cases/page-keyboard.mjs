@@ -165,6 +165,28 @@ export function pageKeyboardInterfaceCase() {
       "uppercase modifier keeps the shortcut trusted",
     );
 
+    await page.evaluate(() => {
+      const input = document.querySelector("#text-area");
+      input.value = "";
+      input.focus();
+      window.__pageKeyboardContractEvents = [];
+    });
+    await page.press("#text-area", "ENTER");
+    await page.keyboard.press("escape");
+    await page.keyboard.press("ARROWDOWN");
+    const caseInsensitiveNamedKeys = (
+      await page.evaluate("window.__pageKeyboardContractEvents")
+    ).filter((event) => event.type === "keydown");
+    assertEqual(
+      caseInsensitiveNamedKeys.map((event) => event.code).join(","),
+      "Enter,Escape,ArrowDown",
+      "named keys accept case-insensitive spellings through both Page APIs"
+    );
+    assert(
+      caseInsensitiveNamedKeys.every((event) => event.trusted === true),
+      "case-insensitive named keys remain trusted input"
+    );
+
     await page.press("#text-area", "ControlOrMeta+A");
     await page.keyboard.type("replaced");
     await page.keyboard.press("ArrowLeft");

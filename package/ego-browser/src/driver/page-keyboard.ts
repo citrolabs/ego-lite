@@ -287,9 +287,9 @@ function resolveSmartModifier(
   key: string,
   platform: string = process.platform,
 ): string {
-  // Modifier names are forgiving because agents often use protocol-style
-  // uppercase constants. Ordinary key names remain case-sensitive.
-  const normalized = MODIFIER_ALIASES.get(key.toLowerCase()) ?? key;
+  const lower = key.toLowerCase();
+  const normalized =
+    MODIFIER_ALIASES.get(lower) ?? NAMED_KEY_NAMES.get(lower) ?? key;
   if (normalized === "ControlOrMeta") {
     return platform === "darwin" ? "Meta" : "Control";
   }
@@ -528,6 +528,11 @@ function buildKeyboardLayout(): Map<string, KeyDefinition> {
 }
 
 const keyboardLayout = buildKeyboardLayout();
+const NAMED_KEY_NAMES = new Map(
+  [...keyboardLayout.keys()]
+    .filter((key) => key.length > 1)
+    .map((key) => [key.toLowerCase(), key]),
+);
 
 function editingCommands(
   code: string,

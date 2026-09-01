@@ -3700,6 +3700,57 @@ test("Page keyboard accepts case-insensitive modifier names", async () => {
   });
 });
 
+test("Page keyboard accepts case-insensitive named key names", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+
+    await page.keyboard.press("ENTER");
+    await page.keyboard.press("escape");
+    await page.press("[contenteditable]", "ARROWDOWN");
+
+    const keyDowns = fixture.calls
+      .filter(
+        ([kind, method, params]) =>
+          kind === "cdp" &&
+          method === "Input.dispatchKeyEvent" &&
+          (params.type === "keyDown" || params.type === "rawKeyDown"),
+      )
+      .map(([, , params]) => params);
+    assert.deepEqual(
+      keyDowns.map(({ code }) => code),
+      ["Enter", "Escape", "ArrowDown"],
+    );
+  });
+});
+
+test("Page keyboard keeps single-character key case significant", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+
+    await page.keyboard.press("a");
+    await page.keyboard.press("A");
+
+    const keyDowns = fixture.calls
+      .filter(
+        ([kind, method, params]) =>
+          kind === "cdp" &&
+          method === "Input.dispatchKeyEvent" &&
+          params.type === "keyDown" &&
+          params.code === "KeyA",
+      )
+      .map(([, , params]) => params);
+    assert.deepEqual(
+      keyDowns.map(({ key, text }) => ({ key, text })),
+      [
+        { key: "a", text: "a" },
+        { key: "A", text: "A" },
+      ],
+    );
+  });
+});
+
 test("Page keyboard maps portable editing shortcuts on Windows", async () => {
   await withFixture(async (fixture) => {
     const task = taskForRound(fixture, "round-a", { platform: "win32" });

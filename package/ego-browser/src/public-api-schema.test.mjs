@@ -171,6 +171,10 @@ test("the generated reference contains signatures and option descriptions", () =
   );
   assert.match(
     markdown,
+    /`await page\.keyboard\.press\(chord, \{ delay\? \}\)`.*Named keys are case-insensitive.*single-character keys preserve case/,
+  );
+  assert.match(
+    markdown,
     /const downloadPromise = page\.waitForEvent\("download"\); await page\.click\(selector\)/,
   );
   assert.match(markdown, /page\.acceptDialog\(promptText\?\)/);
