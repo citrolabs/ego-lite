@@ -164,7 +164,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     name: "TaskSpace.finish",
     signature: "await task.finish({ keep })",
     summary:
-      "Finish the task and keep selected managed Pages; an empty list closes the space when no protected tabs remain.",
+      "Finish the task and return a receipt with retained and closed managed Page labels; an empty list closes the space when no protected tabs remain.",
     options: {
       keep: option(
         "pageRetention",

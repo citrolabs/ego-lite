@@ -142,7 +142,7 @@ test("the generated reference contains signatures and option descriptions", () =
   assert.match(markdown, /`await task\.newPage\(\)`/);
   assert.match(
     markdown,
-    /`await task\.finish\(\{ keep \}\)`.*keep selected managed Pages/,
+    /`await task\.finish\(\{ keep \}\)`.*return a receipt with retained and closed managed Page labels/,
   );
   assert.doesNotMatch(markdown, /task\.close/);
   assert.match(

@@ -90,7 +90,14 @@ export function taskSpaceCase() {
     const boundaryPage = resumedTask.userPage();
     assert(Boolean(boundaryPage), "takeover captures the tab active at the user boundary");
     const handedOffSpaceId = resumedTask.spaceId;
-    await resumedTask.finish({ keep: "all" });
+    const keepAllReceipt = await resumedTask.finish({ keep: "all" });
+    assertEqual(keepAllReceipt.spaceId, handedOffSpaceId, "task.finish receipt identifies its space");
+    assertEqual(keepAllReceipt.closedSpace, false, "keep all reports that the space remains open");
+    assert(
+      keepAllReceipt.keptManagedLabels.includes(boundaryPage.label),
+      "keep all receipt lists the retained managed Page"
+    );
+    assertEqual(keepAllReceipt.closedManagedLabels.length, 0, "keep all receipt reports no managed Page closures");
     assert(
       (await listTaskSpaces()).some((space) => space.id === handedOffSpaceId),
       "task.finish keeps the handed-off browser space"
@@ -99,7 +106,12 @@ export function taskSpaceCase() {
 
     const closeTask = await taskSpace(taskName + " v2 close through finish");
     const closeSpaceId = closeTask.spaceId;
-    await closeTask.finish({ keep: [] });
+    const closeReceipt = await closeTask.finish({ keep: [] });
+    assertEqual(closeReceipt.spaceId, closeSpaceId, "close receipt identifies its space");
+    assertEqual(closeReceipt.closedSpace, true, "empty keep reports that the whole space closed");
+    assertEqual(closeReceipt.keptManagedLabels.length, 0, "closed-space receipt reports no retained managed Pages");
+    assert(closeReceipt.closedManagedLabels.length > 0, "closed-space receipt lists the managed Pages it closed");
+    assertEqual(closeReceipt.preservedUnmanagedCount, 0, "closed-space receipt reports no protected unmanaged tabs");
     for (let attempt = 0; attempt < 20; attempt += 1) {
       if (!(await listTaskSpaces()).some((space) => space.id === closeSpaceId)) break;
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -114,7 +126,18 @@ export function taskSpaceCase() {
     const retainedPage = await finishTask.newPage();
     await retainedPage.goto(baseUrl + "/secondary?v2-lifecycle=retain");
     const finishSpaceId = finishTask.spaceId;
-    await finishTask.finish({ keep: [retainedPage.label] });
+    const namedReceipt = await finishTask.finish({ keep: [retainedPage.label] });
+    assertEqual(namedReceipt.closedSpace, false, "named retention reports that the space remains open");
+    assertEqual(
+      JSON.stringify(namedReceipt.keptManagedLabels),
+      JSON.stringify([retainedPage.label]),
+      "named retention receipt lists the retained Page"
+    );
+    assert(
+      namedReceipt.closedManagedLabels.includes("p1"),
+      "named retention receipt lists the discarded Agent Page"
+    );
+    assertEqual(namedReceipt.preservedUnmanagedCount, 0, "named retention reports no unmanaged tabs");
     assert(
       (await listTaskSpaces()).some((space) => space.id === finishSpaceId),
       "task.finish keeps the browser space when one Page is retained"

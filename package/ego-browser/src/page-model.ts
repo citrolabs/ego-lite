@@ -169,6 +169,14 @@ type FinishOptions = {
   keep: "all" | string[];
 };
 
+export type TaskFinishReceipt = {
+  spaceId: number;
+  closedSpace: boolean;
+  keptManagedLabels: string[];
+  closedManagedLabels: string[];
+  preservedUnmanagedCount: number;
+};
+
 type PageWaitForFileChooserOptions = {
   timeout?: number;
 };
@@ -973,14 +981,14 @@ class TaskSpace {
   }
 
   /** Finish the task with an explicit managed-Page retention policy. */
-  async finish(options: FinishOptions): Promise<void> {
+  async finish(options: FinishOptions): Promise<TaskFinishReceipt> {
     validatePublicApiOptions("TaskSpace.finish", options);
     if (!Object.hasOwn(options, "keep") || options.keep === undefined) {
       throw new TypeError(
         "task.finish requires the keep option. Expected: await task.finish({ keep })",
       );
     }
-    await this.#services.gate.withSpace(this.spaceId, async () => {
+    return this.#services.gate.withSpace(this.spaceId, async () => {
       const { ledger, tabs } = await this.#reconcilePages();
       const keepLabels =
         options.keep === "all"
@@ -997,6 +1005,19 @@ class TaskSpace {
       const managedByTarget = new Map(
         Object.values(ledger.pages).map((page) => [page.targetId, page]),
       );
+      const labelsToClose = Object.entries(ledger.pages)
+        .filter(
+          ([label, page]) =>
+            page.openedBy === "agent" && !keepLabels.has(label),
+        )
+        .map(([label]) => label);
+      const closedManagedLabelSet = new Set(labelsToClose);
+      const keptManagedLabels = Object.keys(ledger.pages).filter(
+        (label) => !closedManagedLabelSet.has(label),
+      );
+      const preservedUnmanagedCount = tabs.filter(
+        (tab) => !managedByTarget.has(tab.targetId),
+      ).length;
       const hasProtectedTabs = tabs.some((tab) => {
         const managed = managedByTarget.get(tab.targetId);
         return !managed || managed.openedBy === "unknown";
@@ -1009,20 +1030,27 @@ class TaskSpace {
       ) {
         await this.#services.closeTaskSpace();
         await this.#discardTerminalState();
-        return;
+        return {
+          spaceId: this.spaceId,
+          closedSpace: true,
+          keptManagedLabels: [],
+          closedManagedLabels: labelsToClose,
+          preservedUnmanagedCount,
+        };
       }
 
-      const labelsToClose = Object.entries(ledger.pages)
-        .filter(
-          ([label, page]) =>
-            page.openedBy === "agent" && !keepLabels.has(label),
-        )
-        .map(([label]) => label);
       for (const label of labelsToClose) {
         await this.page(label).close();
       }
       await this.#services.completeTaskSpace();
       await this.#discardTerminalState();
+      return {
+        spaceId: this.spaceId,
+        closedSpace: false,
+        keptManagedLabels,
+        closedManagedLabels: labelsToClose,
+        preservedUnmanagedCount,
+      };
     });
   }
 

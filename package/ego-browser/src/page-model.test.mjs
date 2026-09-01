@@ -1379,7 +1379,14 @@ test("TaskSpace uses spaceId and finishes while keeping every managed Page", asy
 
     const finishTask = taskForRound(fixture, "round-b", services);
     const page = await finishTask.newPage();
-    await finishTask.finish({ keep: "all" });
+    const receipt = await finishTask.finish({ keep: "all" });
+    assert.deepEqual(receipt, {
+      spaceId: 7,
+      closedSpace: false,
+      keptManagedLabels: [page.label],
+      closedManagedLabels: [],
+      preservedUnmanagedCount: 0,
+    });
     assert.deepEqual((await ledger.read(7)).pages, {});
     assert.equal(fixture.tabs.has(page.targetId), true);
 
@@ -1414,7 +1421,15 @@ test("TaskSpace finish keeps named Pages and protects unknown-origin Pages", asy
       openedBy: "unknown",
     });
 
-    await task.finish({ keep: ["p2"] });
+    const receipt = await task.finish({ keep: ["p2"] });
+
+    assert.deepEqual(receipt, {
+      spaceId: 7,
+      closedSpace: false,
+      keptManagedLabels: ["p2", "user-page"],
+      closedManagedLabels: ["p1", "p3"],
+      preservedUnmanagedCount: 0,
+    });
 
     assert.deepEqual(lifecycleCalls, ["finish"]);
     assert.deepEqual([...fixture.tabs.keys()].sort(), [
@@ -1442,7 +1457,15 @@ test("TaskSpace finish closes the whole space when no Pages are retained", async
     });
     await openTestPage(task, "https://example.test/one");
 
-    await task.finish({ keep: [] });
+    const receipt = await task.finish({ keep: [] });
+
+    assert.deepEqual(receipt, {
+      spaceId: 7,
+      closedSpace: true,
+      keptManagedLabels: [],
+      closedManagedLabels: ["p1"],
+      preservedUnmanagedCount: 0,
+    });
 
     assert.deepEqual(lifecycleCalls, ["close"]);
     assert.equal(
@@ -1473,7 +1496,15 @@ test("TaskSpace finish keeps protected unmanaged tabs even with an empty keep li
     fixture.addExternalTab("target-user", "https://example.test/user");
     await ledger.keepUnmanaged(7, "target-user", "unknown");
 
-    await task.finish({ keep: [] });
+    const receipt = await task.finish({ keep: [] });
+
+    assert.deepEqual(receipt, {
+      spaceId: 7,
+      closedSpace: false,
+      keptManagedLabels: [],
+      closedManagedLabels: ["p1"],
+      preservedUnmanagedCount: 1,
+    });
 
     assert.deepEqual(lifecycleCalls, ["finish"]);
     assert.equal(fixture.tabs.has(agentPage.targetId), false);
