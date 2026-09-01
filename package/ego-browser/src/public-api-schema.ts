@@ -280,10 +280,52 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   },
   {
     name: "Page.waitForEvent",
-    signature: 'await page.waitForEvent("popup", { timeout? })',
+    signature: "await page.waitForEvent(event, { timeout? })",
     summary:
-      "Wait for this Page's next popup; call before the triggering action.",
+      'Wait for this Page\'s next "popup" or "download"; arm the promise before the triggering action.',
     options: { timeout },
+  },
+  {
+    name: "Download.page",
+    signature: "download.page()",
+    summary: "Return the Page that started this download.",
+  },
+  {
+    name: "Download.url",
+    signature: "download.url()",
+    summary: "Return the download URL.",
+  },
+  {
+    name: "Download.suggestedFilename",
+    signature: "download.suggestedFilename()",
+    summary: "Return Chromium's suggested file name.",
+  },
+  {
+    name: "Download.saveAs",
+    signature: "await download.saveAs(absolutePath)",
+    summary:
+      "Wait for completion and copy the download to an absolute path, creating missing parent directories.",
+  },
+  {
+    name: "Download.path",
+    signature: "await download.path()",
+    summary:
+      "Wait for completion and return the round-local temporary file path.",
+  },
+  {
+    name: "Download.failure",
+    signature: "await download.failure()",
+    summary: "Wait for completion and return null or the failure reason.",
+  },
+  {
+    name: "Download.cancel",
+    signature: "await download.cancel()",
+    summary: "Cancel this download by its Chromium download identifier.",
+  },
+  {
+    name: "Download.delete",
+    signature: "await download.delete()",
+    summary: "Delete this download's round-local temporary files.",
   },
   {
     name: "Page.waitForTimeout",
@@ -656,13 +698,15 @@ export function publicApiMarkdown(): string {
   for (const entry of PUBLIC_API_SCHEMA) {
     const group = entry.name.startsWith("TaskSpace.")
       ? "TaskSpace"
-      : entry.name.startsWith("Page.mouse.")
-        ? "Page.mouse"
-        : entry.name.startsWith("Page.keyboard.")
-          ? "Page.keyboard"
-          : entry.name.startsWith("Page.")
-            ? "Page"
-            : "Entry points";
+      : entry.name.startsWith("Download.")
+        ? "Download"
+        : entry.name.startsWith("Page.mouse.")
+          ? "Page.mouse"
+          : entry.name.startsWith("Page.keyboard.")
+            ? "Page.keyboard"
+            : entry.name.startsWith("Page.")
+              ? "Page"
+              : "Entry points";
     const entries = groups.get(group) || [];
     entries.push(entry);
     groups.set(group, entries);
@@ -676,6 +720,8 @@ export function publicApiMarkdown(): string {
     "High-level Page actions return a receipt that may contain `popups` or a synchronous `dialog`. Handle a returned dialog with `page.acceptDialog(promptText?)` or `page.dismissDialog()` before continuing.",
     "",
     'For an explicit popup wait, arm it before the action: `const popupPromise = page.waitForEvent("popup"); await page.click(selector); const popup = await popupPromise;`. Action receipts instead expose `{ label, targetId }` entries in `receipt.popups`; resolve one with `task.page(label)`.',
+    "",
+    'For a download, arm the event before the action and save the returned artifact explicitly: `const downloadPromise = page.waitForEvent("download"); await page.click(selector); const download = await downloadPromise; await download.saveAs(absolutePath);`.',
     "",
     'Selectors accept refs, Ego locators, XPath, and raw CSS. A small compatibility subset also accepts `css=...`, terminal `:has-text("...")` and `:text-is("...")`, `>> nth=N` after CSS/text/href selectors (`N` is `-1` or non-negative), and `loc=role:...[name*="..."]`.',
   ];
@@ -705,7 +751,10 @@ export function publicApiMarkdown(): string {
 }
 
 function displayName(name: string): string {
-  return name.replace(/^TaskSpace/, "task").replace(/^Page/, "page");
+  return name
+    .replace(/^TaskSpace/, "task")
+    .replace(/^Page/, "page")
+    .replace(/^Download/, "download");
 }
 
 function validateOptionValue(

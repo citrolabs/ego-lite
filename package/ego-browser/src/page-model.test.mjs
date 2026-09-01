@@ -1,8 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { NativeOperationGate } from "../dist/src/native-gate.js";
 import { CdpRequestTimeoutError } from "../dist/src/browser-runtime.js";
@@ -4220,6 +4227,165 @@ test("Page.waitForEvent arms before a click and resolves the opened popup", asyn
   });
 });
 
+test("Page.waitForEvent exposes a Playwright-style download object", async () => {
+  await withFixture(async (fixture) => {
+    const sourcePath = join(fixture.rootDir, "download-source.txt");
+    const outputPath = join(fixture.rootDir, "saved", "report.txt");
+    await writeFile(sourcePath, "download body");
+    let resolveDownload;
+    const event = new Promise((resolve) => {
+      resolveDownload = resolve;
+    });
+    const calls = [];
+    const artifact = {
+      url: "https://example.test/report",
+      suggestedFilename: "report.txt",
+      finished: Promise.resolve(),
+      async saveAs(path) {
+        calls.push(["saveAs", path]);
+        await mkdir(dirname(path), { recursive: true });
+        await copyFile(sourcePath, path);
+      },
+      async path() {
+        return sourcePath;
+      },
+      async failure() {
+        return null;
+      },
+      async cancel() {
+        calls.push(["cancel"]);
+      },
+      async delete() {
+        calls.push(["delete"]);
+      },
+    };
+    const task = taskForRound(fixture, "round-a", {
+      prepareDownload(targetId, options) {
+        calls.push(["prepare", targetId, options]);
+        return {
+          async ready(sessionId) {
+            calls.push(["ready", sessionId]);
+          },
+          event,
+          async dispose(error) {
+            calls.push(["dispose", error?.message]);
+          },
+        };
+      },
+      async cdp(method, params, sessionId, timeoutMs) {
+        const result = await fixture.services.cdp(
+          method,
+          params,
+          sessionId,
+          timeoutMs,
+        );
+        if (
+          method === "Input.dispatchMouseEvent" &&
+          params.type === "mouseReleased"
+        ) {
+          resolveDownload(artifact);
+        }
+        return result;
+      },
+    });
+    const source = await openTestPage(task, "https://example.test/source");
+
+    const downloadPromise = source.waitForEvent("download", {
+      timeout: 1_000,
+    });
+    await source.click("#download");
+    const download = await downloadPromise;
+
+    assert.equal(download.page(), source);
+    assert.equal(download.url(), "https://example.test/report");
+    assert.equal(download.suggestedFilename(), "report.txt");
+    assert.equal(await download.path(), sourcePath);
+    assert.equal(await download.failure(), null);
+    await download.saveAs(outputPath);
+    assert.equal(await readFile(outputPath, "utf8"), "download body");
+    await download.cancel();
+    await download.delete();
+    assert.deepEqual(calls.slice(0, 2), [
+      ["prepare", source.targetId, { timeoutMs: 1_000 }],
+      ["ready", `session:${source.targetId}`],
+    ]);
+    assert.deepEqual(calls.slice(-3), [
+      ["saveAs", outputPath],
+      ["cancel"],
+      ["delete"],
+    ]);
+  });
+});
+
+test("Page reapplies download behavior after its CDP session reconnects", async () => {
+  await withFixture(async (fixture) => {
+    let markFirstReady;
+    const firstReady = new Promise((resolve) => {
+      markFirstReady = resolve;
+    });
+    let resolveDownload;
+    const event = new Promise((resolve) => {
+      resolveDownload = resolve;
+    });
+    const readySessions = [];
+    const artifact = {
+      url: "https://example.test/report",
+      suggestedFilename: "report.txt",
+      finished: Promise.resolve(),
+      async saveAs() {},
+      async path() {
+        return join(fixture.rootDir, "report.txt");
+      },
+      async failure() {
+        return null;
+      },
+      async cancel() {},
+      async delete() {},
+    };
+    const task = taskForRound(fixture, "round-a", {
+      prepareDownload() {
+        return {
+          async ready(sessionId) {
+            readySessions.push(sessionId);
+            if (readySessions.length === 1) markFirstReady();
+          },
+          event,
+          async dispose() {},
+        };
+      },
+      async cdp(method, params, sessionId, timeoutMs) {
+        const result = await fixture.services.cdp(
+          method,
+          params,
+          sessionId,
+          timeoutMs,
+        );
+        if (
+          method === "Input.dispatchMouseEvent" &&
+          params.type === "mouseReleased"
+        ) {
+          resolveDownload(artifact);
+        }
+        return result;
+      },
+    });
+    const source = await openTestPage(task, "https://example.test/source");
+
+    const downloadPromise = source.waitForEvent("download", {
+      timeout: 1_000,
+    });
+    await firstReady;
+    fixture.setSession(source.targetId, "session:reconnected");
+    await source.click("#download");
+    await downloadPromise;
+
+    assert.deepEqual(readySessions, [
+      `session:${source.targetId}`,
+      "session:reconnected",
+    ]);
+  });
+});
+
 test("Page.waitForEvent ignores an older popup and resolves the next one", async () => {
   await withFixture(async (fixture) => {
     resetPageNotices();
@@ -4249,8 +4415,8 @@ test("Page.waitForEvent rejects unsupported events and times out cleanly", async
     const source = await openTestPage(task, "https://example.test/source");
 
     assert.throws(
-      () => source.waitForEvent("download", { timeout: 10 }),
-      /only supports the popup event/,
+      () => source.waitForEvent("request", { timeout: 10 }),
+      /only supports the popup and download events/,
     );
     await assert.rejects(
       source.waitForEvent("popup", { timeout: 5 }),

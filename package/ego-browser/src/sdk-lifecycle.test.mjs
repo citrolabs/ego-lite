@@ -6,7 +6,12 @@ test("disposeEgoSdk releases native callbacks and rejects pending CDP work", () 
   const sdkUrl = new URL("../dist/src/index.js", import.meta.url).href;
   const runtimeUrl = new URL("../dist/src/browser-runtime.js", import.meta.url)
     .href;
+  const downloadsUrl = new URL(
+    "../dist/src/driver/downloads.js",
+    import.meta.url,
+  ).href;
   const script = `
+    const { existsSync } = await import("node:fs");
     globalThis.ego = {
       respond: true,
       sendCDPMessage(payload) {
@@ -20,15 +25,30 @@ test("disposeEgoSdk releases native callbacks and rejects pending CDP work", () 
     };
     const sdk = await import(${JSON.stringify(sdkUrl)});
     const runtime = await import(${JSON.stringify(runtimeUrl)});
+    const downloads = await import(${JSON.stringify(downloadsUrl)});
     await runtime.browserCdp("Target.getTargets", {}, undefined, 1_000);
     if (typeof ego.onCDPMessage !== "function") {
       throw new Error("CDP callbacks were not installed");
     }
     ego.respond = false;
     const pending = runtime.browserCdp("Target.getTargets", {}, undefined, 10_000);
+    let downloadPath;
+    const downloadWait = downloads.preparePageDownload({
+      async cdp(method, params) {
+        if (params.downloadPath) downloadPath = params.downloadPath;
+        return {};
+      },
+      subscribePageEvents() { return () => {}; },
+    }, "target-download", { timeoutMs: 10_000 });
+    void downloadWait.event.catch(() => {});
+    await downloadWait.ready("session-download");
+    if (!existsSync(downloadPath)) throw new Error("download directory was not created");
     await sdk.disposeEgoSdk();
     if (ego.onCDPMessage !== undefined || ego.onSendCDPMessageError !== undefined) {
       throw new Error("disposeEgoSdk left native callbacks installed");
+    }
+    if (existsSync(downloadPath)) {
+      throw new Error("disposeEgoSdk left temporary downloads behind");
     }
     await pending.then(
       () => { throw new Error("pending CDP work unexpectedly resolved"); },
