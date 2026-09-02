@@ -1,166 +1,159 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-
 import {
-  assertNoEgoError,
-  egoErrorCode,
-  isEgoErrorCode,
-  isEgoUserControlError,
-  resolveEgoError,
+  EgoError,
+  ElementResolutionError,
+  NavigationTimeoutError,
+  DialogBlockingError,
+  ConnectionLostError,
+  TimeoutError,
+  mapCdpError,
 } from "../dist/src/ego-errors.js";
+import { __testing } from "../dist/src/helpers.js";
 
-test("egoErrorCode extracts the code from every error shape", () => {
-  // resolved { error, error_code } object
-  assert.equal(
-    egoErrorCode({ error: "nope", error_code: "EGO_BROWSER_UNAVAILABLE" }),
-    "EGO_BROWSER_UNAVAILABLE",
-  );
-  // rejected / thrown Error carrying .error_code
-  const err = Object.assign(new Error("boom"), {
-    error_code: "EGO_SNAPSHOT_FAILED",
+test("EgoError has required shape", () => {
+  const err = new EgoError("test error", "transient", "TEST_ERROR", undefined, "Custom hint");
+  assert.equal(err.kind, "transient");
+  assert.equal(err.code, "TEST_ERROR");
+  assert.ok(typeof err.context.timestamp === "number");
+  assert.ok(err.recoveryHint !== undefined);
+  assert.ok(err.recoveryHint.length > 0);
+});
+
+test("EgoError context includes timestamp", () => {
+  const err = new EgoError("test", "permanent", "TEST");
+  assert.ok(err.context.timestamp > 0);
+});
+
+test("transient errors have recoveryHint", () => {
+  const err = new ElementResolutionError("not found", "transient");
+  assert.ok(typeof err.recoveryHint === "string" && err.recoveryHint.length > 0);
+});
+
+test("permanent errors have recoveryHint", () => {
+  const err = new ElementResolutionError("invalid selector", "permanent");
+  assert.ok(err.recoveryHint !== undefined);
+  assert.ok(err.recoveryHint.length > 0);
+});
+
+test("NavigationTimeoutError has correct kind", () => {
+  const err = new NavigationTimeoutError("page load timeout");
+  assert.equal(err.kind, "transient");
+  assert.equal(err.code, "NAVIGATION_TIMEOUT");
+});
+
+test("DialogBlockingError has correct kind", () => {
+  const err = new DialogBlockingError("alert blocking");
+  assert.equal(err.kind, "transient");
+  assert.equal(err.code, "DIALOG_BLOCKING");
+});
+
+test("ConnectionLostError has correct kind", () => {
+  const err = new ConnectionLostError("connection dropped");
+  assert.equal(err.kind, "transient");
+  assert.equal(err.code, "CONNECTION_LOST");
+});
+
+test("Error hierarchy preserves message", () => {
+  const err = new ElementResolutionError("custom message", "transient");
+  assert.equal(err.message, "custom message");
+});
+
+test("Error serialization includes kind and code", () => {
+  const err = new ElementResolutionError("test", "transient");
+  const json = JSON.stringify(err);
+  assert.ok(json.includes('"kind":"transient"'));
+  assert.ok(json.includes('"code":"ELEMENT_NOT_FOUND"'));
+});
+
+test("recoveryHint is safe (no URL leakage)", () => {
+  // Create an error with a sensitive URL in context
+  const err = new EgoError("navigation failed", "transient", "NAV_FAILED", {
+    url: "https://example.com/secret?token=abc123xyz",
+  }, "Check the URL and retry.");
+  // The recoveryHint itself should never echo the URL
+  assert.ok(!err.recoveryHint.includes("abc123xyz"));
+  assert.ok(!err.recoveryHint.includes("secret"));
+  assert.equal(err.context.url, "https://example.com/secret");
+  assert.ok(!JSON.stringify(err.toJSON()).includes("abc123xyz"));
+});
+
+test("TimeoutError exists and has correct shape", () => {
+  const err = new TimeoutError("pageLoad", 5000);
+  assert.equal(err.kind, "transient");
+  assert.equal(err.code, "TIMEOUT");
+  assert.ok(typeof err.recoveryHint === "string");
+  assert.ok(err.recoveryHint.length > 0);
+});
+
+test("context.timestamp is always present", () => {
+  const err = new NavigationTimeoutError("timeout");
+  assert.ok(typeof err.context.timestamp === "number");
+  assert.ok(err.context.timestamp > 0);
+});
+
+test("NavigationTimeoutError redacts sensitive URL from message and toJSON", () => {
+  const err = new NavigationTimeoutError("https://example.com/page?token=abc123xyz&foo=bar", 5000);
+  // Message must not contain query params (where tokens live)
+  assert.ok(!err.message.includes("abc123xyz"));
+  assert.ok(!err.message.includes("foo=bar"));
+  assert.ok(!err.message.includes("?"));
+  // Message should contain the redacted URL (domain+path only)
+  assert.ok(err.message.includes("example.com"));
+  assert.ok(err.message.includes("/page"));
+  // toJSON must also not leak
+  const json = err.toJSON();
+  assert.ok(!json.message.includes("abc123xyz"));
+  assert.equal(err.context.url, "https://example.com/page");
+  assert.ok(!JSON.stringify(json).includes("abc123xyz"));
+});
+
+test("mapCdpError applies session-loss and timeout precedence", () => {
+  const lost = mapCdpError(new Error("Session not found"), {
+    operation: "Runtime.evaluate",
+    url: "https://example.com/private?token=SEKRET",
   });
-  assert.equal(egoErrorCode(err), "EGO_SNAPSHOT_FAILED");
-  // bare known code string (e.g. onSendCDPMessageError second arg)
-  assert.equal(
-    egoErrorCode("EGO_TASK_SPACE_USER_IN_CONTROL"),
-    "EGO_TASK_SPACE_USER_IN_CONTROL",
-  );
-  // future code this build does not know about is still returned
-  assert.equal(
-    egoErrorCode({ error_code: "EGO_FUTURE_CODE" }),
-    "EGO_FUTURE_CODE",
-  );
-  // no code present
-  assert.equal(egoErrorCode({ error: "plain message" }), undefined);
-  assert.equal(egoErrorCode("plain message"), undefined);
-});
+  assert.ok(lost instanceof ConnectionLostError);
+  assert.equal(lost.context.url, "https://example.com/private");
 
-test("isEgoErrorCode narrows to known codes only", () => {
-  assert.equal(isEgoErrorCode("EGO_TASK_SPACE_NOT_FOUND"), true);
-  assert.equal(isEgoErrorCode("EGO_FUTURE_CODE"), false);
-  assert.equal(isEgoErrorCode(undefined), false);
-});
-
-test("resolveEgoError overrides the native error message with the owned wording for an owned code", () => {
-  const { code, message } = resolveEgoError({
-    error: "Task space 7 is not assigned to an agent.",
-    error_code: "EGO_TASK_SPACE_INACTIVE",
+  const navigation = mapCdpError(new Error("request timed out"), {
+    operation: "navigate",
+    url: "https://example.com/page",
+    timeoutMs: 5000,
   });
-  assert.equal(code, "EGO_TASK_SPACE_INACTIVE");
-  // Owned id-less guidance replaces the native "Task space 7 ..." text.
-  assert.match(message, /taskSpaces\.claim\(id\)/);
-  assert.doesNotMatch(message, /\b7\b/);
-});
+  assert.ok(navigation instanceof NavigationTimeoutError);
+  assert.equal(navigation.context.url, "https://example.com/page");
+  assert.match(navigation.message, /5000ms/);
 
-test("resolveEgoError keeps the native error message for an unknown future code", () => {
-  assert.deepEqual(
-    resolveEgoError({
-      error: "Some build-specific detail",
-      error_code: "EGO_FUTURE_CODE",
-    }),
-    {
-      code: "EGO_FUTURE_CODE",
-      message: "Some build-specific detail",
-    },
-  );
-});
-
-test("resolveEgoError defers to the native error message for a code ego-browser does not own", () => {
-  // EGO_OPERATION_FAILED is not owned: the client wording (e.g. which operation
-  // failed) is more specific than any static line.
-  assert.deepEqual(
-    resolveEgoError({
-      error: "Failed to create task space",
-      error_code: "EGO_OPERATION_FAILED",
-    }),
-    {
-      code: "EGO_OPERATION_FAILED",
-      message: "Failed to create task space",
-    },
-  );
-});
-
-test("resolveEgoError falls back to the raw code for a bare non-owned code", () => {
-  // ego-browser does not own NOT_SELECTED and a bare code carries no native error message,
-  // so the stable code itself is the most specific thing to surface.
-  assert.deepEqual(resolveEgoError("EGO_TASK_SPACE_NOT_SELECTED"), {
-    code: "EGO_TASK_SPACE_NOT_SELECTED",
-    message: "EGO_TASK_SPACE_NOT_SELECTED",
+  const operation = mapCdpError(new Error("timeout"), {
+    operation: "waitForSelector",
+    timeoutMs: 250,
   });
+  assert.ok(operation instanceof TimeoutError);
+  assert.equal(operation.code, "TIMEOUT");
 });
 
-test("resolveEgoError uses the id-less guidance block for a bare user-control code", () => {
-  const { code, message } = resolveEgoError("EGO_TASK_SPACE_USER_IN_CONTROL");
-  assert.equal(code, "EGO_TASK_SPACE_USER_IN_CONTROL");
-  assert.match(message, /taken control of this task space/);
-  assert.match(message, /taskSpaces\.takeOver\(\)/);
-  assert.doesNotMatch(message, /<id>/);
-});
-
-test("resolveEgoError falls back to the raw code, then a generic message", () => {
-  assert.deepEqual(resolveEgoError({ error_code: "EGO_FUTURE_CODE" }), {
-    code: "EGO_FUTURE_CODE",
-    message: "EGO_FUTURE_CODE",
+test("error taxonomy mutation seam exposes defective mapping", () => {
+  const dispose = __testing.setErrorTaxonomyOverrides({
+    mapCdpError: () => new Error("generic"),
   });
-  assert.deepEqual(resolveEgoError({}), {
-    code: undefined,
-    message: "Unknown ego error",
-  });
-});
-
-test("isEgoUserControlError keys on the stable code, not wording", () => {
-  assert.equal(
-    isEgoUserControlError(
-      Object.assign(new Error("anything at all"), {
-        error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
-      }),
-    ),
-    true,
-  );
-  // wording that mentions user control but lacks the code is not a match
-  assert.equal(
-    isEgoUserControlError(new Error("the user is controlling this")),
-    false,
-  );
-  assert.equal(
-    isEgoUserControlError({ error_code: "EGO_SNAPSHOT_FAILED" }),
-    false,
-  );
-});
-
-test("assertNoEgoError resolves the message via the code and attaches error_code", () => {
   try {
-    assertNoEgoError(
-      {
-        error: "Task space not selected",
-        error_code: "EGO_TASK_SPACE_NOT_SELECTED",
-      },
-      "listTabs",
-    );
-    assert.fail("expected assertNoEgoError to throw");
-  } catch (err) {
-    assert.equal(err.message, "listTabs: Task space not selected");
-    assert.equal(err.error_code, "EGO_TASK_SPACE_NOT_SELECTED");
-  }
-});
-
-test("assertNoEgoError omits the prefix when no op is given", () => {
-  try {
-    assertNoEgoError({
-      error: "The task space is inactive: 10",
-      error_code: "EGO_TASK_SPACE_INACTIVE",
+    const mapped = __testing.mapCdpError(new Error("Session not found"), {
+      operation: "Runtime.evaluate",
     });
-    assert.fail("expected assertNoEgoError to throw");
-  } catch (err) {
-    // No op given, so no "<op>: " prefix — the owned block starts the message.
-    assert.match(err.message, /^The user has taken control/);
-    assert.match(err.message, /taskSpaces\.claim\(id\)/);
-    assert.doesNotMatch(err.message, /\b10\b/);
-    assert.equal(err.error_code, "EGO_TASK_SPACE_INACTIVE");
+    assert.ok(!(mapped instanceof EgoError));
+  } finally {
+    dispose();
   }
+  assert.ok(
+    __testing.mapCdpError(new Error("Session not found"), {
+      operation: "Runtime.evaluate",
+    }) instanceof ConnectionLostError,
+  );
 });
 
-test("assertNoEgoError passes through results with no error", () => {
-  const ok = { tabs: [] };
-  assert.equal(assertNoEgoError(ok, "listTabs"), ok);
+test("URL without query or fragment is preserved", () => {
+  const err = new NavigationTimeoutError("https://ex.com/s", 5000);
+  assert.equal(err.context.url, "https://ex.com/s");
+  assert.match(err.message, /https:\/\/ex\.com\/s/);
 });
