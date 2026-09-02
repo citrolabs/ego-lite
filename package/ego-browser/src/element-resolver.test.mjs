@@ -4,8 +4,8 @@ import assert from "node:assert/strict";
 import {
   resolveElementCenter,
   resolveElementObjectId,
-  ElementResolutionError,
 } from "../dist/src/element-resolver.js";
+import { ElementResolutionError } from "../dist/src/ego-errors.js";
 import { RefMap } from "../dist/src/ref-map.js";
 
 class FakeCDP {

@@ -1,6 +1,5 @@
+import { createOperationTimeoutError, mapCdpError } from "./ego-errors.js";
 import { send, state } from "./state.js";
-
-class TimeoutError extends Error {}
 
 /**
  * Send a raw Chrome DevTools Protocol command.
@@ -81,15 +80,17 @@ async function runtimeEvaluate(
     );
     return runtimeValue(response, expression);
   } catch (error) {
-    if (
-      error instanceof TimeoutError ||
-      /timed out/i.test(error?.message || "")
-    ) {
-      throw new Error(
-        `Runtime.evaluate timed out; expression: ${jsSnippet(expression)}`,
+    if (/timed out|timeout/i.test(error?.message || "")) {
+      throw createOperationTimeoutError(
+        `Runtime.evaluate (${jsSnippet(expression)})`,
+        state.defaultTimeout,
       );
     }
-    throw error;
+    throw mapCdpError(error, {
+      operation: "Runtime.evaluate",
+      timeoutMs: state.defaultTimeout,
+      sessionId,
+    });
   }
 }
 

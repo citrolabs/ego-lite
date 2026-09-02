@@ -1,14 +1,6 @@
 import { parseRef } from "./ref-map.js";
 import { queryAllExpression } from "./locator-query.js";
-
-export class ElementResolutionError extends Error {
-  kind: "transient" | "permanent";
-  constructor(message: string, kind: "transient" | "permanent") {
-    super(message);
-    this.name = "ElementResolutionError";
-    this.kind = kind;
-  }
-}
+import { ElementResolutionError } from "./ego-errors.js";
 
 /**
  * Return the ordered AX backend-node match set for a root role locator.
