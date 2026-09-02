@@ -1379,7 +1379,14 @@ test("TaskSpace uses spaceId and finishes while keeping every managed Page", asy
 
     const finishTask = taskForRound(fixture, "round-b", services);
     const page = await finishTask.newPage();
-    await finishTask.finish({ keep: "all" });
+    const receipt = await finishTask.finish({ keep: "all" });
+    assert.deepEqual(receipt, {
+      spaceId: 7,
+      closedSpace: false,
+      keptManagedLabels: [page.label],
+      closedManagedLabels: [],
+      preservedUnmanagedCount: 0,
+    });
     assert.deepEqual((await ledger.read(7)).pages, {});
     assert.equal(fixture.tabs.has(page.targetId), true);
 
@@ -1414,7 +1421,15 @@ test("TaskSpace finish keeps named Pages and protects unknown-origin Pages", asy
       openedBy: "unknown",
     });
 
-    await task.finish({ keep: ["p2"] });
+    const receipt = await task.finish({ keep: ["p2"] });
+
+    assert.deepEqual(receipt, {
+      spaceId: 7,
+      closedSpace: false,
+      keptManagedLabels: ["p2", "user-page"],
+      closedManagedLabels: ["p1", "p3"],
+      preservedUnmanagedCount: 0,
+    });
 
     assert.deepEqual(lifecycleCalls, ["finish"]);
     assert.deepEqual([...fixture.tabs.keys()].sort(), [
@@ -1442,7 +1457,15 @@ test("TaskSpace finish closes the whole space when no Pages are retained", async
     });
     await openTestPage(task, "https://example.test/one");
 
-    await task.finish({ keep: [] });
+    const receipt = await task.finish({ keep: [] });
+
+    assert.deepEqual(receipt, {
+      spaceId: 7,
+      closedSpace: true,
+      keptManagedLabels: [],
+      closedManagedLabels: ["p1"],
+      preservedUnmanagedCount: 0,
+    });
 
     assert.deepEqual(lifecycleCalls, ["close"]);
     assert.equal(
@@ -1473,7 +1496,15 @@ test("TaskSpace finish keeps protected unmanaged tabs even with an empty keep li
     fixture.addExternalTab("target-user", "https://example.test/user");
     await ledger.keepUnmanaged(7, "target-user", "unknown");
 
-    await task.finish({ keep: [] });
+    const receipt = await task.finish({ keep: [] });
+
+    assert.deepEqual(receipt, {
+      spaceId: 7,
+      closedSpace: false,
+      keptManagedLabels: [],
+      closedManagedLabels: ["p1"],
+      preservedUnmanagedCount: 1,
+    });
 
     assert.deepEqual(lifecycleCalls, ["finish"]);
     assert.equal(fixture.tabs.has(agentPage.targetId), false);
@@ -3697,6 +3728,57 @@ test("Page keyboard accepts case-insensitive modifier names", async () => {
     assert.equal(aDowns[0].modifiers, 15);
     assert.equal(aDowns[1].modifiers, 4);
     assert.deepEqual(aDowns[1].commands, ["selectAll"]);
+  });
+});
+
+test("Page keyboard accepts case-insensitive named key names", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+
+    await page.keyboard.press("ENTER");
+    await page.keyboard.press("escape");
+    await page.press("[contenteditable]", "ARROWDOWN");
+
+    const keyDowns = fixture.calls
+      .filter(
+        ([kind, method, params]) =>
+          kind === "cdp" &&
+          method === "Input.dispatchKeyEvent" &&
+          (params.type === "keyDown" || params.type === "rawKeyDown"),
+      )
+      .map(([, , params]) => params);
+    assert.deepEqual(
+      keyDowns.map(({ code }) => code),
+      ["Enter", "Escape", "ArrowDown"],
+    );
+  });
+});
+
+test("Page keyboard keeps single-character key case significant", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+
+    await page.keyboard.press("a");
+    await page.keyboard.press("A");
+
+    const keyDowns = fixture.calls
+      .filter(
+        ([kind, method, params]) =>
+          kind === "cdp" &&
+          method === "Input.dispatchKeyEvent" &&
+          params.type === "keyDown" &&
+          params.code === "KeyA",
+      )
+      .map(([, , params]) => params);
+    assert.deepEqual(
+      keyDowns.map(({ key, text }) => ({ key, text })),
+      [
+        { key: "a", text: "a" },
+        { key: "A", text: "A" },
+      ],
+    );
   });
 });
 
