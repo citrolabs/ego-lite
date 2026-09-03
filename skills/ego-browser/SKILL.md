@@ -451,3 +451,11 @@ If the final output contains `[ego-browser:notice]`, finish the current browser
 task, tell the user an Ego Lite update is available, and run
 `ego-browser upgrade` only with their approval. Re-read this Skill after the
 upgrade.
+
+## References
+
+- [Installation and connection](references/install.md)
+- [API signatures and options](references/api.md)
+- [Clearing cookies, cache, and storage](references/clearing-state.md) — read
+  before clearing any cookie, cache, or storage; some clears reach the whole
+  browser profile.
