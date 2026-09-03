@@ -15,6 +15,7 @@ import { pageJavaScriptDialogHandlingCase } from "./page-dialogs.mjs";
 import { pageMediaPlaybackCase } from "./page-media-playback.mjs";
 import { pageScrolledScreenshotCase } from "./page-screenshot.mjs";
 import { pageSnapshotLocatorCase } from "./page-snapshot-locators.mjs";
+import { pageSnapshotSubtreeCase } from "./page-snapshot-subtree.mjs";
 import { pageShadowDomCase } from "./page-shadow-dom.mjs";
 import { pageTextLocatorCase } from "./page-text-locators.mjs";
 import { pageSelectorCompatibilityCase } from "./page-selector-compatibility.mjs";
@@ -103,6 +104,7 @@ export const e2eCases = [
   { name: "Page media playback", body: pageMediaPlaybackCase },
   { name: "Page scrolled screenshot", body: pageScrolledScreenshotCase },
   { name: "Page snapshot locator quality", body: pageSnapshotLocatorCase },
+  { name: "Page snapshot subtree", body: pageSnapshotSubtreeCase },
   { name: "Page open Shadow DOM locators", body: pageShadowDomCase },
   { name: "Page text locators", body: pageTextLocatorCase },
   {

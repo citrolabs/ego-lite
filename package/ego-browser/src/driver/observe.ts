@@ -22,7 +22,8 @@ import {
 } from "../ref-state.js";
 
 export type SnapshotOptions = {
-  scope?: "only_within_viewport" | "full_page";
+  scope?: "only_within_viewport" | "full_page" | "subtree";
+  root?: number;
   includeActionMarks?: boolean;
   includeStableLocator?: boolean;
 };
@@ -64,12 +65,13 @@ export const snapshotRaw = snapshot;
 
 /**
  * Return snapshot content with agent-friendly defaults.
- * @param {{scope?: "only_within_viewport"|"full_page", includeActionMarks?: boolean, includeStableLocator?: boolean}} [options]
+ * @param {{scope?: "only_within_viewport"|"full_page"|"subtree", root?: number, includeActionMarks?: boolean, includeStableLocator?: boolean}} [options]
  * @returns {Promise<string>}
  */
 export async function snapshotText(options: SnapshotOptions = {}) {
   const result = await snapshot({
     scope: options.scope ?? "full_page",
+    ...(options.root === undefined ? {} : { root: options.root }),
     includeActionMarks: options.includeActionMarks ?? true,
     includeStableLocator: options.includeStableLocator ?? true,
   });

@@ -3,6 +3,7 @@ import { validateLocatorBackendNodes } from "./element-resolver.js";
 type SnapshotRef = {
   backendNodeId?: number;
   frameId?: string;
+  frameProvenance?: "page" | "frame" | "unknown";
   loc?: string;
   name?: string;
   refId?: number | string;
@@ -33,6 +34,11 @@ type SnapshotServices = {
     params?: Record<string, unknown>,
     sessionId?: string,
   ): Promise<any>;
+};
+
+type SnapshotFrameContext = {
+  frameId?: string;
+  frameProvenance?: "page" | "frame" | "unknown";
 };
 
 /**
@@ -84,6 +90,62 @@ export function compactSnapshotResult(result: SnapshotResult): SnapshotResult {
   return result;
 }
 
+/** Keep iframe roots visible while deferring their descendants in viewport snapshots. */
+export function deferIframeSnapshotSubtrees(content: string): string {
+  if (typeof content !== "string" || content.length === 0) return content;
+  if (!content.split(/\r?\n/).some((line) => line.trim() === "root")) {
+    return content;
+  }
+
+  const newline = content.includes("\r\n") ? "\r\n" : "\n";
+  const trailingNewline = content.endsWith(newline);
+  const lines = content.split(/\r?\n/);
+  if (trailingNewline) lines.pop();
+
+  const output: string[] = [];
+  let deferredIndent: number | undefined;
+  for (const line of lines) {
+    const text = line.trim();
+    if (!text) {
+      if (deferredIndent === undefined) output.push(line);
+      continue;
+    }
+
+    const indent = line.length - line.trimStart().length;
+    if (deferredIndent !== undefined && indent > deferredIndent) continue;
+    deferredIndent = undefined;
+    output.push(line);
+    // Deferring is only safe when the iframe advertises a ref, because that ref
+    // is the caller's only way back into the subtree. An unreferenced iframe
+    // keeps its descendants inline rather than hiding them irrecoverably.
+    if (/^iframe(?:\s|$)/.test(text) && snapshotLineRefId(line) !== undefined) {
+      deferredIndent = indent;
+    }
+  }
+
+  return output.join(newline) + (trailingNewline ? newline : "");
+}
+
+/** Keep only refs still advertised by the final rendered snapshot text. */
+export function retainSnapshotRefsInContent(
+  result: SnapshotResult,
+): SnapshotResult {
+  if (!Array.isArray(result?.refs) || typeof result.content !== "string") {
+    return result;
+  }
+
+  const visibleRefIds = new Set<string>();
+  for (const line of result.content.split(/\r?\n/)) {
+    const refId = snapshotLineRefId(line);
+    if (refId !== undefined) visibleRefIds.add(refId);
+  }
+  result.refs = result.refs.filter((ref) => {
+    const refId = ref.refId ?? ref.backendNodeId;
+    return refId !== undefined && visibleRefIds.has(String(refId));
+  });
+  return result;
+}
+
 function compactSnapshotNode(node: SnapshotTreeNode): SnapshotTreeNode[] {
   const text = omitUnusableLocatorStatus(node.text);
   const children = node.children.flatMap(compactSnapshotNode);
@@ -106,6 +168,17 @@ function omitUnusableLocatorStatus(text: string): string {
   return compacted === metadata
     ? text
     : `${text.slice(0, metadataIndex)}${compacted}`;
+}
+
+/**
+ * Read the ref id a snapshot line advertises. Quote-aware, so a `[ref=` that
+ * appears inside an accessible name is never mistaken for the line's metadata.
+ */
+function snapshotLineRefId(line: string): string | undefined {
+  const metadataIndex = findSnapshotMetadataStart(line);
+  if (metadataIndex < 0) return undefined;
+  const match = line.slice(metadataIndex).match(/^\[ref=([^,\]]+)/);
+  return match ? match[1] : undefined;
 }
 
 function findSnapshotMetadataStart(text: string): number {
@@ -256,12 +329,17 @@ export async function preparePageSnapshotResult(
   pageSessionId: string,
   iframeSessions: Map<string, string>,
   result: SnapshotResult,
+  rootContext: SnapshotFrameContext = {},
 ): Promise<SnapshotResult> {
   const adapter: CdpAdapter = {
     sendRaw: (method, params = {}, sessionId) =>
       services.cdp(method, params, sessionId),
   };
   const refs = result?.refs || [];
+  const descendantRefIds =
+    typeof result?.content === "string"
+      ? iframeDescendantRefIds(result.content)
+      : new Set<string>();
   const validIndexes = await validateLocatorBackendNodes(
     adapter,
     pageSessionId,
@@ -269,7 +347,126 @@ export async function preparePageSnapshotResult(
     snapshotLocatorCandidates(refs),
   );
   const validRefs = new Set(refs.filter((_, index) => validIndexes.has(index)));
+  await backfillSnapshotFrameIds(
+    adapter,
+    pageSessionId,
+    iframeSessions,
+    result,
+    descendantRefIds,
+  );
+  for (const ref of refs) {
+    const refId = ref.refId ?? ref.backendNodeId;
+    if (ref.frameId) {
+      ref.frameProvenance = "frame";
+    } else if (refId !== undefined && descendantRefIds.has(String(refId))) {
+      ref.frameProvenance = "unknown";
+    } else if (rootContext.frameId) {
+      ref.frameId = rootContext.frameId;
+      ref.frameProvenance = "frame";
+    } else {
+      // A subtree root with frame provenance always carries a frameId, so the
+      // remaining cases are a page-owned root or one whose frame is unknown.
+      ref.frameProvenance = rootContext.frameProvenance ?? "page";
+    }
+  }
   return sanitizeSnapshotLocators(result, async (ref) => validRefs.has(ref));
+}
+
+async function backfillSnapshotFrameIds(
+  cdp: CdpAdapter,
+  pageSessionId: string,
+  iframeSessions: Map<string, string>,
+  result: SnapshotResult,
+  descendantRefIds: Set<string>,
+): Promise<void> {
+  if (iframeSessions.size === 0 || typeof result.content !== "string") return;
+
+  const missing = (result.refs || []).filter((ref) => {
+    const refId = ref.refId ?? ref.backendNodeId;
+    return (
+      !ref.frameId && refId !== undefined && descendantRefIds.has(String(refId))
+    );
+  });
+  if (missing.length === 0) return;
+
+  const frameIds = [...iframeSessions.keys()];
+  // One frame admits no ambiguity to resolve, and the refs that most need a
+  // frame here are the ones with no usable locator to validate against.
+  if (frameIds.length === 1) {
+    for (const ref of missing) ref.frameId = frameIds[0];
+    return;
+  }
+
+  const owners = new Map<number, { frameId: string; ref: SnapshotRef }>();
+  const candidates: Array<{
+    index: number;
+    locator: string;
+    backendNodeId: number;
+    frameId: string;
+  }> = [];
+  for (const ref of missing) {
+    const base = snapshotLocatorCandidates([ref])[0];
+    if (!base) continue;
+    for (const frameId of frameIds) {
+      const index = candidates.length;
+      candidates.push({ ...base, index, frameId });
+      owners.set(index, { frameId, ref });
+    }
+  }
+
+  const valid = await validateLocatorBackendNodes(
+    cdp,
+    pageSessionId,
+    iframeSessions,
+    candidates,
+  );
+  const matches = new Map<SnapshotRef, Set<string>>();
+  for (const index of valid) {
+    const owner = owners.get(index);
+    if (!owner) continue;
+    const frameMatches = matches.get(owner.ref) ?? new Set<string>();
+    frameMatches.add(owner.frameId);
+    matches.set(owner.ref, frameMatches);
+  }
+  for (const [ref, frameMatches] of matches) {
+    if (frameMatches.size === 1) ref.frameId = [...frameMatches][0];
+  }
+}
+
+function iframeDescendantRefIds(content: string): Set<string> {
+  const refs = new Set<string>();
+  let iframeIndent: number | undefined;
+  let frameRootIndent: number | undefined;
+  for (const line of content.split(/\r?\n/)) {
+    const text = line.trim();
+    if (!text) continue;
+    const indent = line.length - line.trimStart().length;
+    const startsIframe = /^iframe(?:\s|$)/.test(text);
+
+    if (iframeIndent === undefined) {
+      if (startsIframe) iframeIndent = indent;
+      continue;
+    }
+
+    if (frameRootIndent === undefined) {
+      if (/^root(?:\s|$)/.test(text) && indent >= iframeIndent) {
+        frameRootIndent = indent;
+      } else if (indent <= iframeIndent) {
+        iframeIndent = startsIframe ? indent : undefined;
+      }
+      continue;
+    }
+
+    if (indent <= frameRootIndent) {
+      iframeIndent = startsIframe ? indent : undefined;
+      frameRootIndent = undefined;
+      continue;
+    }
+
+    const refId = snapshotLineRefId(line);
+    if (refId !== undefined) refs.add(refId);
+  }
+  return refs;
 }
 
 function snapshotLocatorCandidates(refs: SnapshotRef[]) {

@@ -70,6 +70,10 @@ test("schema-driven option validation rejects unknown and invalid fields", () =>
     path: "/tmp/image.png",
     scale: "css",
   });
+  validatePublicApiOptions("Page.snapshot", {
+    scope: "subtree",
+    root: "@21",
+  });
   validatePublicApiOptions("TaskSpace.finish", { keep: [] });
   validatePublicApiOptions("TaskSpace.finish", { keep: ["p2"] });
   validatePublicApiOptions("TaskSpace.finish", { keep: "all" });
@@ -108,6 +112,10 @@ test("schema-driven option validation rejects unknown and invalid fields", () =>
   assert.throws(
     () => validatePublicApiOptions("Page.goto", { waitUntil: "interactive" }),
     /waitUntil must be one of commit, domcontentloaded, load, networkidle/,
+  );
+  assert.throws(
+    () => validatePublicApiOptions("Page.snapshot", { root: 21 }),
+    /root must be a non-empty string/,
   );
   assert.throws(
     () => validatePublicApiOptions("Page.waitForFunction", { polling: 0 }),
@@ -153,6 +161,11 @@ test("the generated reference contains signatures and option descriptions", () =
     markdown,
     /`await page\.reload\(\{ timeout\?, waitUntil\? \}\)`/,
   );
+  assert.match(
+    markdown,
+    /`await page\.snapshot\(\{ scope\?, root\?, includeActionMarks\?, includeStableLocator\? \}\)`/,
+  );
+  assert.match(markdown, /`root`.*snapshot ref/);
   assert.match(
     markdown,
     /`await page\.selectOption\(selector, valueOrValues, \{ timeout\? \}\)`/,

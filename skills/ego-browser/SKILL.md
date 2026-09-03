@@ -163,6 +163,18 @@ captures the current moment; it does not wait for the page to become stable.
 `page.snapshot()` captures the current viewport. For content outside it, use
 `page.snapshot({ scope: "full_page" })`.
 
+The default viewport snapshot keeps each `iframe` root but defers its nested
+tree. To inspect a frame, reuse the ref printed on that `iframe` line:
+
+```js
+console.log(await page.snapshot({ scope: "subtree", root: "@12" }));
+```
+
+For cross-process frames, readable subtree content may not include action refs.
+Use a unique `loc=role:` or `loc=css:` selector when an inner action has no ref.
+If subtree reports a duplicate backend node id across frames, use
+`page.snapshot({ scope: "full_page" })`; the runtime refuses to guess.
+
 `waitForLoadState()` defaults to `load`. `waitForFunction()` follows the
 Playwright argument order; pass `undefined` before options when there is no Page
 argument:
@@ -220,6 +232,13 @@ node has no ref, construct a selector from its role, text, or surrounding
 context. CSS searches nested open shadow roots. Actions use an actionable match
 in the top document first, then search frames when the top document has none.
 Multiple actionable matches in the selected document or frame are ambiguous.
+
+Snapshot refs are intentionally invalidated after input actions,
+`page.evaluate()`, `page.cdp()`, `page.waitForFunction()`,
+`page.waitForLoadState()`, and successful dialog handling because any of them
+can change the document. Take a new snapshot before using another ref; use a
+stable `loc=...` selector when several actions must run without an intervening
+snapshot.
 
 Select options by value, visible label, or zero-based index. A string matches
 either value or label; pass an array for a multiple select:

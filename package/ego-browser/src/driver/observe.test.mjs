@@ -8,7 +8,11 @@ import {
   browserCdp,
   invalidateSession,
 } from "../../dist/src/browser-runtime.js";
-import { captureScreenshot, snapshot } from "../../dist/src/driver/observe.js";
+import {
+  captureScreenshot,
+  snapshot,
+  snapshotText,
+} from "../../dist/src/driver/observe.js";
 import { setOverrides } from "../../dist/src/state.js";
 
 function withCdpRuntime(fn) {
@@ -98,6 +102,35 @@ test("snapshot compacts the native result before returning it", async () => {
     assert.deepEqual(calls, [{ scope: "full_page" }]);
     assert.equal(result.content, "root\n  button [ref=1]");
     assert.equal(result.refs[0].loc, undefined);
+  } finally {
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
+test("snapshotText forwards a subtree root to the native snapshot", async () => {
+  const previous = globalThis.ego;
+  const calls = [];
+  globalThis.ego = {
+    async snapshot(options) {
+      calls.push(options);
+      return { content: "button [ref=21]", refs: [] };
+    },
+  };
+
+  try {
+    assert.equal(
+      await snapshotText({ scope: "subtree", root: 21 }),
+      "button [ref=21]",
+    );
+    assert.deepEqual(calls, [
+      {
+        scope: "subtree",
+        root: 21,
+        includeActionMarks: true,
+        includeStableLocator: true,
+      },
+    ]);
   } finally {
     if (previous === undefined) delete globalThis.ego;
     else globalThis.ego = previous;

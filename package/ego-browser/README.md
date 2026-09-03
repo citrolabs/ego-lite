@@ -90,7 +90,7 @@ existing scripts.
 ## Design constraints
 
 - The browser runtime owns tabs, task spaces, CDP transport, snapshots, and event delivery. This package keeps only agent-facing ergonomics.
-- Snapshot helpers use the browser runtime contract: `ego.snapshot({ scope, includeActionMarks, includeStableLocator })`.
+- Snapshot helpers use the browser runtime contract: `ego.snapshot({ scope, root, includeActionMarks, includeStableLocator })`; the Page API resolves a subtree `root` from a Page-scoped snapshot ref before invoking it.
 - Page selectors search the top document first. Input actions search frames
   when the top document has no match usable for that action, then require one
   usable frame match.

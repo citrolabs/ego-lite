@@ -96,7 +96,11 @@ import {
   type PageOrigin,
 } from "./page-ledger.js";
 import { PageRefRegistry } from "./page-ref-registry.js";
-import { preparePageSnapshotResult } from "./snapshot-result.js";
+import {
+  deferIframeSnapshotSubtrees,
+  preparePageSnapshotResult,
+  retainSnapshotRefsInContent,
+} from "./snapshot-result.js";
 import {
   clearSpacePageNotices,
   forgetPageNotice,
@@ -145,7 +149,9 @@ type PageGotoOptions = {
 
 type PageReloadOptions = Pick<PageGotoOptions, "timeout" | "waitUntil">;
 
-type PageSnapshotOptions = SnapshotOptions;
+type PageSnapshotOptions = Omit<SnapshotOptions, "root"> & {
+  root?: string;
+};
 
 type PageScreenshotOptions = Omit<CaptureScreenshotOptions, "full"> & {
   path?: string;
@@ -1582,15 +1588,72 @@ class Page {
 
   async snapshot(options: PageSnapshotOptions = {}): Promise<string> {
     validatePublicApiOptions("Page.snapshot", options);
+    const rootRefId =
+      options.scope === "subtree" && options.root !== undefined
+        ? parseRef(options.root)
+        : undefined;
+    if (options.scope === "subtree" && options.root === undefined) {
+      throw pageSnapshotOptionsError(
+        "page.snapshot subtree scope requires root to be a snapshot ref such as @21",
+      );
+    }
+    if (options.scope !== "subtree" && options.root !== undefined) {
+      throw pageSnapshotOptionsError(
+        "page.snapshot root is only supported when scope is subtree",
+      );
+    }
+    if (options.root !== undefined && !rootRefId) {
+      throw pageSnapshotOptionsError(
+        "page.snapshot root must be a snapshot ref such as @21",
+      );
+    }
     const page = await this.#resolve();
     return this.#services.gate.withPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId);
+      let root: number | undefined;
+      let rootContext:
+        | {
+            frameId?: string;
+            frameProvenance?: "page" | "frame" | "unknown";
+          }
+        | undefined;
+      if (rootRefId) {
+        const refs = await this.#refMapForAction(
+          page,
+          sessionId,
+          options.root!,
+        );
+        const entry = refs.get(rootRefId);
+        if (!entry) {
+          throw new ElementResolutionError(
+            `Unknown ref: ${options.root}`,
+            "permanent",
+          );
+        }
+        root = entry.backendNodeId;
+        rootContext = {
+          ...(entry.frameId ? { frameId: entry.frameId } : {}),
+          ...(entry.frameProvenance
+            ? { frameProvenance: entry.frameProvenance }
+            : {}),
+        };
+      }
+      const { root: _root, ...snapshotOptions } = options;
+      const snapshotScope = options.scope ?? "only_within_viewport";
       const result = await this.#services.snapshot({
-        ...options,
-        scope: options.scope ?? "only_within_viewport",
+        ...snapshotOptions,
+        ...(root === undefined ? {} : { root }),
+        scope: snapshotScope,
         includeActionMarks: options.includeActionMarks ?? true,
         includeStableLocator: options.includeStableLocator ?? true,
       });
+      if (
+        snapshotScope === "only_within_viewport" &&
+        typeof result?.content === "string"
+      ) {
+        result.content = deferIframeSnapshotSubtrees(result.content);
+        retainSnapshotRefsInContent(result);
+      }
       const iframeSessions =
         Array.isArray(result?.refs) && result.refs.length > 0
           ? await this.#services.ensureFrameSessions(page.targetId)
@@ -1600,8 +1663,13 @@ class Page {
         sessionId,
         iframeSessions,
         result,
+        rootContext,
       );
-      this.#services.pageRefs.replace(page.targetId, result?.refs || []);
+      if (snapshotScope === "full_page") {
+        this.#services.pageRefs.replace(page.targetId, result?.refs || []);
+      } else {
+        this.#services.pageRefs.merge(page.targetId, result?.refs || []);
+      }
       const content = result?.content || "";
       const header = await this.#snapshotHeader(page);
       return `${header}\n${content}`;
@@ -1889,7 +1957,7 @@ class Page {
       } finally {
         // The predicate may mutate the DOM, so snapshot refs are no longer
         // guaranteed to identify the same elements.
-        this.#services.pageRefs.clear(page.targetId);
+        this.#services.pageRefs.invalidate(page.targetId);
       }
       throw waitForFunctionTimeoutError(
         this.spaceId,
@@ -1962,7 +2030,7 @@ class Page {
       } finally {
         // Raw CDP can navigate or mutate the document, so existing refs are no
         // longer safe even when the command looked observational.
-        this.#services.pageRefs.clear(page.targetId);
+        this.#services.pageRefs.invalidate(page.targetId);
       }
     });
   }
@@ -2001,7 +2069,7 @@ class Page {
       try {
         await waitForLoadStateInPage(this.#services, sessionId, state, options);
       } finally {
-        this.#services.pageRefs.clear(page.targetId);
+        this.#services.pageRefs.invalidate(page.targetId);
       }
     });
   }
@@ -2409,7 +2477,7 @@ class Page {
           throw error;
         }
       } finally {
-        if (activate) this.#services.pageRefs.clear(page.targetId);
+        if (activate) this.#services.pageRefs.invalidate(page.targetId);
       }
     });
   }
@@ -2507,7 +2575,7 @@ class Page {
         );
         // A handled dialog resumes its callback and may mutate the DOM. A
         // no-dialog response leaves the page untouched, so its refs stay valid.
-        this.#services.pageRefs.clear(page.targetId);
+        this.#services.pageRefs.invalidate(page.targetId);
         return true;
       } catch (error) {
         if (isNoJavaScriptDialogError(error)) return false;
@@ -2525,7 +2593,7 @@ class Page {
       try {
         return await operation(sessionId);
       } finally {
-        this.#services.pageRefs.clear(page.targetId);
+        this.#services.pageRefs.invalidate(page.targetId);
       }
     });
   }
@@ -2617,7 +2685,7 @@ class Page {
         };
       } finally {
         await fileChooserGuard?.dispose();
-        this.#services.pageRefs.clear(page.targetId);
+        this.#services.pageRefs.invalidate(page.targetId);
       }
     });
   }
@@ -2627,6 +2695,18 @@ class Page {
     sessionId: string,
     ...selectors: string[]
   ): Promise<RefMap> {
+    for (const selector of selectors) {
+      const refId = parseRef(selector);
+      if (
+        refId &&
+        this.#services.pageRefs.isInvalidated(page.targetId, refId)
+      ) {
+        throw new ElementResolutionError(
+          `Stale ref: @${refId}; take a new snapshot`,
+          "permanent",
+        );
+      }
+    }
     let refs = this.#services.pageRefs.forTarget(page.targetId);
     const missingRef = selectors.some((selector) => {
       const refId = parseRef(selector);
@@ -2677,6 +2757,11 @@ class Page {
     await this.#services.cdp("Target.activateTarget", { targetId });
     this.#services.setPreferredTarget(targetId);
   }
+}
+
+function pageSnapshotOptionsError(message: string): TypeError {
+  const signature = publicApiEntry("Page.snapshot")?.signature;
+  return new TypeError(`${message}. Expected: ${signature}`);
 }
 
 function snapshotSourceHeader(input: {

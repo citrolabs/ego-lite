@@ -16,6 +16,7 @@ export class RefMap {
     name,
     nth = undefined,
     frameId = undefined,
+    frameProvenance = undefined,
   ) {
     this.map.set(refId, {
       backendNodeId,
@@ -23,6 +24,7 @@ export class RefMap {
       name,
       nth,
       frameId,
+      ...(frameProvenance ? { frameProvenance } : {}),
     });
   }
 

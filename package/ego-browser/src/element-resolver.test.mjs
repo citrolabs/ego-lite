@@ -95,6 +95,200 @@ test("stale backend node still falls back to role/name lookup", async () => {
   );
 });
 
+test("iframe refs recover frame provenance before resolving a colliding backend node", async () => {
+  const refMap = new RefMap();
+  refMap.addWithFrame(
+    "4729",
+    21,
+    "option",
+    "Upload",
+    undefined,
+    undefined,
+    "unknown",
+  );
+  const cdp = new FakeCDP(async (method, params, sessionId) => {
+    if (method === "Accessibility.getFullAXTree") {
+      if (sessionId === "session:picker") {
+        return {
+          nodes: [
+            {
+              role: { value: "option" },
+              name: { value: "Upload" },
+              backendDOMNodeId: 21,
+            },
+          ],
+        };
+      }
+      if (sessionId === "session:page" && !params.frameId) {
+        return {
+          nodes: [
+            {
+              role: { value: "button" },
+              name: { value: "Close" },
+              backendDOMNodeId: 21,
+            },
+          ],
+        };
+      }
+      return { nodes: [] };
+    }
+    if (method === "DOM.resolveNode") {
+      return {
+        object: {
+          objectId:
+            sessionId === "session:picker"
+              ? "picker-upload-option"
+              : "wrong-page-node",
+        },
+      };
+    }
+    return {};
+  });
+
+  const resolved = await resolveElementObjectId(
+    cdp,
+    "session:page",
+    refMap,
+    "@4729",
+    new Map([
+      ["frame:picker", "session:picker"],
+      ["frame:other", "session:other"],
+    ]),
+  );
+
+  assert.deepEqual(resolved, {
+    objectId: "picker-upload-option",
+    sessionId: "session:picker",
+    frameId: "frame:picker",
+  });
+});
+
+test("main-page ref provenance skips frame recovery", async () => {
+  const refMap = new RefMap();
+  refMap.addWithFrame(
+    "73",
+    100,
+    "button",
+    "Save",
+    undefined,
+    undefined,
+    "page",
+  );
+  const cdp = new FakeCDP(async (method, _params, sessionId) => {
+    if (method === "Accessibility.getFullAXTree") {
+      throw new Error("main-page refs must not scan frame AX trees");
+    }
+    if (method === "DOM.resolveNode") {
+      assert.equal(sessionId, "session:page");
+      return { object: { objectId: "page-save-button" } };
+    }
+    return {};
+  });
+
+  assert.deepEqual(
+    await resolveElementObjectId(
+      cdp,
+      "session:page",
+      refMap,
+      "@73",
+      new Map([["frame:detached", "session:detached"]]),
+    ),
+    { objectId: "page-save-button", sessionId: "session:page" },
+  );
+});
+
+test("unknown frame provenance recovers by backend id after the accessible name changes", async () => {
+  const refMap = new RefMap();
+  refMap.addWithFrame(
+    "73",
+    100,
+    "button",
+    "Save",
+    undefined,
+    undefined,
+    "unknown",
+  );
+  const cdp = new FakeCDP(async (method, _params, sessionId) => {
+    if (method === "Accessibility.getFullAXTree") {
+      return sessionId === "session:frame"
+        ? {
+            nodes: [
+              {
+                role: { value: "button" },
+                name: { value: "Saving…" },
+                backendDOMNodeId: 100,
+              },
+            ],
+          }
+        : { nodes: [] };
+    }
+    if (method === "DOM.resolveNode") {
+      assert.equal(sessionId, "session:frame");
+      return { object: { objectId: "frame-save-button" } };
+    }
+    return {};
+  });
+
+  assert.deepEqual(
+    await resolveElementObjectId(
+      cdp,
+      "session:page",
+      refMap,
+      "@73",
+      new Map([["frame:child", "session:frame"]]),
+    ),
+    {
+      objectId: "frame-save-button",
+      sessionId: "session:frame",
+      frameId: "frame:child",
+    },
+  );
+});
+
+test("unknown frame provenance falls back to the main document when no frame owns the node", async () => {
+  const refMap = new RefMap();
+  refMap.addWithFrame(
+    "74",
+    100,
+    "button",
+    "Save",
+    undefined,
+    undefined,
+    "unknown",
+  );
+  const cdp = new FakeCDP(async (method, _params, sessionId) => {
+    if (method === "Accessibility.getFullAXTree") {
+      return sessionId === "session:page"
+        ? {
+            nodes: [
+              {
+                role: { value: "button" },
+                name: { value: "Save" },
+                backendDOMNodeId: 100,
+              },
+            ],
+          }
+        : { nodes: [] };
+    }
+    if (method === "DOM.resolveNode") {
+      assert.equal(sessionId, "session:page");
+      return { object: { objectId: "page-save-button" } };
+    }
+    return {};
+  });
+
+  assert.deepEqual(
+    await resolveElementObjectId(
+      cdp,
+      "session:page",
+      refMap,
+      "@74",
+      new Map([["frame:child", "session:frame"]]),
+    ),
+    { objectId: "page-save-button", sessionId: "session:page" },
+  );
+});
+
 test("role locator with degenerate box model throws transient", async () => {
   const cdp = new FakeCDP(async (method) => {
     if (method === "Accessibility.getFullAXTree") {
@@ -1066,4 +1260,97 @@ test("strict global role validation rejects a hidden duplicate", async () => {
       return true;
     },
   );
+});
+
+test("a stale ref refuses an ambiguous role/name recovery", async () => {
+  // The ref points at a row that left the DOM. Role and name are all that is
+  // left to identify it, and they no longer single one element out, so the
+  // recovery must fail instead of acting on whichever row comes first.
+  const refMap = new RefMap();
+  refMap.add("23", 13, "button", "Delete");
+  const cdp = new FakeCDP(async (method, params) => {
+    if (method === "DOM.resolveNode") {
+      if (params.backendNodeId === 13) {
+        throw new Error("Could not find node with given id");
+      }
+      return { object: { objectId: `obj-${params.backendNodeId}` } };
+    }
+    if (method === "Accessibility.getFullAXTree") {
+      return {
+        nodes: [
+          {
+            role: { value: "button" },
+            name: { value: "Delete" },
+            backendDOMNodeId: 11,
+          },
+          {
+            role: { value: "button" },
+            name: { value: "Delete" },
+            backendDOMNodeId: 12,
+          },
+        ],
+      };
+    }
+    return {};
+  });
+
+  const error = await resolveElementObjectId(
+    cdp,
+    "session:page",
+    refMap,
+    "@23",
+    new Map(),
+    { strict: true },
+  ).then(
+    () => undefined,
+    (thrown) => thrown,
+  );
+
+  assert.ok(error instanceof ElementResolutionError);
+  assert.equal(error.kind, "permanent");
+  assert.match(error.message, /matched 2 elements/);
+  assert.ok(
+    !cdp.calls.some(
+      ([method, params]) =>
+        method === "DOM.resolveNode" && params.backendNodeId !== 13,
+    ),
+    "an ambiguous recovery must not resolve some other node",
+  );
+});
+
+test("a stale ref still recovers when role and name identify one element", async () => {
+  // The legitimate case the fallback exists for: a re-render replaced the node
+  // but exactly one element still carries that role and name.
+  const refMap = new RefMap();
+  refMap.add("23", 13, "button", "Save");
+  const cdp = new FakeCDP(async (method, params) => {
+    if (method === "DOM.resolveNode") {
+      if (params.backendNodeId === 13) {
+        throw new Error("Could not find node with given id");
+      }
+      return { object: { objectId: `obj-${params.backendNodeId}` } };
+    }
+    if (method === "Accessibility.getFullAXTree") {
+      return {
+        nodes: [
+          {
+            role: { value: "button" },
+            name: { value: "Save" },
+            backendDOMNodeId: 99,
+          },
+        ],
+      };
+    }
+    return {};
+  });
+
+  const resolved = await resolveElementObjectId(
+    cdp,
+    "session:page",
+    refMap,
+    "@23",
+    new Map(),
+    { strict: true },
+  );
+  assert.equal(resolved.objectId, "obj-99");
 });

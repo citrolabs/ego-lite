@@ -233,14 +233,18 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: "Page.snapshot",
     signature:
-      "await page.snapshot({ scope?, includeActionMarks?, includeStableLocator? })",
+      "await page.snapshot({ scope?, root?, includeActionMarks?, includeStableLocator? })",
     summary:
-      "Return a semantic snapshot of the current viewport with Page provenance.",
+      "Return a semantic snapshot of the current viewport, full Page, or one snapshot-ref subtree with Page provenance.",
     options: {
       scope: option(
         "string",
-        "Snapshot scope; defaults to only_within_viewport.",
-        ["full_page", "only_within_viewport"],
+        "Snapshot scope; defaults to only_within_viewport, which keeps iframe roots but defers their descendants. Use subtree with an iframe root ref to inspect that frame.",
+        ["full_page", "only_within_viewport", "subtree"],
+      ),
+      root: option(
+        "nonEmptyString",
+        "Latest Page snapshot ref such as @21; required only when scope is subtree.",
       ),
       includeActionMarks: option("boolean", "Include action marks."),
       includeStableLocator: option("boolean", "Include stable locators."),

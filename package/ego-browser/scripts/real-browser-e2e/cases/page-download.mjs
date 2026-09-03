@@ -217,9 +217,7 @@ export function pagePdfViewerDownloadCase() {
       let viewerSnapshot = "";
       let viewerToolbar;
       while (Date.now() <= viewerDeadline) {
-        viewerSnapshot = await preview.snapshot({
-          scope: "only_within_viewport",
-        });
+        viewerSnapshot = await preview.snapshot({ scope: "full_page" });
         viewerToolbar = viewerSnapshot.match(
           /        container\\n          button "([^"]+)"\\n            svg_root\\n          button "([^"]+)"\\n            svg_root\\n          button "([^"]+)"\\n            svg_root\\n          button "([^"]+)"/
         );

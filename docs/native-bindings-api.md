@@ -334,6 +334,11 @@ const snapshot = await ego.snapshot({
 
 console.log(snapshot.content);
 console.log(snapshot.refs);
+
+const subtree = await ego.snapshot({
+  scope: 'subtree',
+  root: snapshot.refs[0].backendNodeId,
+});
 ```
 
 Arguments:
@@ -348,6 +353,10 @@ Supported options:
 scope:
   'full_page'            Capture the full page. This is the default.
   'only_within_viewport' Capture only the viewport.
+  'subtree'              Capture the node identified by root and its descendants.
+
+root: number
+  backendNodeId from a previous snapshot ref. Required only for subtree scope.
 
 includeActionMarks: boolean
   Include action markers in the textual snapshot.
@@ -361,6 +370,12 @@ includeStableLocator: boolean
 maxResultLength: number
   Maximum result content length. Zero or omitted means unlimited.
 ```
+
+In Ego Lite 0.5.0.19, subtree scope requires launching the browser with
+`--enable-features=SnapshotSubtree`. Do not use `PageSnapshotSubtree`.
+This version matches `root` by `backendNodeId` across all frames, although that
+identifier is only frame-local. If the same value occurs in multiple frames,
+the call fails with an ambiguity error instead of selecting an arbitrary node.
 
 Result:
 
