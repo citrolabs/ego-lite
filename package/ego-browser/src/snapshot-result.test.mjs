@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   compactSnapshotContent,
   compactSnapshotResult,
+  deferIframeSnapshotSubtrees,
   preparePageSnapshotResult,
   sanitizeSnapshotLocators,
   validateSnapshotLocator,
@@ -105,6 +106,46 @@ test("snapshot compaction omits unusable locator statuses from refs", () => {
   assert.equal(result.refs[0].loc, undefined);
   assert.equal(result.refs[1].loc, undefined);
   assert.equal(result.refs[2].loc, "css:#save");
+});
+
+test("viewport snapshots defer iframe descendants while preserving frame roots and siblings", () => {
+  const content = [
+    "root",
+    '  heading "Host"',
+    "  iframe [ref=4]",
+    "    root",
+    '      button "Inside same-origin frame" [ref=5]',
+    '  text "Host sibling"',
+    "  iframe [ref=6]",
+    "    root",
+    "      iframe [ref=7]",
+    "        root",
+    '          textbox "Inside nested OOPIF" [ref=8]',
+    '  text "iframe is literal text, not a frame node"',
+  ].join("\n");
+
+  assert.equal(
+    deferIframeSnapshotSubtrees(content),
+    [
+      "root",
+      '  heading "Host"',
+      "  iframe [ref=4]",
+      '  text "Host sibling"',
+      "  iframe [ref=6]",
+      '  text "iframe is literal text, not a frame node"',
+    ].join("\n"),
+  );
+});
+
+test("iframe deferral preserves non-tree output and trailing newlines", () => {
+  assert.equal(
+    deferIframeSnapshotSubtrees("snapshot unavailable"),
+    "snapshot unavailable",
+  );
+  assert.equal(
+    deferIframeSnapshotSubtrees("root\n  iframe [ref=4]\n    root\n"),
+    "root\n  iframe [ref=4]\n",
+  );
 });
 
 test("snapshot locator validation batches DOM queries and object cleanup", async () => {
@@ -395,7 +436,6 @@ test("Page snapshots preserve native ref provenance", async () => {
       },
     ],
   };
-  const expected = structuredClone(result.refs);
   const services = {
     async cdp(_method, _params, sessionId) {
       if (sessionId === "session:oopif") {
@@ -420,5 +460,197 @@ test("Page snapshots preserve native ref provenance", async () => {
     result,
   );
 
-  assert.deepEqual(result.refs, expected);
+  assert.deepEqual(result.refs, [
+    {
+      refId: 1,
+      backendNodeId: 6,
+      role: "textbox",
+      name: "",
+      frameProvenance: "page",
+    },
+    {
+      refId: 17,
+      backendNodeId: 6,
+      role: "textbox",
+      name: "",
+      frameId: "frame-oopif",
+      frameProvenance: "frame",
+    },
+  ]);
+});
+
+test("Page snapshots backfill missing frame provenance from a unique locator", async () => {
+  const result = {
+    content: [
+      "iframe [ref=12]",
+      "root",
+      '  button "Run iframe action" [ref=21, loc=role:button[name="Run iframe action"]]',
+    ].join("\n"),
+    refs: [
+      {
+        refId: 21,
+        backendNodeId: 21,
+        role: "button",
+        name: "Run iframe action",
+        loc: 'role:button[name="Run iframe action"]',
+      },
+    ],
+  };
+  const services = {
+    async cdp(method, params, sessionId) {
+      assert.equal(method, "Accessibility.getFullAXTree");
+      if (sessionId === "session:page" && params.frameId === "frame-same") {
+        return {
+          nodes: [
+            {
+              backendDOMNodeId: 21,
+              ignored: false,
+              role: { value: "button" },
+              name: { value: "Run iframe action" },
+            },
+          ],
+        };
+      }
+      return { nodes: [] };
+    },
+  };
+
+  await preparePageSnapshotResult(
+    services,
+    "session:page",
+    new Map([
+      ["frame-same", "session:page"],
+      ["frame-oopif", "session:oopif"],
+    ]),
+    result,
+  );
+
+  assert.equal(result.refs[0].frameId, "frame-same");
+  assert.equal(result.refs[0].frameProvenance, "frame");
+});
+
+test("Page snapshots do not invent frame provenance for an ambiguous backend node", async () => {
+  const result = {
+    content: [
+      "iframe [ref=12]",
+      "root",
+      '  button "Duplicate action" [ref=21, loc=role:button[name="Duplicate action"]]',
+    ].join("\n"),
+    refs: [
+      {
+        refId: 21,
+        backendNodeId: 21,
+        role: "button",
+        name: "Duplicate action",
+        loc: 'role:button[name="Duplicate action"]',
+      },
+    ],
+  };
+  const services = {
+    async cdp(method, params, sessionId) {
+      assert.equal(method, "Accessibility.getFullAXTree");
+      const isFirstFrame =
+        sessionId === "session:page" && params.frameId === "frame-first";
+      const isSecondFrame = sessionId === "session:second";
+      return isFirstFrame || isSecondFrame
+        ? {
+            nodes: [
+              {
+                backendDOMNodeId: 21,
+                ignored: false,
+                role: { value: "button" },
+                name: { value: "Duplicate action" },
+              },
+            ],
+          }
+        : { nodes: [] };
+    },
+  };
+
+  await preparePageSnapshotResult(
+    services,
+    "session:page",
+    new Map([
+      ["frame-first", "session:page"],
+      ["frame-second", "session:second"],
+    ]),
+    result,
+  );
+
+  assert.equal(result.refs[0].frameId, undefined);
+  assert.equal(result.refs[0].frameProvenance, "unknown");
+});
+
+test("iframe deferral keeps a frame that advertises no ref expandable", () => {
+  // Deferring an iframe with no ref would hide its descendants with no root to
+  // pass back through subtree scope, so that frame stays inline.
+  const content = [
+    "root",
+    "  iframe",
+    "    root",
+    '      button "Unreachable without a ref" [ref=5]',
+    "  iframe [ref=6]",
+    "    root",
+    '      button "Reachable via @6" [ref=7]',
+  ].join("\n");
+
+  assert.equal(
+    deferIframeSnapshotSubtrees(content),
+    [
+      "root",
+      "  iframe",
+      "    root",
+      '      button "Unreachable without a ref" [ref=5]',
+      "  iframe [ref=6]",
+    ].join("\n"),
+  );
+});
+
+test("frame provenance ignores a ref token inside an accessible name", async () => {
+  const result = {
+    content: [
+      "root",
+      '  link "See [ref=3] in the spec" [ref=3]',
+      "  iframe [ref=12]",
+      "    root",
+      '      link "See [ref=3] in the spec" [ref=42]',
+    ].join("\n"),
+    refs: [
+      {
+        refId: 3,
+        backendNodeId: 3,
+        role: "link",
+        name: "See [ref=3] in the spec",
+      },
+      {
+        refId: 42,
+        backendNodeId: 42,
+        role: "link",
+        name: "See [ref=3] in the spec",
+      },
+    ],
+  };
+
+  await preparePageSnapshotResult(
+    {
+      async cdp() {
+        return { nodes: [] };
+      },
+    },
+    "session:page",
+    new Map([["frame-child", "session:page"]]),
+    result,
+  );
+
+  assert.equal(
+    result.refs[0].frameProvenance,
+    "page",
+    "the page-owned ref must not be re-homed by a quoted ref token",
+  );
+  assert.equal(
+    result.refs[1].frameProvenance,
+    "frame",
+    "the frame-owned ref must still be recognised as a frame descendant",
+  );
+  assert.equal(result.refs[1].frameId, "frame-child");
 });

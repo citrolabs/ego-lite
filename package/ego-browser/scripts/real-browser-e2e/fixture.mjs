@@ -20,6 +20,7 @@ export async function startFixtureServer(taskName) {
     new URL("./fixtures/openai-gpt-4-system-card.pdf", import.meta.url),
   );
   let crossSiteBaseUrl = "";
+  const snapshotFrameRequests = new Map();
   const fixtureServer = createServer((req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     if (url.pathname === "/healthz") {
@@ -204,6 +205,126 @@ export async function startFixtureServer(taskName) {
         "access-control-allow-headers": "*",
       });
       res.end();
+      return;
+    }
+    if (url.pathname === "/snapshot-subtree-frame-state") {
+      const run = url.searchParams.get("run") || "";
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      res.end(
+        JSON.stringify({ requests: snapshotFrameRequests.get(run) || 0 }),
+      );
+      return;
+    }
+    if (url.pathname === "/snapshot-subtree-frame-content") {
+      const mode =
+        url.searchParams.get("mode") === "cross-origin"
+          ? "cross-origin"
+          : "same-origin";
+      const requestedFrame = url.searchParams.get("frame") || "";
+      const frameLabels = {
+        first: "First sibling iframe",
+        second: "Second sibling iframe",
+        "nested-outer": "Nested outer iframe",
+        "nested-inner": "Nested inner iframe",
+        replacement: "Replacement iframe",
+      };
+      const frameLabel =
+        frameLabels[requestedFrame] ||
+        (mode === "cross-origin" ? "Cross-origin OOPIF" : "Same-origin iframe");
+      const run = url.searchParams.get("run") || "";
+      if (run) {
+        snapshotFrameRequests.set(
+          run,
+          (snapshotFrameRequests.get(run) || 0) + 1,
+        );
+      }
+      const nestedFrame =
+        requestedFrame === "nested-outer"
+          ? `<iframe
+              id="nested-subtree-frame"
+              title="Nested subtree frame"
+              src="/snapshot-subtree-frame-content?mode=same-origin&frame=nested-inner"
+            ></iframe>`
+          : "";
+      res.writeHead(200, {
+        "content-type": "text/html",
+        "cache-control": "no-store",
+      });
+      res.end(`<!doctype html>
+        <html>
+          <head><title>${frameLabel} subtree fixture</title></head>
+          <body>
+            <main>
+              <h1>${frameLabel} subtree content</h1>
+              <button id="subtree-action" type="button" aria-label="Run ${frameLabel} subtree action">
+                Run frame action
+              </button>
+              <p id="subtree-status">${frameLabel} idle</p>
+              ${nestedFrame}
+            </main>
+            <script>
+              document.querySelector("#subtree-action").addEventListener("click", () => {
+                document.querySelector("#subtree-status").textContent =
+                  ${JSON.stringify(frameLabel)} + " clicked";
+              });
+            </script>
+          </body>
+        </html>`);
+      return;
+    }
+    if (url.pathname === "/snapshot-subtree-frame-host") {
+      const mode =
+        url.searchParams.get("mode") === "cross-origin"
+          ? "cross-origin"
+          : "same-origin";
+      const layout = ["siblings", "nested"].includes(
+        url.searchParams.get("layout"),
+      )
+        ? url.searchParams.get("layout")
+        : "single";
+      const run = url.searchParams.get("run") || "";
+      const lazy = url.searchParams.get("lazy") === "true";
+      const frameUrl = (frame) => {
+        const origin = mode === "cross-origin" ? crossSiteBaseUrl : "";
+        const params = new URLSearchParams({ mode });
+        if (frame) params.set("frame", frame);
+        if (run) params.set("run", run);
+        return `${origin}/snapshot-subtree-frame-content?${params}`;
+      };
+      const frameMarkup =
+        layout === "siblings"
+          ? `<iframe
+              id="snapshot-subtree-frame-first"
+              title="First sibling subtree frame"
+              src="${frameUrl("first")}"
+            ></iframe>
+            <iframe
+              id="snapshot-subtree-frame-second"
+              title="Second sibling subtree frame"
+              src="${frameUrl("second")}"
+            ></iframe>`
+          : `<iframe
+              id="snapshot-subtree-frame"
+              title="Deferred snapshot subtree frame"
+              ${lazy ? 'loading="lazy"' : ""}
+              src="${frameUrl(layout === "nested" ? "nested-outer" : "")}"
+            ></iframe>`;
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(`<!doctype html>
+        <html>
+          <head><title>Snapshot iframe host</title></head>
+          <body>
+            <main>
+              <h1>Snapshot iframe host</h1>
+              <p>Host sibling marker</p>
+              ${lazy ? '<div style="height: 12000px">Lazy frame spacer</div>' : ""}
+              ${frameMarkup}
+            </main>
+          </body>
+        </html>`);
       return;
     }
     if (url.pathname === "/frame.html") {

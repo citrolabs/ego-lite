@@ -2015,10 +2015,245 @@ test("snapshot defaults to the viewport, reports its source, and validates optio
       includeStableLocator: true,
     });
 
+    assert.match(
+      await page.snapshot({ scope: "subtree", root: "@21" }),
+      /snapshot:https:\/\/example\.test\/before/,
+    );
+    assert.deepEqual(fixture.snapshotOptions.at(-1), {
+      scope: "subtree",
+      root: 21,
+      includeActionMarks: true,
+      includeStableLocator: true,
+    });
+
+    await assert.rejects(
+      () => page.snapshot({ scope: "subtree" }),
+      /page\.snapshot subtree scope requires root to be a snapshot ref such as @21/,
+    );
+    await assert.rejects(
+      () => page.snapshot({ scope: "full_page", root: "@21" }),
+      /page\.snapshot root is only supported when scope is subtree/,
+    );
+    await assert.rejects(
+      () => page.snapshot({ scope: "subtree", root: "css:#target" }),
+      /page\.snapshot root must be a snapshot ref such as @21/,
+    );
+    await assert.rejects(
+      () => page.snapshot({ scope: "subtree", root: "@999" }),
+      /Unknown ref: @999/,
+    );
+
     await assert.rejects(
       () => page.snapshot({ diff: true }),
       /page\.snapshot received unknown option: diff/,
     );
+  });
+});
+
+test("a viewport snapshot preserves previously registered deferred iframe refs", async () => {
+  await withFixture(async (fixture) => {
+    const snapshotFixture = async () => ({
+      content: [
+        "root",
+        '  heading "Host"',
+        "  iframe [ref=11]",
+        "    root",
+        '      button "Hidden frame action" [ref=21]',
+      ].join("\n"),
+      refs: [
+        { refId: 11, backendNodeId: 11, role: "iframe" },
+        { refId: 21, backendNodeId: 21, role: "button" },
+      ],
+    });
+    const task = taskForRound(fixture, "round-a", {
+      snapshot: snapshotFixture,
+    });
+    const page = await openTestPage(task, "https://example.test/iframe-host");
+    await page.snapshot({ scope: "full_page" });
+    assert.equal(
+      fixture.services.pageRefs.forTarget(page.targetId).get("21")
+        .backendNodeId,
+      21,
+      "the full snapshot initially advertises the iframe descendant",
+    );
+
+    const snapshot = await page.snapshot();
+
+    assert.match(snapshot, /iframe \[ref=11\]/);
+    assert.doesNotMatch(snapshot, /Hidden frame action/);
+    assert.equal(
+      fixture.services.pageRefs.forTarget(page.targetId).get("11")
+        .backendNodeId,
+      11,
+    );
+    assert.equal(
+      fixture.services.pageRefs.forTarget(page.targetId).get("21")
+        .backendNodeId,
+      21,
+      "a partial viewport snapshot must not invalidate an omitted ref",
+    );
+    assert.equal(
+      fixture.services.pageRefs.isInvalidated(page.targetId, "21"),
+      false,
+    );
+  });
+});
+
+test("a subtree snapshot preserves refs outside the observed subtree", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a", {
+      async snapshot(options) {
+        if (options.scope === "full_page") {
+          return {
+            content: [
+              "root",
+              '  button "First" [ref=21]',
+              '  button "Second" [ref=22]',
+            ].join("\n"),
+            refs: [
+              { refId: 21, backendNodeId: 21, role: "button", name: "First" },
+              { refId: 22, backendNodeId: 22, role: "button", name: "Second" },
+            ],
+          };
+        }
+        return {
+          content: ['button "First" [ref=21]'].join("\n"),
+          refs: [
+            { refId: 21, backendNodeId: 21, role: "button", name: "First" },
+          ],
+        };
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/two-actions");
+    await page.snapshot({ scope: "full_page" });
+
+    await page.snapshot({ scope: "subtree", root: "@21" });
+
+    assert.equal(
+      fixture.services.pageRefs.forTarget(page.targetId).get("22")
+        .backendNodeId,
+      22,
+    );
+    assert.equal(
+      fixture.services.pageRefs.isInvalidated(page.targetId, "22"),
+      false,
+    );
+  });
+});
+
+test("a subtree snapshot inherits the root ref frame provenance", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a", {
+      async ensureFrameSessions() {
+        return new Map([["frame-child", "session:target-1"]]);
+      },
+      async snapshot(options) {
+        if (options.scope === "full_page") {
+          return {
+            content: [
+              "root",
+              "  iframe [ref=11]",
+              "    root",
+              '      button "Frame root" [ref=21]',
+            ].join("\n"),
+            refs: [
+              { refId: 11, backendNodeId: 11, role: "iframe" },
+              {
+                refId: 21,
+                backendNodeId: 21,
+                role: "button",
+                name: "Frame root",
+              },
+            ],
+          };
+        }
+        return {
+          content: [
+            'button "Frame root" [ref=21]',
+            '  link "Frame child" [ref=22]',
+          ].join("\n"),
+          refs: [
+            {
+              refId: 21,
+              backendNodeId: 21,
+              role: "button",
+              name: "Frame root",
+            },
+            {
+              refId: 22,
+              backendNodeId: 22,
+              role: "link",
+              name: "Frame child",
+            },
+          ],
+        };
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/frame");
+    await page.snapshot({ scope: "full_page" });
+
+    await page.snapshot({ scope: "subtree", root: "@21" });
+
+    assert.deepEqual(
+      fixture.services.pageRefs.forTarget(page.targetId).get("22"),
+      {
+        backendNodeId: 22,
+        role: "link",
+        name: "Frame child",
+        nth: undefined,
+        frameId: "frame-child",
+        frameProvenance: "frame",
+      },
+    );
+  });
+});
+
+test("Page evaluate makes prior snapshot refs stale until a new snapshot", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/iframe-host");
+    await page.snapshot({ scope: "full_page" });
+    await page.evaluate("document.body.replaceChildren()");
+    const snapshotsBefore = fixture.calls.filter(
+      ([kind]) => kind === "snapshot",
+    ).length;
+
+    await assert.rejects(
+      () => page.click("@21"),
+      /Stale ref: @21; take a new snapshot/,
+    );
+    assert.equal(
+      fixture.calls.filter(([kind]) => kind === "snapshot").length,
+      snapshotsBefore,
+      "a stale ref must not be silently remapped by an automatic snapshot",
+    );
+
+    await page.snapshot({ scope: "full_page" });
+    await page.click("@21");
+  });
+});
+
+test("subtree snapshot resolves its root in the addressed Page", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const first = await openTestPage(task, "https://example.test/first");
+    const second = await openTestPage(task, "https://example.test/second");
+
+    await first.snapshot();
+    await second.snapshot();
+    assert.equal(fixture.activeTarget(), "target-2");
+
+    assert.match(
+      await first.snapshot({ scope: "subtree", root: "ref=21" }),
+      /\[p1 .*space "research"\(7\).*\]\nsnapshot:https:\/\/example\.test\/first/,
+    );
+    assert.equal(fixture.activeTarget(), "target-1");
+    assert.deepEqual(fixture.snapshotOptions.at(-1), {
+      scope: "subtree",
+      root: 21,
+      includeActionMarks: true,
+      includeStableLocator: true,
+    });
   });
 });
 
@@ -2673,7 +2908,7 @@ test("a no-dialog response keeps current snapshot refs", async () => {
   await withFixture(async (fixture) => {
     const task = taskForRound(fixture, "round-a");
     const page = await openTestPage(task, "https://example.test/dialog");
-    await page.snapshot();
+    await page.snapshot({ scope: "full_page" });
 
     assert.equal(
       fixture.services.pageRefs.forTarget(page.targetId).get("21")

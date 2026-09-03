@@ -261,13 +261,16 @@ export function snapshotWorkflowCase() {
     await first.click(firstRef);
     assertEqual(await first.evaluate("window.__fixtureState.clicks"), 1, "the first snapshot ref acts on Page A");
     assertEqual(await second.evaluate("window.__fixtureState.clicks"), 0, "the Page A ref does not affect Page B");
-    await second.click(secondRef);
+    const refreshedSecondRef = refFor(await second.snapshot());
+    assertEqual(refreshedSecondRef, secondRef, "a fresh Page B snapshot can reuse the native ref id");
+    await second.click(refreshedSecondRef);
     assertEqual(await second.evaluate("window.__fixtureState.clicks"), 1, "the second snapshot ref acts on Page B");
 
+    const navigationRef = refFor(await first.snapshot());
     await first.goto(baseUrl + "/nav-target?workflow=snapshot-navigation");
     await assertRejects(
-      () => first.click(firstRef),
-      "Unknown ref",
+      () => first.click(navigationRef),
+      "Stale ref",
       "navigation invalidates refs from the previous document"
     );
 
