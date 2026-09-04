@@ -3,8 +3,203 @@ import assert from "node:assert/strict";
 
 import {
   waitForLoadStateInPage,
+  waitForSelectorInPage,
   waitForURLInPage,
 } from "../../dist/src/driver/page-waits.js";
+
+test("waitForSelectorInPage refreshes iframe sessions while it polls", async () => {
+  let now = 0;
+  let discoveries = 0;
+  const services = {
+    async cdp(method, _params, sessionId) {
+      if (method === "Runtime.evaluate") {
+        return sessionId === "session:frame-current"
+          ? { result: { objectId: "object:ready" } }
+          : { result: { type: "undefined" } };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        return { result: { value: true } };
+      }
+      if (method === "Runtime.releaseObject") return {};
+      throw new Error(`unexpected CDP method: ${method}`);
+    },
+    now: () => now,
+    async sleep(ms) {
+      now += ms;
+    },
+  };
+  const getIframeSessions = async () => {
+    discoveries += 1;
+    return discoveries === 1
+      ? new Map()
+      : new Map([["frame-current", "session:frame-current"]]);
+  };
+
+  assert.equal(
+    await waitForSelectorInPage(
+      services,
+      "session:page",
+      new Map(),
+      "#ready",
+      { state: "visible", timeout: 2_000 },
+      getIframeSessions,
+    ),
+    true,
+  );
+  assert.equal(discoveries, 2);
+});
+
+test("waitForSelectorInPage retries when a discovered iframe disappears during resolution", async () => {
+  let now = 0;
+  let discoveries = 0;
+  const services = {
+    async cdp(method, _params, sessionId) {
+      if (
+        method === "Runtime.evaluate" &&
+        sessionId === "session:frame-stale"
+      ) {
+        throw new Error("Frame with the given frameId is not found.");
+      }
+      if (method === "Runtime.evaluate") {
+        return sessionId === "session:frame-current"
+          ? { result: { objectId: "object:ready" } }
+          : { result: { type: "undefined" } };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        return { result: { value: true } };
+      }
+      if (method === "Runtime.releaseObject") return {};
+      throw new Error(`unexpected CDP method: ${method}`);
+    },
+    now: () => now,
+    async sleep(ms) {
+      now += ms;
+    },
+  };
+  const getIframeSessions = async () => {
+    discoveries += 1;
+    return discoveries === 1
+      ? new Map([["frame-stale", "session:frame-stale"]])
+      : new Map([["frame-current", "session:frame-current"]]);
+  };
+
+  assert.equal(
+    await waitForSelectorInPage(
+      services,
+      "session:page",
+      new Map(),
+      "#ready",
+      { state: "visible", timeout: 500 },
+      getIframeSessions,
+    ),
+    true,
+  );
+  assert.equal(discoveries, 2);
+});
+
+test("waitForSelectorInPage rethrows a lost page session instead of reporting hidden", async () => {
+  let now = 0;
+  const services = {
+    async cdp() {
+      throw new Error("Target closed");
+    },
+    now: () => now,
+    async sleep(ms) {
+      now += ms;
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      waitForSelectorInPage(
+        services,
+        "session:page",
+        new Map(),
+        "#spinner",
+        { state: "hidden", timeout: 500 },
+        async () => new Map(),
+      ),
+    /Target closed/,
+  );
+});
+
+test("waitForSelectorInPage reports its own timeout at the deadline", async () => {
+  let now = 0;
+  const discoveryTimeouts = [];
+  const services = {
+    async cdp(method) {
+      if (method === "Runtime.evaluate")
+        return { result: { type: "undefined" } };
+      throw new Error(`unexpected CDP method: ${method}`);
+    },
+    now: () => now,
+    async sleep(ms) {
+      now += ms;
+    },
+  };
+  const getIframeSessions = async (timeoutMs) => {
+    discoveryTimeouts.push(timeoutMs);
+    if (timeoutMs < 250) {
+      const error = new Error("CDP request timed out: Target.getTargets");
+      error.code = "EGO_CDP_REQUEST_TIMEOUT";
+      throw error;
+    }
+    return new Map();
+  };
+
+  await assert.rejects(
+    () =>
+      waitForSelectorInPage(
+        services,
+        "session:page",
+        new Map(),
+        "#missing",
+        { state: "visible", timeout: 500 },
+        getIframeSessions,
+      ),
+    /page\.waitForSelector timed out after 500ms: #missing/,
+  );
+  assert(
+    discoveryTimeouts.every((timeoutMs) => timeoutMs <= 500),
+    `frame discovery must never exceed the public timeout: ${discoveryTimeouts}`,
+  );
+});
+
+test("waitForSelectorInPage throttles iframe discovery while polling", async () => {
+  let now = 0;
+  let discoveries = 0;
+  const services = {
+    async cdp(method) {
+      if (method === "Runtime.evaluate")
+        return { result: { type: "undefined" } };
+      throw new Error(`unexpected CDP method: ${method}`);
+    },
+    now: () => now,
+    async sleep(ms) {
+      now += ms;
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      waitForSelectorInPage(
+        services,
+        "session:page",
+        new Map(),
+        "#missing",
+        { state: "visible", timeout: 2_000 },
+        async () => {
+          discoveries += 1;
+          return new Map();
+        },
+      ),
+    /timed out/,
+  );
+  assert(
+    discoveries <= 5,
+    `expected at most one discovery per 500ms over 2s, got ${discoveries}`,
+  );
+});
 
 test("waitForURLInPage recovers from a transient execution-context change", async () => {
   let now = 0;
