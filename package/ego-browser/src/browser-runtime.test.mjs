@@ -139,6 +139,160 @@ test("frame sessions follow one Page target and are invalidated with it", async 
   }
 });
 
+test("frame session discovery drops an enumerated iframe that disappears before attach", async () => {
+  const previous = globalThis.ego;
+  let discoveries = 0;
+  let staleAttachAttempts = 0;
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      let result = {};
+      let error;
+      if (request.method === "Target.getTargets") {
+        discoveries += 1;
+        result = {
+          targetInfos: [
+            { targetId: "page-main", type: "page" },
+            {
+              targetId: "frame-live",
+              type: "iframe",
+              parentFrameId: "page-main",
+            },
+            {
+              targetId: "frame-stale",
+              type: "iframe",
+              parentFrameId: "page-main",
+            },
+          ],
+        };
+      } else if (request.method === "Page.getFrameTree") {
+        result = {
+          frameTree: {
+            frame: { id: "page-main" },
+            childFrames: [
+              { frame: { id: "frame-live" } },
+              { frame: { id: "frame-stale" } },
+            ],
+          },
+        };
+      } else if (request.method === "Target.attachToTarget") {
+        const targetId = request.params.targetId;
+        if (targetId === "frame-stale") {
+          staleAttachAttempts += 1;
+          error = { message: "No target with given id found" };
+        } else {
+          result = { sessionId: `session:${targetId}` };
+        }
+      }
+      queueMicrotask(() => {
+        runtime.onCDPMessage(
+          JSON.stringify({
+            id: request.id,
+            ...(error ? { error } : { result }),
+          }),
+        );
+      });
+    },
+  };
+  globalThis.ego = runtime;
+
+  try {
+    invalidateSession();
+    const sessions = await ensureFrameSessions("page-main", 1_000);
+    assert.deepEqual([...sessions], [["frame-live", "session:frame-live"]]);
+    assert.equal(
+      discoveries,
+      1,
+      "a vanished iframe must not restart discovery",
+    );
+    assert.equal(staleAttachAttempts, 1);
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
+test("frame session discovery fails fast when the page target is gone", async () => {
+  const previous = globalThis.ego;
+  let attachAttempts = 0;
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      let result = {};
+      let error;
+      if (request.method === "Target.attachToTarget") {
+        attachAttempts += 1;
+        error = { message: "No target with given id found" };
+      }
+      queueMicrotask(() => {
+        runtime.onCDPMessage(
+          JSON.stringify({
+            id: request.id,
+            ...(error ? { error } : { result }),
+          }),
+        );
+      });
+    },
+  };
+  globalThis.ego = runtime;
+
+  try {
+    invalidateSession();
+    await assert.rejects(
+      () => ensureFrameSessions("page-closed", 500),
+      /No target with given id found/,
+    );
+    assert.equal(attachAttempts, 1);
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
+test("frame session discovery fails fast when the page session is lost", async () => {
+  const previous = globalThis.ego;
+  let frameTreeAttempts = 0;
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      let result = {};
+      let error;
+      if (request.method === "Target.getTargets") {
+        result = { targetInfos: [{ targetId: "page-main", type: "page" }] };
+      } else if (request.method === "Page.getFrameTree") {
+        frameTreeAttempts += 1;
+        error = { message: "Session with given id not found" };
+      } else if (request.method === "Target.attachToTarget") {
+        result = { sessionId: `session:${request.params.targetId}` };
+      }
+      queueMicrotask(() => {
+        runtime.onCDPMessage(
+          JSON.stringify({
+            id: request.id,
+            ...(error ? { error } : { result }),
+          }),
+        );
+      });
+    },
+  };
+  globalThis.ego = runtime;
+
+  try {
+    invalidateSession();
+    await assert.rejects(
+      () => ensureFrameSessions("page-main", 500),
+      /Session with given id not found/,
+    );
+    assert.equal(frameTreeAttempts, 1);
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
 test("network tracking is continuous and does not consume Page events", async () => {
   const previous = globalThis.ego;
   const methods = [];

@@ -12,6 +12,8 @@ const SESSION_TTL_MS = 2000;
 const MAX_BUFFERED_EVENTS = 10000;
 const SESSION_LOST =
   /Session (?:with given id )?not found|Target closed|No session/i;
+const FRAME_LIFECYCLE_LOST =
+  /Frame with the given frameId is not found|No frame with given id found|No target with given id/i;
 const BROWSER_LEVEL = (method) =>
   method.startsWith("Target.") || method.startsWith("Browser.");
 const OOPIF_AUTO_ATTACH_PARAMS = {
@@ -74,6 +76,31 @@ export function isCdpRequestTimeoutError(
       typeof error === "object" &&
       (error as { code?: unknown }).code === "EGO_CDP_REQUEST_TIMEOUT")
   );
+}
+
+/** A CDP command error carrying the session it was addressed to. */
+export type CdpCommandError = Error & { sessionId?: string };
+
+/** The CDP session that issued a failed command is gone. */
+export function isSessionLostError(error: unknown): error is CdpCommandError {
+  return error instanceof Error && SESSION_LOST.test(error.message);
+}
+
+/** A frame or iframe target vanished between enumeration and use. */
+export function isFrameLifecycleError(
+  error: unknown,
+): error is CdpCommandError {
+  return error instanceof Error && FRAME_LIFECYCLE_LOST.test(error.message);
+}
+
+/**
+ * A frame or its session disappeared mid-operation. Callers that have not yet
+ * dispatched input may rediscover frame sessions and retry.
+ */
+export function isRetryableFrameLifecycleError(
+  error: unknown,
+): error is CdpCommandError {
+  return isSessionLostError(error) || isFrameLifecycleError(error);
 }
 
 /**
@@ -731,8 +758,23 @@ export async function ensureFrameSessions(
   const sessionByTarget = new Map<string, string>([
     [pageTargetId, pageSessionId],
   ]);
+  const vanishedTargetIds = new Set<string>();
   for (const info of descendants) {
-    const sessionId = await ensureSession(info.targetId, remaining());
+    let sessionId: string;
+    try {
+      sessionId = await ensureSession(info.targetId, remaining());
+    } catch (error) {
+      // Target.getTargets is a snapshot: an OOPIF can be destroyed between
+      // enumeration and attach. Such a frame is no longer part of the page, so
+      // drop it rather than fail (or restart) the whole discovery. Errors on
+      // the Page target itself are raised by ensureSession above and are not
+      // retried here.
+      if (!isRetryableFrameLifecycleError(error)) throw error;
+      vanishedTargetIds.add(info.targetId);
+      liveTargetIds.delete(info.targetId);
+      clearTargetSessionTree(info.targetId, { remove: true });
+      continue;
+    }
     registerTargetParent(info.targetId, nearestTargetParent(info));
     sessionByTarget.set(info.targetId, sessionId);
   }
@@ -746,7 +788,7 @@ export async function ensureFrameSessions(
     isRoot = false,
   ) => {
     const frameId = tree?.frame?.id;
-    if (typeof frameId !== "string") return;
+    if (typeof frameId !== "string" || vanishedTargetIds.has(frameId)) return;
     const sessionId = sessionByTarget.get(frameId) || inheritedSessionId;
     if (!isRoot) sessions.set(frameId, sessionId);
     for (const child of tree?.childFrames || []) {
@@ -755,6 +797,7 @@ export async function ensureFrameSessions(
   };
   if (frameTree) collectFrameSessions(frameTree, pageSessionId, true);
   for (const info of descendants) {
+    if (vanishedTargetIds.has(info.targetId)) continue;
     if (!sessions.has(info.targetId)) {
       sessions.set(info.targetId, sessionByTarget.get(info.targetId)!);
     }
@@ -1344,7 +1387,11 @@ function handleMessage(message) {
     }
     pending.delete(data.id);
     if (data.error) {
-      entry.reject(new Error(data.error.message || data.error));
+      const error: CdpCommandError = new Error(
+        data.error.message || data.error,
+      );
+      if (entry.sessionId) error.sessionId = entry.sessionId;
+      entry.reject(error);
       return;
     }
     if (userControlProbeState === "stopped") {

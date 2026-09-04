@@ -9,6 +9,7 @@ import {
   ensureSession,
   isCdpRequestTimeoutError,
   isBrowserRuntime,
+  isSessionLostError,
   networkActivity,
   pageNetworkSessions,
 } from "../browser-runtime.js";
@@ -161,8 +162,8 @@ function isUnsupportedNetworkTrackingError(error: unknown): boolean {
 }
 
 function isRetryableNetworkRefreshError(error: unknown): boolean {
-  if (isCdpRequestTimeoutError(error)) return true;
-  return /detached Page session|Session (?:with given id )?not found|Target closed|No session/i.test(
+  if (isCdpRequestTimeoutError(error) || isSessionLostError(error)) return true;
+  return /detached Page session/i.test(
     error instanceof Error ? error.message : String(error),
   );
 }

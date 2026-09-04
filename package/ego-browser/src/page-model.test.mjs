@@ -45,6 +45,8 @@ function createFixture(rootDir) {
   let activeFileChooserWaiter = null;
   let systemFileChooserOpened = false;
   let timeoutNextMouseDispatch = false;
+  let loseSessionOnNextMouseRelease = false;
+  let loseFrameOnNextResolution = null;
   let dialogOnNextClick = null;
   let dialogOnNextFileSet = null;
   const pendingDialogs = new Map();
@@ -141,6 +143,13 @@ function createFixture(rootDir) {
         return { frameId: "frame-1" };
       }
       if (method === "Runtime.evaluate") {
+        if (loseFrameOnNextResolution) {
+          const failure = loseFrameOnNextResolution;
+          loseFrameOnNextResolution = null;
+          const error = new Error(failure.message);
+          if (failure.sessionId) error.sessionId = failure.sessionId;
+          throw error;
+        }
         const targetId = targetForSession(sessionId);
         const tab = tabs.get(targetId);
         if (params.expression.includes("__egoPageEvaluate")) {
@@ -602,6 +611,10 @@ function createFixture(rootDir) {
           throw new Error("CDP request timed out: Input.dispatchMouseEvent");
         }
         if (params.type === "mouseReleased") {
+          if (loseSessionOnNextMouseRelease) {
+            loseSessionOnNextMouseRelease = false;
+            throw new Error("Session with given id not found");
+          }
           if (dialogOnNextClick) {
             const dialog = dialogOnNextClick;
             dialogOnNextClick = null;
@@ -790,6 +803,12 @@ function createFixture(rootDir) {
     systemFileChooserOpened: () => systemFileChooserOpened,
     timeoutNextMouseDispatch() {
       timeoutNextMouseDispatch = true;
+    },
+    loseSessionOnNextMouseRelease() {
+      loseSessionOnNextMouseRelease = true;
+    },
+    loseFrameOnNextResolution(failure) {
+      loseFrameOnNextResolution = failure;
     },
     openDialogOnNextClick(dialog = {}) {
       dialogOnNextClick = {
@@ -5106,6 +5125,136 @@ test("Page click retries a transient visibility change before dispatching input"
           method === "Input.dispatchMouseEvent" &&
           params.type === "mouseReleased",
       ),
+    );
+  });
+});
+
+test("Page click retries when an iframe disappears during session discovery", async () => {
+  await withFixture(async (fixture) => {
+    let discoveries = 0;
+    const discoveryTimeouts = [];
+    const task = taskForRound(fixture, "round-a", {
+      async ensureFrameSessions(_targetId, timeoutMs) {
+        discoveries += 1;
+        discoveryTimeouts.push(timeoutMs);
+        if (discoveries === 1) {
+          throw new Error("Frame with the given frameId is not found.");
+        }
+        return new Map();
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+
+    assert.deepEqual(await page.click("#ready", { timeout: 1_000 }), {});
+    assert.equal(discoveries, 2);
+    assert.deepEqual(discoveryTimeouts, [1_000, 500]);
+  });
+});
+
+test("Page click does not re-dispatch a gesture after its session was lost", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+    fixture.loseSessionOnNextMouseRelease();
+
+    await assert.rejects(
+      () => page.click("#submit", { timeout: 1_000 }),
+      /Session with given id not found/,
+    );
+    assert.equal(
+      fixture.calls.filter(
+        ([kind, method, params]) =>
+          kind === "cdp" &&
+          method === "Input.dispatchMouseEvent" &&
+          params.type === "mousePressed",
+      ).length,
+      1,
+      "a gesture that already reached the page must not be dispatched again",
+    );
+  });
+});
+
+test("Page click reports the action timeout instead of a tail discovery timeout", async () => {
+  await withFixture(async (fixture) => {
+    const discoveryTimeouts = [];
+    const task = taskForRound(fixture, "round-a", {
+      async ensureFrameSessions(_targetId, timeoutMs) {
+        discoveryTimeouts.push(timeoutMs);
+        if (timeoutMs < 250) {
+          const error = new Error("CDP request timed out: Target.getTargets");
+          error.code = "EGO_CDP_REQUEST_TIMEOUT";
+          throw error;
+        }
+        return new Map();
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    fixture.rejectClickPoints(100);
+
+    await assert.rejects(
+      () => page.click("#changing", { timeout: 1_000 }),
+      /page\.click timed out after 1000ms.*not visible/i,
+    );
+    assert(
+      discoveryTimeouts.every((timeoutMs) => timeoutMs <= 1_000),
+      `frame discovery must never exceed the action timeout: ${discoveryTimeouts}`,
+    );
+  });
+});
+
+test("Page click retries when an iframe disappears while the element is resolved", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+    fixture.loseFrameOnNextResolution({
+      message: "Frame with the given frameId is not found.",
+    });
+
+    assert.deepEqual(await page.click("#ready", { timeout: 1_000 }), {});
+    assert.equal(
+      fixture.calls.filter(
+        ([kind, method, params]) =>
+          kind === "cdp" &&
+          method === "Input.dispatchMouseEvent" &&
+          params.type === "mousePressed",
+      ).length,
+      1,
+    );
+  });
+});
+
+test("Page click retries when an iframe session is lost while the element is resolved", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+    fixture.loseFrameOnNextResolution({
+      message: "Session with given id not found",
+      sessionId: "session:frame-gone",
+    });
+
+    assert.deepEqual(await page.click("#ready", { timeout: 1_000 }), {});
+  });
+});
+
+test("Page click fails fast when its own session is lost while the element is resolved", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+    fixture.loseFrameOnNextResolution({
+      message: "Session with given id not found",
+      sessionId: "session:target-1",
+    });
+
+    await assert.rejects(
+      () => page.click("#ready", { timeout: 1_000 }),
+      /Session with given id not found/,
+    );
+    assert.equal(
+      fixture.calls.some(
+        ([kind, method]) =>
+          kind === "cdp" && method === "Input.dispatchMouseEvent",
+      ),
+      false,
     );
   });
 });

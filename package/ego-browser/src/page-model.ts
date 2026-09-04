@@ -12,6 +12,7 @@ import {
   isCdpRequestTimeoutError,
   isBrowserRuntime,
   isPageDialogOpenedError,
+  isSessionLostError,
   networkActivity,
   pageNetworkSessions,
   pendingDialog,
@@ -70,6 +71,7 @@ import {
   type PageKeyboardTypeOptions,
 } from "./driver/page-keyboard.js";
 import {
+  isTransientElementError,
   navigateInPage,
   reloadInPage,
   waitForLoadStateInPage,
@@ -127,6 +129,11 @@ type TaskSpaceDescriptor = {
   recentTabTitles?: string[];
 };
 
+/**
+ * An action failed on element state after resolution (hidden, moving, covered)
+ * and may simply be attempted again. Transport and session errors are not
+ * included: input may already have reached the page.
+ */
 function isRetryableElementStateError(
   error: unknown,
 ): error is ElementResolutionError {
@@ -134,6 +141,26 @@ function isRetryableElementStateError(
     error instanceof ElementResolutionError &&
     error.kind === "transient" &&
     !error.message.startsWith("Unknown ref:")
+  );
+}
+
+/**
+ * Resolution or frame discovery failed before any input was dispatched. On top
+ * of the element-state cases above, a frame that vanished or an iframe session
+ * that was lost is recovered by rediscovering frames; losing the Page's own
+ * session is terminal.
+ */
+function isRetryableResolutionError(
+  error: unknown,
+  pageSessionId: string,
+): error is Error {
+  if (isTransientElementError(error)) {
+    return !error.message.startsWith("Unknown ref:");
+  }
+  return (
+    isSessionLostError(error) &&
+    typeof error.sessionId === "string" &&
+    error.sessionId !== pageSessionId
   );
 }
 
@@ -341,7 +368,10 @@ type PageModelServices = {
     lastActivityAt: number;
   };
   ensureSession(targetId: string): Promise<string>;
-  ensureFrameSessions(targetId: string): Promise<Map<string, string>>;
+  ensureFrameSessions(
+    targetId: string,
+    timeoutMs?: number,
+  ): Promise<Map<string, string>>;
   invalidateSession(targetId: string): void;
   setPreferredTarget(targetId: string): void;
   supportsBackgroundPageDiscovery(): boolean;
@@ -2044,16 +2074,14 @@ class Page {
     return this.#services.gate.withPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId);
       const refMap = await this.#refMapForAction(page, sessionId, selector);
-      const iframeSessions = await this.#services.ensureFrameSessions(
-        page.targetId,
-      );
       return waitForSelectorInPage(
         this.#services,
         sessionId,
         refMap,
         selector,
         options,
-        iframeSessions,
+        (timeoutMs) =>
+          this.#services.ensureFrameSessions(page.targetId, timeoutMs),
       );
     });
   }
@@ -2108,9 +2136,9 @@ class Page {
     validatePublicApiOptions("Page.click", options);
     return this.#runAction(
       selector,
-      (sessionId, refMap, iframeSessions) =>
+      (sessionId, refMap, iframeSessions, services) =>
         clickInPage(
-          this.#services,
+          services,
           sessionId,
           refMap,
           selector,
@@ -2133,9 +2161,9 @@ class Page {
     validatePublicApiOptions("Page.dblclick", options);
     return this.#runAction(
       selector,
-      (sessionId, refMap, iframeSessions) =>
+      (sessionId, refMap, iframeSessions, services) =>
         clickInPage(
-          this.#services,
+          services,
           sessionId,
           refMap,
           selector,
@@ -2158,9 +2186,9 @@ class Page {
     validatePublicApiOptions("Page.hover", options);
     return this.#runAction(
       selector,
-      (sessionId, refMap, iframeSessions) =>
+      (sessionId, refMap, iframeSessions, services) =>
         hoverInPage(
-          this.#services,
+          services,
           sessionId,
           refMap,
           selector,
@@ -2180,9 +2208,9 @@ class Page {
     validatePublicApiOptions("Page.dragAndDrop", options);
     return this.#runAction(
       [sourceSelector, targetSelector],
-      (sessionId, refMap, iframeSessions) =>
+      (sessionId, refMap, iframeSessions, services) =>
         dragAndDropInPage(
-          this.#services,
+          services,
           sessionId,
           refMap,
           sourceSelector,
@@ -2203,9 +2231,9 @@ class Page {
     validatePublicApiOptions("Page.fill", options);
     return this.#runAction(
       selector,
-      (sessionId, refMap, iframeSessions) =>
+      (sessionId, refMap, iframeSessions, services) =>
         fillInPage(
-          this.#services,
+          services,
           sessionId,
           refMap,
           selector,
@@ -2232,37 +2260,24 @@ class Page {
     choices.forEach(validateSelectOptionChoice);
     const timeoutMs = options.timeout ?? DEFAULT_PAGE_ACTION_TIMEOUT_MS;
     const page = await this.#resolve();
-    return this.#runInputBoundary(page, async (sessionId) => {
-      const deadline = this.#services.now() + timeoutMs;
-      while (true) {
-        try {
-          const refMap = await this.#refMapForAction(page, sessionId, selector);
-          const iframeSessions = await this.#services.ensureFrameSessions(
-            page.targetId,
-          );
-          return await selectOptionInPage(
-            this.#services,
+    return this.#runInputBoundary(page, (sessionId) =>
+      this.#retryElementAction(
+        "page.selectOption",
+        timeoutMs,
+        sessionId,
+        (remainingMs) =>
+          this.#resolveActionTargets(page, sessionId, remainingMs, selector),
+        ({ refMap, iframeSessions }, services) =>
+          selectOptionInPage(
+            services,
             sessionId,
             refMap,
             selector,
             choices,
             iframeSessions,
-          );
-        } catch (error) {
-          if (!isRetryableElementStateError(error)) throw error;
-          const remainingMs = deadline - this.#services.now();
-          if (remainingMs <= 0) {
-            throw new ElementResolutionError(
-              `page.selectOption timed out after ${timeoutMs}ms: ${error.message}`,
-              "transient",
-            );
-          }
-          await this.#services.sleep(
-            Math.min(PAGE_ACTION_RESOLUTION_RETRY_MS, remainingMs),
-          );
-        }
-      }
-    });
+          ),
+      ),
+    );
   }
 
   async focus(
@@ -2272,14 +2287,8 @@ class Page {
     validatePublicApiOptions("Page.focus", options);
     return this.#runAction(
       selector,
-      (sessionId, refMap, iframeSessions) =>
-        focusInPage(
-          this.#services,
-          sessionId,
-          refMap,
-          selector,
-          iframeSessions,
-        ),
+      (sessionId, refMap, iframeSessions, services) =>
+        focusInPage(services, sessionId, refMap, selector, iframeSessions),
       { actionName: "page.focus", timeout: options.timeout },
     );
   }
@@ -2293,9 +2302,9 @@ class Page {
     const { timeout, ...pressOptions } = options;
     return this.#runAction(
       selector,
-      async (sessionId, refMap, iframeSessions) => {
+      async (sessionId, refMap, iframeSessions, services) => {
         await focusInPage(
-          this.#services,
+          services,
           sessionId,
           refMap,
           selector,
@@ -2317,9 +2326,9 @@ class Page {
   ): Promise<PageActionReceipt> {
     return this.#runAction(
       selector,
-      (sessionId, refMap, iframeSessions) =>
+      (sessionId, refMap, iframeSessions, services) =>
         setInputFilesInPage(
-          this.#services,
+          services,
           sessionId,
           refMap,
           selector,
@@ -2488,6 +2497,7 @@ class Page {
       sessionId: string,
       refMap: RefMap,
       iframeSessions: Map<string, string>,
+      services: PageModelServices,
     ) => Promise<void>,
     options: {
       actionName?: string;
@@ -2501,38 +2511,105 @@ class Page {
     const actionName = options.actionName ?? "page action";
     const { receipt } = await this.#runActionBoundary(
       page,
-      async (sessionId) => {
-        const deadline = this.#services.now() + timeoutMs;
-        while (true) {
-          try {
-            const refMap = await this.#refMapForAction(
+      (sessionId) =>
+        this.#retryElementAction(
+          actionName,
+          timeoutMs,
+          sessionId,
+          (remainingMs) =>
+            this.#resolveActionTargets(
               page,
               sessionId,
+              remainingMs,
               ...selectors,
-            );
-            const iframeSessions = await this.#services.ensureFrameSessions(
-              page.targetId,
-            );
-            await operation(sessionId, refMap, iframeSessions);
-            return;
-          } catch (error) {
-            if (!isRetryableElementStateError(error)) throw error;
-            const remainingMs = deadline - this.#services.now();
-            if (remainingMs <= 0) {
-              throw new ElementResolutionError(
-                `${actionName} timed out after ${timeoutMs}ms: ${error.message}`,
-                "transient",
-              );
-            }
-            await this.#services.sleep(
-              Math.min(PAGE_ACTION_RESOLUTION_RETRY_MS, remainingMs),
-            );
-          }
-        }
-      },
+            ),
+          ({ refMap, iframeSessions }, services) =>
+            operation(sessionId, refMap, iframeSessions, services),
+        ),
       options.guardFileChooser,
     );
     return receipt;
+  }
+
+  async #resolveActionTargets(
+    page: PageTarget,
+    sessionId: string,
+    remainingMs: number,
+    ...selectors: string[]
+  ): Promise<{ refMap: RefMap; iframeSessions: Map<string, string> }> {
+    const refMap = await this.#refMapForAction(page, sessionId, ...selectors);
+    const iframeSessions = await this.#services.ensureFrameSessions(
+      page.targetId,
+      Math.max(1, remainingMs),
+    );
+    return { refMap, iframeSessions };
+  }
+
+  /** Services whose CDP transport reports the first `Input.*` command. */
+  #inputTrackingServices(onInput: () => void): PageModelServices {
+    const services = this.#services;
+    return {
+      ...services,
+      cdp(method, params, sessionId, timeoutMs) {
+        if (method.startsWith("Input.")) onInput();
+        return services.cdp(method, params, sessionId, timeoutMs);
+      },
+    };
+  }
+
+  /**
+   * Retry an element action until its deadline. Until the first `Input.*`
+   * command reaches the page, failures may include a vanished frame or a lost
+   * iframe session and are retried after rediscovering frames. Once input was
+   * dispatched only element-state transients are retried, so a gesture that
+   * already reached the page is never dispatched twice.
+   */
+  async #retryElementAction<Prepared, Result>(
+    actionName: string,
+    timeoutMs: number,
+    pageSessionId: string,
+    prepare: (remainingMs: number) => Promise<Prepared>,
+    perform: (
+      prepared: Prepared,
+      services: PageModelServices,
+    ) => Promise<Result>,
+  ): Promise<Result> {
+    const deadline = this.#services.now() + timeoutMs;
+    let lastBlocker: Error | undefined;
+    while (true) {
+      let inputDispatched = false;
+      const services = this.#inputTrackingServices(() => {
+        inputDispatched = true;
+      });
+      try {
+        const prepared = await prepare(deadline - this.#services.now());
+        return await perform(prepared, services);
+      } catch (error) {
+        const remainingMs = deadline - this.#services.now();
+        // Frame discovery runs on the remaining budget; a transport timeout at
+        // the deadline is this action's timeout, reported with the last real
+        // blocker rather than as a CDP failure.
+        const exhausted =
+          !inputDispatched &&
+          isCdpRequestTimeoutError(error) &&
+          remainingMs <= 0;
+        const retryable = inputDispatched
+          ? isRetryableElementStateError(error)
+          : isRetryableResolutionError(error, pageSessionId);
+        if (!retryable && !exhausted) throw error;
+        if (remainingMs <= 0) {
+          const blocker = exhausted && lastBlocker ? lastBlocker : error;
+          throw new ElementResolutionError(
+            `${actionName} timed out after ${timeoutMs}ms: ${blocker.message}`,
+            "transient",
+          );
+        }
+        lastBlocker = error;
+        await this.#services.sleep(
+          Math.min(PAGE_ACTION_RESOLUTION_RETRY_MS, remainingMs),
+        );
+      }
+    }
   }
 
   async #runRawAction(
