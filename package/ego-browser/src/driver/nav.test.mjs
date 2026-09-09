@@ -456,9 +456,15 @@ test("browser runtime enables Page events and tracks pending native dialogs", as
 
     assert.deepEqual(
       sent.map((request) => request.method),
-      ["Target.attachToTarget", "Page.enable", "Runtime.evaluate"],
+      [
+        "Target.attachToTarget",
+        "Page.enable",
+        "Runtime.enable",
+        "Runtime.evaluate",
+      ],
     );
     assert.equal(sent[1].sessionId, "session-1");
+    assert.equal(sent[2].sessionId, "session-1");
 
     runtime.emit("Page.javascriptDialogOpening", {
       type: "alert",

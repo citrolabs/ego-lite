@@ -35,7 +35,7 @@ The heredoc body runs as a Node.js script that controls the selected ego-browser
 
 - Task spaces: `listTaskSpaces`, `useOrCreateTaskSpace`, `claimTaskSpace`, `handOffTaskSpace`, `takeOverTaskSpace`, `waitForAgentControl`, `completeTaskSpace`
 - Navigation / state: `listTabs`, `openOrReuseTab`, `closeTab`, `gotoAndWait`, `currentTab`, `switchTab`, `gotoUrl`, `pageInfo`, `ensureRealTab`
-- Observation: `snapshotText`, `captureScreenshot`, `drainEvents`
+- Observation: `snapshotText`, `captureScreenshot`, `drainEvents`, `drainConsole`, `waitForConsole`
 - Scroll / mouse: `scrollBy`, `scrollToBottomUntil`, `scroll`, `click`, `doubleClick`, `hover`, `dragMouse`
 - Keyboard & input: `typeText`, `fillInput`, `pressKey`, `dispatchKey`
 - File: `uploadFile`
@@ -51,6 +51,8 @@ Notes:
 - `await ensureRealTab()` — switches to an existing non-internal page tab if needed and resolves to it; resolves to `null` when none exists. It does not create a tab — use `await openOrReuseTab(...)` for that.
 - `await closeTab(target?)` — closes the given target id / tab object, or the current tab when omitted.
 - `await drainEvents()` — consumes and returns the async event queue produced by the page (navigation events, network events, etc.).
+- `await drainConsole()` — consumes and returns structured console and page-error messages (`{ type, text, timestamp, args? }`).
+- `await waitForConsole(matcher?, { timeout?, type? })` — waits for a matching console or page-error message.
 - `await serverFetch(url, options)` — issues a request from Node and returns the response body.
 - `await browserFetch(url, options)` — issues a request from the current browser page context and returns the response body.
 - `help(name)` — prints usage for a given helper, e.g. `cliLog(help('click'))`.

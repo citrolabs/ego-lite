@@ -4,6 +4,9 @@ import assert from "node:assert/strict";
 import {
   browserCdp,
   drainBrowserEvents,
+  drainConsoleMessages,
+  pendingConsoleMessages,
+  waitForConsole,
   invalidateSession,
   isBrowserRuntime,
   pendingDialog,
@@ -80,6 +83,7 @@ function cleanup() {
   invalidateSession();
   clearPreferredTarget();
   drainBrowserEvents();
+  drainConsoleMessages();
   state.cdpOverride = null;
   state.sessionInflight = null;
 }
@@ -649,6 +653,12 @@ test("ensureSession selects the preferred tab when available", async () => {
     const pageEnable = calls.find((c) => c.method === "Page.enable");
     assert.ok(pageEnable, "Page.enable was called for the attached session");
     assert.equal(pageEnable.sessionId, `auto-sess-${attach.id}`);
+    const runtimeEnable = calls.find((c) => c.method === "Runtime.enable");
+    assert.ok(
+      runtimeEnable,
+      "Runtime.enable was called for the attached session",
+    );
+    assert.equal(runtimeEnable.sessionId, `auto-sess-${attach.id}`);
   } finally {
     cleanup();
   }
@@ -816,4 +826,186 @@ test("browserSnapshotRefsToRefMap skips null, non-object, and missing backendNod
   ]);
   assert.equal(refMap._data.size, 1, "only the valid ref is added");
   assert.ok(refMap._data.has("7"));
+});
+
+/* ------------------------------------------------------------------ */
+/*  Console message buffer                                            */
+/* ------------------------------------------------------------------ */
+
+test("drainConsoleMessages collects structured console events and clears the buffer", async () => {
+  const calls = installManualEgo();
+  try {
+    const p = browserCdp("Target.getVersion", {}, undefined, 5000);
+    globalThis.ego.onCDPMessage(
+      JSON.stringify({ id: calls[0].id, result: {} }),
+    );
+    await p;
+
+    fireEvent("Runtime.consoleAPICalled", {
+      type: "warning",
+      timestamp: 100,
+      args: [{ type: "string", value: "be careful" }],
+    });
+    fireEvent("Runtime.exceptionThrown", {
+      timestamp: 200,
+      exceptionDetails: {
+        text: "Uncaught Error: boom",
+        exception: { description: "Error: boom" },
+      },
+    });
+
+    const first = drainConsoleMessages();
+    assert.equal(first.length, 2);
+    assert.deepEqual(first[0], {
+      type: "warning",
+      text: "be careful",
+      timestamp: 100,
+      args: ["be careful"],
+    });
+    assert.deepEqual(first[1], {
+      type: "pageerror",
+      text: "Uncaught Error: boom",
+      timestamp: 200,
+    });
+
+    assert.equal(
+      drainConsoleMessages().length,
+      0,
+      "second drain returns empty",
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("pendingConsoleMessages peeks without clearing the buffer", async () => {
+  const calls = installManualEgo();
+  try {
+    const p = browserCdp("Target.getVersion", {}, undefined, 5000);
+    globalThis.ego.onCDPMessage(
+      JSON.stringify({ id: calls[0].id, result: {} }),
+    );
+    await p;
+
+    fireEvent("Runtime.consoleAPICalled", {
+      type: "log",
+      args: [{ type: "string", value: "hello" }],
+    });
+
+    const peeked = pendingConsoleMessages();
+    assert.equal(peeked.length, 1);
+    assert.equal(peeked[0].text, "hello");
+    assert.equal(pendingConsoleMessages().length, 1, "peek does not drain");
+    assert.equal(
+      drainConsoleMessages().length,
+      1,
+      "drain still works after peek",
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+test("waitForConsole resolves matching buffered and future messages", async () => {
+  const calls = installManualEgo();
+  try {
+    const p = browserCdp("Target.getVersion", {}, undefined, 5000);
+    globalThis.ego.onCDPMessage(
+      JSON.stringify({ id: calls[0].id, result: {} }),
+    );
+    await p;
+
+    fireEvent("Runtime.consoleAPICalled", {
+      type: "log",
+      args: [{ type: "string", value: "already here" }],
+    });
+    const buffered = await waitForConsole("already");
+    assert.equal(buffered.text, "already here");
+
+    const pending = waitForConsole(/future-msg/, { timeout: 500 });
+    fireEvent("Runtime.consoleAPICalled", {
+      type: "error",
+      args: [{ type: "string", value: "future-msg arrived" }],
+    });
+    const future = await pending;
+    assert.equal(future.type, "error");
+    assert.match(future.text, /future-msg/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("waitForConsole supports type filtering", async () => {
+  const calls = installManualEgo();
+  try {
+    const p = browserCdp("Target.getVersion", {}, undefined, 5000);
+    globalThis.ego.onCDPMessage(
+      JSON.stringify({ id: calls[0].id, result: {} }),
+    );
+    await p;
+
+    fireEvent("Runtime.consoleAPICalled", {
+      type: "log",
+      args: [{ type: "string", value: "same text" }],
+    });
+
+    const promise = waitForConsole("same text", {
+      type: "pageerror",
+      timeout: 100,
+    });
+    await assert.rejects(promise, /waitForConsole timed out/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("drainConsoleMessages caps at MAX_BUFFERED_CONSOLE_MESSAGES (1000)", async () => {
+  const calls = installManualEgo();
+  try {
+    const p = browserCdp("Target.getVersion", {}, undefined, 5000);
+    globalThis.ego.onCDPMessage(
+      JSON.stringify({ id: calls[0].id, result: {} }),
+    );
+    await p;
+
+    for (let i = 0; i < 1005; i++) {
+      fireEvent("Runtime.consoleAPICalled", {
+        type: "log",
+        args: [{ type: "string", value: `msg-${i}` }],
+      });
+    }
+    const messages = drainConsoleMessages();
+    assert.equal(
+      messages.length,
+      1000,
+      "console buffer capped at 1000 messages",
+    );
+    assert.equal(messages[0].text, "msg-5", "oldest console messages dropped");
+    assert.equal(messages[messages.length - 1].text, "msg-1004");
+  } finally {
+    cleanup();
+  }
+});
+
+test("console messages still appear in raw drainBrowserEvents", async () => {
+  const calls = installManualEgo();
+  try {
+    const p = browserCdp("Target.getVersion", {}, undefined, 5000);
+    globalThis.ego.onCDPMessage(
+      JSON.stringify({ id: calls[0].id, result: {} }),
+    );
+    await p;
+
+    fireEvent("Runtime.consoleAPICalled", {
+      type: "log",
+      args: [{ type: "string", value: "dual-write" }],
+    });
+
+    assert.equal(drainConsoleMessages().length, 1);
+    const raw = drainBrowserEvents();
+    assert.equal(raw.length, 1);
+    assert.equal(raw[0].method, "Runtime.consoleAPICalled");
+  } finally {
+    cleanup();
+  }
 });

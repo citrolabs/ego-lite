@@ -442,6 +442,33 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     returns: "Promise<object[]>",
     example: "console.log(await page.drainEvents())",
   },
+  "page.drainConsole": {
+    signature: "page.drainConsole() => ConsoleMessage[]",
+    description:
+      "Drain structured console.log/warn/error and uncaught page errors captured from the page.",
+    returns: "ConsoleMessage[]",
+    example: "console.log(await page.drainConsole())",
+  },
+  "page.waitForConsole": {
+    signature:
+      "page.waitForConsole(matcher?, options?) => Promise<ConsoleMessage>",
+    description:
+      "Wait for a console or page-error message. matcher may be a substring, RegExp, predicate, or omitted to match any message.",
+    params: [
+      {
+        name: "matcher",
+        type: "string | RegExp | function",
+        description: "Optional text/predicate matcher.",
+      },
+      {
+        name: "options",
+        type: "{ timeout?: number, type?: string }",
+        description: "Timeout in ms and optional message type filter.",
+      },
+    ],
+    returns: "Promise<ConsoleMessage>",
+    example: "await page.waitForConsole('ready', { timeout: 5000 })",
+  },
   "page.keyboard.press": {
     signature: "page.keyboard.press(key, options?) => Promise<void>",
     description: "Press a keyboard key or shortcut.",
