@@ -40,6 +40,7 @@ The heredoc body runs as a Node.js script that controls the selected ego-browser
 - Keyboard & input: `typeText`, `fillInput`, `pressKey`, `dispatchKey`
 - File: `uploadFile`
 - Wait: `wait`, `waitForLoad`, `waitForElement`, `waitForNetworkIdle`
+- Soft expects (via `page` facade): `page.retryOnTransient(fn, { attempts, interval })`, `page.expectVisible(selector)`, `page.expectHidden(selector)`, `page.expectText(selector, expected)`, `page.expectUrl(expected)`, `page.expectValue(selector, expected)` — return `{ ok, detail?, actual?, expected? }` instead of throwing
 - Fetch: `serverFetch`, `browserFetch`
 - CDP / evaluate: `js`, `cdp`
 - Output: `cliLog`, `help`
