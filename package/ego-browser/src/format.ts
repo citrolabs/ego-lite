@@ -407,17 +407,24 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
       {
         name: "options",
         type: "object",
-        description: "Snapshot options such as scope.",
+        description:
+          "Snapshot options: scope, includeActionMarks, includeStableLocator, interactiveOnly, roles, match, maxChars.",
       },
     ],
     returns: "Promise<string>",
-    example: "console.log(await page.snapshot())",
+    example: "console.log(await page.snapshot({ interactiveOnly: true }))",
   },
   "page.snapshotRaw": {
     signature: "page.snapshotRaw(options?) => Promise<object>",
-    description: "Return the raw structured snapshot object.",
+    description:
+      "Return the raw structured snapshot object (content filtered when filter options are set; refs unchanged).",
     params: [
-      { name: "options", type: "object", description: "Snapshot options." },
+      {
+        name: "options",
+        type: "object",
+        description:
+          "Snapshot options: scope, includeActionMarks, includeStableLocator, interactiveOnly, roles, match, maxChars.",
+      },
     ],
     returns: "Promise<object>",
     example: "console.log(await page.snapshotRaw())",

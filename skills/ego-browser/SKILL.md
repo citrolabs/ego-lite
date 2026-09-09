@@ -198,6 +198,7 @@ These workflows can be combined. A task may take multiple heredoc rounds when th
 
 - `wait(...)` and `timeout` values are in **seconds**; only parameters whose names end in `Ms` are milliseconds.
 - `snapshotText()` defaults to `scope: 'full_page'`, covering the whole page. Use the default in almost every case; only pass `scope: 'only_within_viewport'` when the task needs only visible content.
+- Pass filter options to shrink noisy snapshots: `interactiveOnly: true` keeps buttons/links/form controls (plus heading/landmark lines with refs); `roles: ['button','link']` keeps matching roles; `match: 'checkout'` or a regex keeps matching lines; `maxChars` truncates with an omission note. Filters apply to snapshot text only — refs stay intact in the ref map.
 - `@N` refs are only valid for the most recent `snapshotText` call — every call rebuilds the refMap. Ref numbers come from the CDP `backendNodeId`, so the same element keeps the same number across calls; but to use `@N`, N must appear in the latest snapshotText output. An element scrolled out of the viewport, a DOM re-render, or a previous call with `scope:'only_within_viewport'` that didn't cover the element will all cause `Unknown ref`. For elements you need to reference long-term, use the `loc=...` value from snapshotText output as a stable selector, or write a CSS selector directly.
 - `js()` returns the evaluated result, not a JSON string — don't wrap it with `JSON.parse(...)`.
 - Inside a `js(...)` template string, regex backslashes must be doubled (e.g. `\\d`, `\\s`), or use `String.raw`.
