@@ -1,0 +1,15 @@
+{
+  "name": "ego",
+  "displayName": "ego",
+  "version": "2.0.0",
+  "description": "Browser automation with the ego-browser Skill",
+  "author": {
+    "name": "citrolabs",
+    "email": "contact@citrolabs.ai"
+  },
+  "homepage": "https://github.com/citrolabs/ego-lite",
+  "repository": "https://github.com/citrolabs/ego-lite",
+  "license": "MIT",
+  "keywords": ["browser", "automation", "skill", "playwright"],
+  "skills": "./skills/"
+}
