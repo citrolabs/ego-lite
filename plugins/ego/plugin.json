@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "ego",
+  "version": "2.0.0",
+  "description": "Browser automation with the ego-browser Skill",
+  "author": {
+    "name": "citrolabs",
+    "email": "contact@citrolabs.ai"
+  },
+  "homepage": "https://github.com/citrolabs/ego-lite",
+  "repository": "https://github.com/citrolabs/ego-lite",
+  "license": "MIT"
+}

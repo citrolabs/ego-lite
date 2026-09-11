@@ -32,6 +32,12 @@ jobs:
       - run: npm run style:check
       - run: npm audit --registry=https://registry.npmjs.org --audit-level=moderate
       - run: npm test
+      - name: Check plugin style
+        working-directory: .
+        run: package/ego-browser/node_modules/.bin/prettier --check "plugins/**/*.{mjs,js,json,md}"
+      - name: Test agent plugin
+        working-directory: plugins/ego
+        run: npm test
       - run: npm run validate:site-skills
       - name: Archive release payload
         if: env.SHOULD_RELEASE == 'true'
