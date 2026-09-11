@@ -1,0 +1,20 @@
+{
+  "name": "ego-agent-skills",
+  "interface": {
+    "displayName": "Ego Agent Skills"
+  },
+  "plugins": [
+    {
+      "name": "ego",
+      "source": {
+        "source": "local",
+        "path": "./plugins/ego"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

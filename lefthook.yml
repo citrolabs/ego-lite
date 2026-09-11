@@ -23,7 +23,7 @@ pre-commit:
         exit 1
     style-check:
       run: |
-        files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^package/ego-browser/.*\.(ts|mjs|js|json|md)$' || true)
+        files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^(package/ego-browser|plugins)/.*\.(ts|mjs|js|json|md)$' || true)
         [ -z "$files" ] && exit 0
         package/ego-browser/node_modules/.bin/prettier --check $files
     vulnerability-audit:
@@ -38,6 +38,10 @@ pre-commit:
       run: |
         git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(package/ego-browser/(src/learning/|scripts/validate-site-skills\.ts)|skills/ego-browser/learnings/)' || exit 0
         cd package/ego-browser && npm run validate:site-skills
+    plugin-tests:
+      run: |
+        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(plugins/|skills/ego-browser/|\.agents/plugins/|\.claude-plugin/)' || exit 0
+        npm --prefix plugins/ego test
     e2e-test:
       run: |
         git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(package/ego-browser/|skills/ego-browser/)' || exit 0
