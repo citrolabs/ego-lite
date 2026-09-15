@@ -135,6 +135,50 @@ test("Codex marketplace and manifest expose the same pure-Skill plugin", () => {
   assertPureSkillText(source, "Codex manifest");
 });
 
+// Values the plugin submission portal accepts, from
+// https://developers.openai.com/plugins/deploy/submission-errors
+const CODEX_CATEGORIES = [
+  "Productivity",
+  "Creativity",
+  "Developer Tools",
+  "Business & Operations",
+  "Data & Analytics",
+  "Communication",
+  "Education & Research",
+  "Security",
+  "Finance",
+  "Healthcare",
+  "Travel",
+  "Entertainment",
+  "Other",
+];
+
+test("Codex listing metadata satisfies the plugin directory", () => {
+  const manifest = json(`${pluginRoot}/.codex-plugin/plugin.json`);
+  const listing = manifest.interface;
+
+  assert.ok(
+    CODEX_CATEGORIES.includes(listing.category),
+    `interface.category ${JSON.stringify(listing.category)} is rejected as plugin_category_unknown; use one of ${CODEX_CATEGORIES.join(", ")}`,
+  );
+  for (const field of [
+    "displayName",
+    "shortDescription",
+    "longDescription",
+    "developerName",
+  ]) {
+    assert.ok(
+      listing[field]?.trim(),
+      `interface.${field} is required by the plugin directory`,
+    );
+  }
+  assert.equal(
+    listing.developerName,
+    manifest.author.name,
+    "author.name and interface.developerName must match, or the portal asks to confirm a default",
+  );
+});
+
 test("OpenCode adapter injects only instructions and the Skill slash command", async () => {
   const pkgSource = read(`${pluginRoot}/package.json`);
   const pkg = JSON.parse(pkgSource);
