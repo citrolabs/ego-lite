@@ -161,15 +161,21 @@ test("Codex listing metadata satisfies the plugin directory", () => {
     CODEX_CATEGORIES.includes(listing.category),
     `interface.category ${JSON.stringify(listing.category)} is rejected as plugin_category_unknown; use one of ${CODEX_CATEGORIES.join(", ")}`,
   );
-  for (const field of [
-    "displayName",
-    "shortDescription",
-    "longDescription",
-    "developerName",
+  // Final directory submission caps each field below the package-validation limit.
+  for (const [field, limit] of [
+    ["displayName", 30],
+    ["shortDescription", 30],
+    ["longDescription", 4000],
+    ["developerName", 80],
   ]) {
+    const value = listing[field];
     assert.ok(
-      listing[field]?.trim(),
+      value?.trim(),
       `interface.${field} is required by the plugin directory`,
+    );
+    assert.ok(
+      value.length <= limit,
+      `interface.${field} must be ${limit} characters or fewer for final directory submission, but is ${value.length}`,
     );
   }
   assert.equal(

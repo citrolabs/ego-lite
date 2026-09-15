@@ -14,7 +14,7 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "ego",
-    "shortDescription": "Automate the user's ego browser",
+    "shortDescription": "Automate user's ego browser",
     "longDescription": "Control ego lite through the packaged ego-browser Skill while keeping agent browsing isolated from the user's own tabs.",
     "developerName": "citrolabs",
     "category": "Developer Tools",
