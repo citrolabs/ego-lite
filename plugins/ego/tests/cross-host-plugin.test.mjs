@@ -132,6 +132,18 @@ test("Codex marketplace and manifest expose the same pure-Skill plugin", () => {
   assert.equal(manifest.version, skillVersion);
   assert.equal(manifest.skills, "./skills/");
   assert.equal(Object.hasOwn(manifest, "mcpServers"), false);
+  // Codex reads keywords only from the Agent Plugins root manifest; the
+  // .codex-plugin overlay contributes apps, hooks, and interface alone.
+  const portable = json(`${pluginRoot}/plugin.json`);
+  assert.ok(
+    portable.keywords?.length,
+    "root plugin.json must declare keywords, or plugin search cannot match them",
+  );
+  assert.deepEqual(
+    portable.keywords,
+    manifest.keywords,
+    "root and Codex keywords must not drift",
+  );
   assertPureSkillText(source, "Codex manifest");
 });
 
