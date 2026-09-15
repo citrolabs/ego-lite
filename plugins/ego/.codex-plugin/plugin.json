@@ -21,6 +21,8 @@
     "capabilities": ["Interactive", "Read", "Write"],
     "defaultPrompt": [
       "Use ego-browser to inspect https://example.com and report its title."
-    ]
+    ],
+    "composerIcon": "./skills/ego-browser/assets/composer-icon.png",
+    "logo": "./skills/ego-browser/assets/logo.png"
   }
 }

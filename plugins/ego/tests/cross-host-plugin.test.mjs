@@ -177,6 +177,19 @@ test("Codex listing metadata satisfies the plugin directory", () => {
     manifest.author.name,
     "author.name and interface.developerName must match, or the portal asks to confirm a default",
   );
+  for (const field of ["composerIcon", "logo"]) {
+    const asset = listing[field];
+    assert.match(
+      asset,
+      /^\.\//,
+      `interface.${field} must be a plugin-relative path starting with ./`,
+    );
+    assert.equal(
+      existsSync(repoFile(`${pluginRoot}/${asset}`)),
+      true,
+      `interface.${field} points to a missing file: ${asset}`,
+    );
+  }
 });
 
 test("OpenCode adapter injects only instructions and the Skill slash command", async () => {
