@@ -17,7 +17,7 @@
     "shortDescription": "Automate the user's ego browser",
     "longDescription": "Control ego lite through the packaged ego-browser Skill while keeping agent browsing isolated from the user's own tabs.",
     "developerName": "citrolabs",
-    "category": "Engineering",
+    "category": "Developer Tools",
     "capabilities": ["Interactive", "Read", "Write"],
     "defaultPrompt": [
       "Use ego-browser to inspect https://example.com and report its title."
