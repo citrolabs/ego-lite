@@ -14,13 +14,15 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "ego",
-    "shortDescription": "Automate the user's ego browser",
+    "shortDescription": "Automate user's ego browser",
     "longDescription": "Control ego lite through the packaged ego-browser Skill while keeping agent browsing isolated from the user's own tabs.",
     "developerName": "citrolabs",
-    "category": "Engineering",
+    "category": "Developer Tools",
     "capabilities": ["Interactive", "Read", "Write"],
     "defaultPrompt": [
       "Use ego-browser to inspect https://example.com and report its title."
-    ]
+    ],
+    "composerIcon": "./skills/ego-browser/assets/composer-icon.png",
+    "logo": "./skills/ego-browser/assets/logo.png"
   }
 }

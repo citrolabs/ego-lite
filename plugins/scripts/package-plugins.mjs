@@ -27,6 +27,7 @@ const TARGETS = [
     title: "Codex",
     files: [".codex-plugin/plugin.json"],
     marketplace: ".agents/plugins/marketplace.json",
+    flat: true,
   },
   { id: "cursor", title: "Cursor", files: [".cursor-plugin/plugin.json"] },
   {
@@ -281,9 +282,10 @@ async function packagePlugin(repositoryRoot, name, outputRoot) {
   try {
     for (const target of TARGETS) {
       const stagingRoot = join(temporaryRoot, target.id);
-      const payloadRoot = target.marketplace
-        ? join(stagingRoot, "plugins", name)
-        : stagingRoot;
+      const payloadRoot =
+        target.marketplace && !target.flat
+          ? join(stagingRoot, "plugins", name)
+          : stagingRoot;
       const entries = [
         "LICENSE",
         ...target.files,
@@ -308,7 +310,7 @@ async function packagePlugin(repositoryRoot, name, outputRoot) {
       const hostReadme = `# ${name} for ${target.title}\n\n## Requirements\n\n${requirements}\n\n## Installation\n\n${installation}\n`;
       await writeFile(join(payloadRoot, "README.md"), hostReadme);
       if (target.marketplace) {
-        const source = `./plugins/${name}`;
+        const source = target.flat ? "./" : `./plugins/${name}`;
         const catalog =
           target.id === "codex"
             ? {
@@ -342,7 +344,9 @@ async function packagePlugin(repositoryRoot, name, outputRoot) {
           name: `${name}-${target.id}-local`,
           ...catalog,
         });
-        await writeFile(join(stagingRoot, "README.md"), hostReadme);
+        if (!target.flat) {
+          await writeFile(join(stagingRoot, "README.md"), hostReadme);
+        }
       }
       const archiveName = `${name}-${target.id}-v${manifest.version}.${target.npm ? "tgz" : "zip"}`;
       const archive = join(temporaryRoot, archiveName);

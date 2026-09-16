@@ -23,7 +23,7 @@ The output directory is `dist/plugins/ego-v2.0.0/`:
 | Host             | Artifact                          | Contents                                            |
 | ---------------- | --------------------------------- | --------------------------------------------------- |
 | Claude Code      | `ego-claude-code-v2.0.0.zip`      | Claude plugin                                       |
-| Codex            | `ego-codex-v2.0.0.zip`            | Local marketplace and Codex plugin                  |
+| Codex            | `ego-codex-v2.0.0.zip`            | Codex plugin at the archive root, plus marketplace  |
 | Cursor           | `ego-cursor-v2.0.0.zip`           | Cursor plugin                                       |
 | GitHub Copilot   | `ego-github-copilot-v2.0.0.zip`   | Claude-compatible plugin                            |
 | Grok Build       | `ego-grok-build-v2.0.0.zip`       | Agent Plugins manifest and Skill                    |
@@ -33,8 +33,11 @@ The output directory is `dist/plugins/ego-v2.0.0/`:
 | DeepSeek Harness | `ego-deepseek-harness-v2.0.0.tgz` | `@citrolabs/ego-deepseek-harness` npm bundle        |
 
 Every ZIP includes a host-specific `README.md` at its root; npm archives include
-it under `package/`. Codex and WorkBuddy ZIPs contain a marketplace root with the
-plugin under `plugins/ego/`. Other ZIPs start directly at the plugin root.
+it under `package/`. The WorkBuddy ZIP contains a marketplace root with the
+plugin under `plugins/ego/`. Other ZIPs start directly at the plugin root. The
+Codex ZIP starts there too and carries its marketplace file alongside, because
+the public plugin directory rejects an archive whose manifest is not at the
+root.
 
 The two npm packages have separate names and exports so their adapters cannot
 be confused by package caches. All nine packages contain real Skill files;
@@ -79,8 +82,11 @@ See the [Claude Code plugin reference](https://code.claude.com/docs/en/plugins-r
 
 ### Codex
 
-Extract the Codex ZIP, keeping `.agents/plugins/marketplace.json` and
-`plugins/ego/` together. Add the extracted marketplace root:
+The Codex ZIP serves both install routes. `.codex-plugin/plugin.json` and
+`skills/` sit at the archive root, and `.agents/plugins/marketplace.json`
+points at that same root with `"path": "./"`.
+
+To install locally, extract the ZIP and add the extracted directory:
 
 ```bash
 codex plugin marketplace add /absolute/path/to/ego-codex
@@ -88,8 +94,14 @@ codex plugin add ego@ego-codex-local
 ```
 
 Restart Codex if the plugin does not appear, then ask it to use `$ego-browser`.
-The contained plugin uses `.codex-plugin/plugin.json`. Remove the installed
-plugin with `codex plugin remove ego@ego-codex-local`.
+Remove the installed plugin with `codex plugin remove ego@ego-codex-local`.
+
+To publish, upload the same ZIP as a skills-only plugin in the submission
+portal and select the verified developer identity that matches `author.name`.
+The listing copy comes from the manifest's `interface` object, whose `category`
+must be one of the values the portal accepts. See
+[Submit plugins](https://developers.openai.com/plugins/deploy/submission) and
+the [submission error reference](https://developers.openai.com/plugins/deploy/submission-errors).
 
 See the [OpenAI plugin guide](https://developers.openai.com/plugins/build/plugins).
 

@@ -21,7 +21,13 @@ import test from "node:test";
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const targets = [
   ["claude-code", "Claude Code", [".claude-plugin"]],
-  ["codex", "Codex", [".codex-plugin"], ".agents/plugins/marketplace.json"],
+  [
+    "codex",
+    "Codex",
+    [".codex-plugin"],
+    ".agents/plugins/marketplace.json",
+    true,
+  ],
   ["cursor", "Cursor", [".cursor-plugin"]],
   ["github-copilot", "GitHub Copilot", [".claude-plugin"]],
   ["grok-build", "Grok Build", []],
@@ -183,14 +189,13 @@ function assertArtifacts(root, output, name, version, skillName) {
   );
   try {
     for (const target of targets) {
-      const [id, title, manifests, marketplacePath] = target;
+      const [id, title, manifests, marketplacePath, flat] = target;
       const contents = unpack(
         join(release, artifactName(name, version, target)),
         join(extracted, id),
       );
-      const plugin = marketplacePath
-        ? join(contents, "plugins", name)
-        : contents;
+      const plugin =
+        marketplacePath && !flat ? join(contents, "plugins", name) : contents;
       const expected = [
         "LICENSE",
         "README.md",
@@ -256,6 +261,7 @@ function assertArtifacts(root, output, name, version, skillName) {
         }
         packages.set(id, plugin);
       }
+      if (flat) expected.push(marketplacePath);
       assert.deepEqual(
         files(plugin),
         expected.sort(),
@@ -285,16 +291,21 @@ function assertArtifacts(root, output, name, version, skillName) {
         assert.deepEqual(
           marketplace.plugins[0].source,
           id === "codex"
-            ? { source: "local", path: `./plugins/${name}` }
+            ? { source: "local", path: "./" }
             : `./plugins/${name}`,
         );
         assert.deepEqual(
           files(contents),
-          [
-            "README.md",
-            marketplacePath,
-            ...expected.map((path) => `plugins/${name}/${path}`),
-          ].sort(),
+          flat
+            ? expected.sort()
+            : [
+                "README.md",
+                marketplacePath,
+                ...expected.map((path) => `plugins/${name}/${path}`),
+              ].sort(),
+          flat
+            ? "the public directory requires the plugin root at the archive root"
+            : "a marketplace archive nests the plugin under plugins/",
         );
       }
     }
