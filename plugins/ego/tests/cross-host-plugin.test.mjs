@@ -132,7 +132,82 @@ test("Codex marketplace and manifest expose the same pure-Skill plugin", () => {
   assert.equal(manifest.version, skillVersion);
   assert.equal(manifest.skills, "./skills/");
   assert.equal(Object.hasOwn(manifest, "mcpServers"), false);
+  // Codex reads keywords only from the Agent Plugins root manifest; the
+  // .codex-plugin overlay contributes apps, hooks, and interface alone.
+  const portable = json(`${pluginRoot}/plugin.json`);
+  assert.ok(
+    portable.keywords?.length,
+    "root plugin.json must declare keywords, or plugin search cannot match them",
+  );
+  assert.deepEqual(
+    portable.keywords,
+    manifest.keywords,
+    "root and Codex keywords must not drift",
+  );
   assertPureSkillText(source, "Codex manifest");
+});
+
+// Values the plugin submission portal accepts, from
+// https://developers.openai.com/plugins/deploy/submission-errors
+const CODEX_CATEGORIES = [
+  "Productivity",
+  "Creativity",
+  "Developer Tools",
+  "Business & Operations",
+  "Data & Analytics",
+  "Communication",
+  "Education & Research",
+  "Security",
+  "Finance",
+  "Healthcare",
+  "Travel",
+  "Entertainment",
+  "Other",
+];
+
+test("Codex listing metadata satisfies the plugin directory", () => {
+  const manifest = json(`${pluginRoot}/.codex-plugin/plugin.json`);
+  const listing = manifest.interface;
+
+  assert.ok(
+    CODEX_CATEGORIES.includes(listing.category),
+    `interface.category ${JSON.stringify(listing.category)} is rejected as plugin_category_unknown; use one of ${CODEX_CATEGORIES.join(", ")}`,
+  );
+  // Final directory submission caps each field below the package-validation limit.
+  for (const [field, limit] of [
+    ["displayName", 30],
+    ["shortDescription", 30],
+    ["longDescription", 4000],
+    ["developerName", 80],
+  ]) {
+    const value = listing[field];
+    assert.ok(
+      value?.trim(),
+      `interface.${field} is required by the plugin directory`,
+    );
+    assert.ok(
+      value.length <= limit,
+      `interface.${field} must be ${limit} characters or fewer for final directory submission, but is ${value.length}`,
+    );
+  }
+  assert.equal(
+    listing.developerName,
+    manifest.author.name,
+    "author.name and interface.developerName must match, or the portal asks to confirm a default",
+  );
+  for (const field of ["composerIcon", "logo"]) {
+    const asset = listing[field];
+    assert.match(
+      asset,
+      /^\.\//,
+      `interface.${field} must be a plugin-relative path starting with ./`,
+    );
+    assert.equal(
+      existsSync(repoFile(`${pluginRoot}/${asset}`)),
+      true,
+      `interface.${field} points to a missing file: ${asset}`,
+    );
+  }
 });
 
 test("OpenCode adapter injects only instructions and the Skill slash command", async () => {

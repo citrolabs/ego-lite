@@ -9,5 +9,6 @@
   },
   "homepage": "https://github.com/citrolabs/ego-lite",
   "repository": "https://github.com/citrolabs/ego-lite",
-  "license": "MIT"
+  "license": "MIT",
+  "keywords": ["browser", "automation", "skill", "playwright"]
 }
