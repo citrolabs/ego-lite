@@ -20,8 +20,8 @@
   <a href="README.zh-CN.md">简体中文</a> ·
   <a href="README.ja.md">日本語</a> ·
   <a href="README.ko.md">한국어</a> ·
-  <b>Português (BR)</b> ·
-  <a href="README.es.md">Español (LatAm)</a>
+  <b>Português</b> ·
+  <a href="README.es.md">Español</a>
 </p>
 
 </div>
@@ -36,7 +36,7 @@ https://github.com/user-attachments/assets/ffe7954b-58ee-411e-b35d-ec30c58a08bc
 
 ## Início rápido
 
-Por enquanto, o ego lite roda no macOS, e a versão para Windows entrará em beta fechado em breve; enquanto isso, o Linux está no [roadmap](https://lite.ego.app/roadmap).
+Hoje o ego lite roda no macOS, a versão para Windows entra em beta fechado em breve e o Linux está no [roadmap](https://lite.ego.app/roadmap).
 
 ### 1. Instalar
 

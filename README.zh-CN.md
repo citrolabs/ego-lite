@@ -20,8 +20,8 @@
   <b>简体中文</b> ·
   <a href="README.ja.md">日本語</a> ·
   <a href="README.ko.md">한국어</a> ·
-  <a href="README.pt.md">Português (BR)</a> ·
-  <a href="README.es.md">Español (LatAm)</a>
+  <a href="README.pt.md">Português</a> ·
+  <a href="README.es.md">Español</a>
 </p>
 
 </div>

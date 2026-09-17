@@ -20,8 +20,8 @@
   <a href="README.zh-CN.md">简体中文</a> ·
   <a href="README.ja.md">日本語</a> ·
   <b>한국어</b> ·
-  <a href="README.pt.md">Português (BR)</a> ·
-  <a href="README.es.md">Español (LatAm)</a>
+  <a href="README.pt.md">Português</a> ·
+  <a href="README.es.md">Español</a>
 </p>
 
 </div>
@@ -36,7 +36,7 @@ https://github.com/user-attachments/assets/ffe7954b-58ee-411e-b35d-ec30c58a08bc
 
 ## 빠른 시작
 
-ego lite는 현재 macOS를 지원합니다. Windows 버전은 곧 베타로 출시될 예정이며, Linux는 [로드맵](https://lite.ego.app/roadmap)에 있습니다.
+ego lite는 현재 macOS를 지원합니다. Windows 버전은 곧 비공개 베타를 시작할 예정이며, Linux는 [로드맵](https://lite.ego.app/roadmap)에 있습니다.
 
 ### 1. 설치
 
