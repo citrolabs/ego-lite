@@ -26,9 +26,9 @@
 
 </div>
 
-ego (lite) 是一款让你和你的 AI Agent 并行工作的浏览器。你的 Agent 在自己的 Space 里执行多个浏览器任务，标签页始终归你，任务完成得更快，Token 消耗也更少。
+ego (lite) 是一款能够让你和你的 AI Agent 并行工作的浏览器。你的 Agent 在自己的 Space 里执行多个浏览器任务的同时，你可以在属于自己的 space 自由的浏览网页，agent 再也不会抢你浏览器的控制权。与此同时，网页自动化任务完成得更快，Token 消耗也更少。
 
-browser-use、agent-browser 这类现有工具本质上是浏览器自动化框架：它们需要另找一个浏览器来驱动，登录状态很难完整带过去，你和 Agent 最后还要抢同一个标签页。而 ego lite 从设计之初就是给你们两方共用的浏览器。无需额外配置，Agent 随时都能通过 `ego-browser` 拿到你真实的登录状态和标签页。
+像 browser-use、agent-browser 这类现有工具本质上是浏览器自动化桥接工具：它们需要另找一个浏览器来驱动，很难完整带过去完整的浏览器数据，链接也不稳定，你和 Agent 最后还要抢浏览器当前的控制权。而 ego lite 从设计之初就是给你们两方共用的浏览器。无需额外配置，Agent 随时都能通过 `ego-browser` 拿到你真实的登录状态和标签页。
 
 ## 演示
 
@@ -36,7 +36,7 @@ https://github.com/user-attachments/assets/ffe7954b-58ee-411e-b35d-ec30c58a08bc
 
 ## 快速开始
 
-ego lite 目前支持 macOS。Windows 和 Linux 已在[路线图](https://lite.ego.app/roadmap)上。
+ego lite 目前支持 macOS，且 Windows 版本即将发布内测，与此同时，Linux 已在[路线图](https://lite.ego.app/roadmap)上。
 
 ### 1. 安装
 
@@ -71,7 +71,7 @@ Agent 第一次执行浏览器任务时，会带你完成 ego lite 应用的安�
 
 首次启动时，ego lite 只问一个问题：要不要迁移你的 Chrome 数据。选择是，你的 Agent 就能直接继承你现有的登录状态、Cookie、扩展程序和书签。
 
-### 2. 跑出第一个任务
+### 2. 拿第一个任务练练手
 
 在 Agent 的 CLI 里输入 `/ego-browser`，空一格，然后用大白话描述你想要什么：
 
@@ -79,15 +79,15 @@ Agent 第一次执行浏览器任务时，会带你完成 ego lite 应用的安�
 ego-browser 帮我关注 x.com 上的 @ego_agent
 ```
 
-Agent 会加载 `ego-browser` Skill，在自己的 Space 里打开页面，读取 Snapshot，在页面上执行操作，再把结果汇报给你——整个过程你的标签页完全不受影响。
+Agent 会加载 `ego-browser` Skill，在自己的 Space 里打开页面，读取 Snapshot，在页面上执行操作，再把结果汇报给你，整个过程你的标签页们完全不受影响。
 
-你的浏览数据都留在本机。ego lite 在设置阶段只记录一件事：你是否选择了 Chrome 数据迁移。
+你的浏览数据、cookie等等所有的浏览器数据都留在本机上。ego lite 执行了很严谨且严格的数据收集，只会看看你是否把 ego lite 设置为了默认浏览器等等简单的产品数据，
 
 ## ego lite 的亮点
 
 | 特性 | 它能做什么 |
 |---|---|
-| **以代码为本，而非 CLI，复杂任务跑得更快、Token 更少** | ego lite 向 Agent 开放的能力都封装成 JavaScript 函数，由 Agent 直接调用。Agent 得以发挥它最擅长的事：写代码——把多步任务组合成一次输出，而不是陷在「调用两条命令、看结果、再调用两条命令」的循环里。相比传统的 CLI 方式，复杂工作流最多快 2.5×，任务成功率更高，每个任务的工具调用次数也少得多。 |
+| **以代码为本，而非 CLI，复杂任务跑得更快、Token 更少** | ego lite 向 Agent 开放的能力都封装成 JavaScript 函数，由 Agent 直接调用。Agent 得以发挥它最擅长的事：写代码，把多步任务组合成一次输出，而不是陷在「调用两条命令、看结果、再调用两条命令」的循环里。相比传统的 CLI 方式，复杂工作流的执行上快了非常多，同时任务成功率更高，每个任务的工具调用次数也少得多，最终任务所需的花费也大大减少。 |
 | **每个 Agent 都有专属 Space** | ego lite 给每个 Agent 一个完全隔离的 Space。你在前台浏览，Agent 在后台干活，互不干扰。你随时能看到哪个 Space 里有 Agent 在运行，也能随时接管或停止它。 |
 | **你的 Agent 在 Space 里并行多任务，这就是同一个浏览器内的多个并行工作区** | 每个 Space 承载一个 AI Agent 或一个任务，全部同时运行。Claude Code 在 10 个并行 Space 里补全 10 条线索，Codex 在另外 5 个里抓取 5 个竞品网站。它们不会互相冲突，也不会抢走你的标签页。你的鼠标还停在原来的位置。 |
 | **市面上最强的页面 Snapshot** | 得益于内核级定制，ego lite 生成的页面 Snapshot 质量最高——这正是文本模型「看懂」网页并对其采取行动所依赖的视图。面对深层嵌套 iframe 这类棘手场景，它依然稳定可靠，而这恰恰是其他方案屡屡失效的地方。 |
