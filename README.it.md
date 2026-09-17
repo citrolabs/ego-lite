@@ -31,7 +31,7 @@
 
 ego (lite) è un browser in cui tu e i tuoi agenti AI lavorate in parallelo. I tuoi agenti eseguono i loro task di browser nei propri Space, mentre tu continui a navigare nel tuo, così nessun agente ti porta mai via il browser. E l'automazione stessa termina più in fretta, con meno token.
 
-Strumenti come browser-use e agent-browser sono in realtà ponti di automazione: hanno bisogno di un browser separato da guidare, i tuoi dati di navigazione raramente vengono trasferiti intatti, la connessione è instabile e tu e l'agente finite per contendervi il controllo del browser. ego lite è un unico browser pensato fin dall'inizio per essere condiviso da entrambi. Nessuna configurazione extra, e l'agente raggiunge sempre i tuoi login e le tue schede reali tramite `ego-browser`.
+Strumenti come browser-use e agent-browser sono un ponte verso il browser, non un browser: non ne hanno uno proprio, quindi devono guidarne uno separato, i tuoi dati di navigazione raramente passano intatti, la connessione è instabile e tu e l'agente finite per contendervi il controllo del browser. ego lite è un unico browser pensato fin dall'inizio per essere condiviso da entrambi. Nessuna configurazione extra, e l'agente raggiunge sempre i tuoi login e le tue schede reali tramite `ego-browser`.
 
 ## Demo
 
