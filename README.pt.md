@@ -2,7 +2,7 @@
 
 <img src="docs/assets/banner.png" alt="ego lite" width="100%" />
 
-**O navegador mais rápido para agentes de IA rodarem automação de navegador**
+**O navegador mais rápido para agentes de IA automatizarem a web**
 
 <a href="https://trendshift.io/repositories/42334?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-42334" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/42334" alt="citrolabs%2Fego-lite | Trendshift" width="250" height="55"/></a>
 
@@ -26,9 +26,9 @@
 
 </div>
 
-O ego (lite) é um navegador em que você e seus agentes de IA trabalham em paralelo. Seus agentes rodam várias tarefas no navegador, cada um nos próprios Spaces, enquanto as suas guias continuam sendo suas — e as tarefas terminam mais rápido, com menos tokens.
+O ego (lite) é um navegador que permite que você e seus agentes de IA trabalhem em paralelo. Seus agentes executam várias tarefas no navegador, cada um nos próprios Spaces, enquanto você navega livremente no seu próprio Space — e os agentes não tomam mais o controle do seu navegador. Ao mesmo tempo, tarefas de automação web terminam mais rápido e consomem menos tokens.
 
-Ferramentas como browser-use e agent-browser são frameworks de automação de navegador: elas precisam de um navegador separado para controlar, os logins nunca são transferidos direito, e você e o agente acabam disputando as mesmas guias. O ego lite é um único navegador, pensado desde o início para vocês dois compartilharem. Sem configuração extra, e o agente sempre acessa seus logins e guias reais pelo `ego-browser`.
+Ferramentas existentes como browser-use e agent-browser são essencialmente ferramentas de ponte para automação de navegador: elas precisam de outro navegador para controlar, é difícil levar junto todos os dados do navegador, a conexão é instável, e você e o agente acabam disputando o controle atual do navegador. O ego lite é um único navegador, pensado desde o início para vocês dois compartilharem. Sem configuração extra, o agente sempre acessa seus logins e guias reais pelo `ego-browser`.
 
 ## Demo
 
@@ -36,7 +36,7 @@ https://github.com/user-attachments/assets/ffe7954b-58ee-411e-b35d-ec30c58a08bc
 
 ## Início rápido
 
-Por enquanto, o ego lite roda no macOS. Windows e Linux estão no [roadmap](https://lite.ego.app/roadmap).
+Por enquanto, o ego lite roda no macOS, e a versão para Windows entrará em beta fechado em breve; enquanto isso, o Linux está no [roadmap](https://lite.ego.app/roadmap).
 
 ### 1. Instalar
 
@@ -71,7 +71,7 @@ Leia `skills/ego-browser/references/install.md` e siga os passos para instalar o
 
 Na primeira inicialização, o ego lite faz uma única pergunta: se você quer migrar os seus dados do Chrome. Diga sim e o seu agente herda os logins, cookies, extensões e favoritos que você já tem.
 
-### 2. Rode sua primeira tarefa
+### 2. Pratique com a sua primeira tarefa
 
 No CLI do seu agente, digite `/ego-browser` seguido de um espaço e descreva o que você quer em linguagem natural:
 
@@ -79,17 +79,17 @@ No CLI do seu agente, digite `/ego-browser` seguido de um espaço e descreva o q
 ego-browser siga @ego_agent no x.com para mim
 ```
 
-O agente aciona a Skill `ego-browser`, abre a página no próprio Space, lê um Snapshot, age na página e te dá um retorno — tudo isso enquanto as suas guias ficam intocadas.
+O agente carrega a Skill `ego-browser`, abre a página no próprio Space, lê um Snapshot, executa ações na página e depois informa o resultado a você — tudo isso enquanto as suas guias permanecem intocadas.
 
-Seus dados de navegação ficam no seu dispositivo. O ego lite registra apenas se você optou pela migração dos dados do Chrome durante a configuração inicial.
+Seus dados de navegação, cookies e todos os demais dados do navegador ficam no seu dispositivo. A coleta de dados do ego lite é bem enxuta: ele registra apenas dados simples de produto, como se você definiu o ego lite como navegador padrão.
 
 ## Destaques do ego lite
 
 | Recurso | O que faz |
 |---|---|
-| **Base de código, não de CLI, para rodar mais rápido e com menos tokens em tarefas complexas** | As capacidades que o ego lite expõe ao agente são empacotadas como funções JavaScript que o agente chama diretamente. Assim, ele faz o que faz de melhor: escrever código, compondo uma tarefa de várias etapas em uma única saída, em vez de ficar preso no ciclo de “chamar dois comandos, ver o resultado, chamar mais dois comandos”. Comparado à abordagem convencional de CLI, fluxos complexos terminam até 2.5× mais rápido, com taxa de sucesso mais alta e muito menos chamadas de ferramenta por tarefa. |
+| **Baseado em código, não em CLI: mais rápido e com menos tokens em tarefas complexas** | As capacidades que o ego lite expõe ao agente são empacotadas como funções JavaScript que o agente chama diretamente. Assim, ele faz o que faz de melhor: escrever código, compondo uma tarefa de várias etapas em uma única saída, em vez de ficar preso no ciclo de “chamar dois comandos, ver o resultado, chamar mais dois comandos”. Comparado à abordagem convencional de CLI, fluxos complexos são executados muito mais rapidamente, com taxa de sucesso mais alta e muito menos chamadas de ferramenta por tarefa — e o custo final da tarefa cai bastante. |
 | **Um Space dedicado para cada agente** | O ego lite dá a cada agente o seu próprio Space, totalmente isolado. Você navega na frente, o agente trabalha em segundo plano, e um não atrapalha o outro. Você consegue ver a qualquer momento qual Space tem um agente rodando, e pode assumir o controle ou parar quando quiser. |
-| **Seus agentes fazem multitarefa em Spaces, workspaces paralelos dentro do mesmo navegador** | Cada Space fica com o seu próprio agente de IA ou a sua própria tarefa, todos rodando ao mesmo tempo. Claude Code enriquecendo 10 leads em 10 Spaces paralelos. Codex extraindo dados de 5 sites de concorrentes em outros 5. Eles não se chocam nem tomam as suas guias. Seu mouse continua onde você deixou. |
+| **Multitarefa dos agentes em Spaces, workspaces paralelos dentro do mesmo navegador** | Cada Space fica com o seu próprio agente de IA ou a sua própria tarefa, todos rodando ao mesmo tempo. Claude Code enriquecendo 10 leads em 10 Spaces paralelos. Codex extraindo dados de 5 sites de concorrentes em outros 5. Eles não se chocam nem tomam as suas guias. Seu mouse continua onde você deixou. |
 | **O Snapshot de página mais poderoso do mercado** | Graças a customizações em nível de kernel, o ego lite gera os snapshots de página de maior qualidade — a visão em texto da qual os modelos dependem para “ver” e agir numa página web. Ele lida com casos difíceis, como iframes profundamente aninhados, exatamente onde outras abordagens invariavelmente falham. |
 | **Qualquer agente consegue controlá-lo pelo `ego-browser`** | O `ego-browser` é a camada de conexão entre qualquer CLI de agente (Claude Code, Codex, Cursor ou um próprio) e o ego lite. Ele expõe o navegador como um conjunto de ferramentas JavaScript que rodam na própria página: snapshot, fill, click, wait, navigate, capture. O agente escreve um trecho de JavaScript que chama essas ferramentas, e o `ego-browser` executa tudo na página de uma vez só. |
 | **Acúmulo de experiência que deixa o seu agente mais rápido a cada uso** *(em breve)* | A maior parte do tempo de um agente em tarefas no navegador vai embora em tentativa e erro. A Skill oficial do ego lite transforma cada ação bem-sucedida em ferramentas e fluxos reutilizáveis, então tarefas parecidas lá na frente rodam até 5x mais rápido. |
