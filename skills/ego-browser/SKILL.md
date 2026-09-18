@@ -285,10 +285,10 @@ keyboard names and `+`-separated chords follow Playwright syntax. Use
 position and resolves when that motion completes. In each script invocation, move or
 click over the intended scrollable area before using it.
 
-On macOS, `keyboard.paste()` sends the native paste shortcut and then restores
-the user's clipboard. Pass `{ text, html }` when a rich editor needs structured
-clipboard content; `text` is the plain-text fallback. On other platforms, use
-`keyboard.insertText()` for plain text.
+On macOS and Windows, `keyboard.paste()` sends the native paste shortcut and
+then restores the user's clipboard. Pass `{ text, html }` when a rich editor
+needs structured clipboard content; `text` is the plain-text fallback. On other
+platforms, use `keyboard.insertText()` for plain text.
 
 ```js
 await page.keyboard.paste({

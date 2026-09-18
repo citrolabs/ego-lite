@@ -1,4 +1,9 @@
-import { spawn } from "node:child_process";
+import {
+  spawn,
+  type ChildProcess,
+  type SpawnOptions,
+} from "node:child_process";
+import { win32 } from "node:path";
 import type { Writable } from "node:stream";
 
 export type ClipboardTransactionStatus = "restored" | "changed";
@@ -39,8 +44,8 @@ export class ClipboardRestoreError extends Error {
 let transactionQueue: Promise<void> = Promise.resolve();
 
 /**
- * Run one action while the macOS clipboard temporarily contains `text`.
- * Transactions are serialized within the process because the pasteboard is a
+ * Run one action while the system clipboard temporarily contains `text`.
+ * Transactions are serialized within the process because the clipboard is a
  * single user resource shared by every Page.
  */
 export async function withTemporaryClipboardText<T>(
@@ -62,7 +67,7 @@ export async function withTemporaryClipboardText<T>(
 
   try {
     const beginTransaction =
-      options.beginTransaction ?? beginDarwinClipboardTransaction;
+      options.beginTransaction ?? beginNativeClipboardTransaction;
     const transaction = await beginTransaction(content);
     let value!: T;
     let actionError: unknown;
@@ -106,29 +111,156 @@ export async function withTemporaryClipboardContent<T>(
   return withTemporaryClipboardText(content, action, options);
 }
 
+function beginNativeClipboardTransaction(
+  input: ClipboardInput,
+  platform: string = process.platform,
+): Promise<ClipboardTransaction> {
+  if (platform === "darwin") return beginDarwinClipboardTransaction(input);
+  if (platform === "win32") return beginWin32ClipboardTransaction(input);
+  return Promise.reject(
+    new Error(
+      "page.keyboard.paste requires macOS or Windows clipboard support; use page.keyboard.insertText() for plain text",
+    ),
+  );
+}
+
+type ClipboardHost = {
+  platformName: string;
+  sendContent(stdin: Writable): void;
+  signalRestore(): void;
+};
+
 /**
  * Keep the original NSPasteboard items inside a short-lived JXA process. The
  * data never crosses stdout or enters the Node heap, and every readable format
  * is restored unless another process changes the clipboard first.
  */
-async function beginDarwinClipboardTransaction(
+function beginDarwinClipboardTransaction(
   input: ClipboardInput,
 ): Promise<ClipboardTransaction> {
-  if (process.platform !== "darwin") {
-    throw new Error(
-      "page.keyboard.paste currently requires macOS clipboard support",
-    );
-  }
-
   const child = spawn(
     "/usr/bin/osascript",
     ["-l", "JavaScript", "-e", DARWIN_CLIPBOARD_HOST],
     { stdio: ["pipe", "pipe", "pipe", "pipe"] },
   );
-  const messages = clipboardMessages(child.stdout);
+  return startClipboardHost(child, {
+    platformName: "macOS",
+    sendContent(stdin) {
+      stdin.end(JSON.stringify(input), "utf8");
+    },
+    signalRestore() {
+      const signalPipe = child.stdio[3] as Writable | null;
+      if (!signalPipe) {
+        throw new Error("clipboard restore pipe is unavailable");
+      }
+      signalPipe.end("1");
+    },
+  });
+}
+
+type SpawnClipboardHost = (
+  command: string,
+  args: string[],
+  options: SpawnOptions,
+) => ChildProcess;
+
+/**
+ * Keep the original clipboard formats inside a short-lived Windows PowerShell
+ * process, mirroring the macOS host. Windows PowerShell 5.1 ships with every
+ * supported Windows release, so no extra dependency is needed.
+ */
+function beginWin32ClipboardTransaction(
+  input: ClipboardInput,
+  spawnHost: SpawnClipboardHost = spawn,
+): Promise<ClipboardTransaction> {
+  const content = typeof input === "string" ? { text: input } : input;
+  const child = spawnHost(
+    windowsPowerShellPath(),
+    [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Sta",
+      // Without this, PowerShell drains stdin to EOF before running the
+      // command, and stdin must stay open to carry the restore signal.
+      "-InputFormat",
+      "None",
+      "-EncodedCommand",
+      WIN32_CLIPBOARD_HOST_COMMAND,
+    ],
+    { stdio: ["pipe", "pipe", "pipe"], windowsHide: true },
+  );
+  return startClipboardHost(child, {
+    platformName: "Windows",
+    sendContent(stdin) {
+      // Base64 lines keep the payload independent of console code pages.
+      const text = Buffer.from(content.text, "utf8").toString("base64");
+      const html =
+        content.html === undefined
+          ? ""
+          : windowsHtmlClipboardFormat(content.html).toString("base64");
+      stdin.write(`${text}\n${html}\n`);
+    },
+    signalRestore() {
+      child.stdin?.end("restore\n");
+    },
+  });
+}
+
+function windowsPowerShellPath(): string {
+  return win32.join(
+    process.env.SystemRoot ?? "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+}
+
+/**
+ * Wrap an HTML fragment in the Windows `HTML Format` clipboard envelope. Its
+ * header offsets count UTF-8 bytes from the start of the payload.
+ */
+function windowsHtmlClipboardFormat(html: string): Buffer {
+  const prefix = "<html><body>\r\n<!--StartFragment-->";
+  const suffix = "<!--EndFragment-->\r\n</body></html>";
+  const header = (offsets: number[]) => {
+    const [startHtml, endHtml, startFragment, endFragment] = offsets.map(
+      (offset) => String(offset).padStart(10, "0"),
+    );
+    return (
+      "Version:0.9\r\n" +
+      `StartHTML:${startHtml}\r\n` +
+      `EndHTML:${endHtml}\r\n` +
+      `StartFragment:${startFragment}\r\n` +
+      `EndFragment:${endFragment}\r\n`
+    );
+  };
+  const startHtml = Buffer.byteLength(header([0, 0, 0, 0]));
+  const startFragment = startHtml + Buffer.byteLength(prefix);
+  const endFragment = startFragment + Buffer.byteLength(html);
+  const endHtml = endFragment + Buffer.byteLength(suffix);
+  return Buffer.from(
+    header([startHtml, endHtml, startFragment, endFragment]) +
+      prefix +
+      html +
+      suffix,
+    "utf8",
+  );
+}
+
+async function startClipboardHost(
+  child: ChildProcess,
+  host: ClipboardHost,
+): Promise<ClipboardTransaction> {
+  const { stdin, stdout, stderr: stderrStream } = child;
+  if (!stdin || !stdout || !stderrStream) {
+    throw new Error("clipboard host pipes are unavailable");
+  }
+  const messages = clipboardMessages(stdout);
   let stderr = "";
-  child.stderr.setEncoding("utf8");
-  child.stderr.on("data", (chunk) => {
+  stderrStream.setEncoding("utf8");
+  stderrStream.on("data", (chunk) => {
     if (stderr.length < 16_384) stderr += chunk;
   });
   const exit = new Promise<{
@@ -138,11 +270,16 @@ async function beginDarwinClipboardTransaction(
     child.once("error", reject);
     child.once("exit", (code, signal) => resolve({ code, signal }));
   });
+  // A host that exits early reports through its exit status; the broken pipe
+  // must not surface as an unhandled stream error.
+  stdin.on("error", () => {});
 
-  child.stdin.end(JSON.stringify(input), "utf8");
+  host.sendContent(stdin);
   const first = await nextHostMessage(messages, exit, () => stderr);
   if (first.state !== "ready") {
-    throw new Error(first.message || "could not prepare the macOS clipboard");
+    throw new Error(
+      first.message || `could not prepare the ${host.platformName} clipboard`,
+    );
   }
 
   let finished = false;
@@ -150,22 +287,22 @@ async function beginDarwinClipboardTransaction(
     async finish() {
       if (finished) throw new Error("clipboard transaction already finished");
       finished = true;
-      const signalPipe = child.stdio[3] as Writable | null;
-      if (!signalPipe) {
-        throw new Error("clipboard restore pipe is unavailable");
-      }
-      signalPipe.end("1");
+      host.signalRestore();
       const result = await nextHostMessage(messages, exit, () => stderr);
       const completion = await exit;
+      if (result.state === "error") {
+        throw new Error(
+          result.message ||
+            `could not restore the ${host.platformName} clipboard`,
+        );
+      }
       if (completion.code !== 0) {
         throw clipboardHostExitError(completion, stderr);
       }
       if (result.state === "restored" || result.state === "changed") {
         return result.state;
       }
-      throw new Error(
-        result.message || "could not restore the macOS clipboard",
-      );
+      throw new Error(`unexpected clipboard host response: ${result.state}`);
     },
   };
 }
@@ -225,10 +362,14 @@ function clipboardMessages(stream: NodeJS.ReadableStream) {
     }
   });
   stream.on("error", rejectWaiter);
-  stream.on("end", () => {
-    ended = true;
-    rejectWaiter(new Error("clipboard host closed without a response"));
-  });
+  // A host that fails to spawn destroys its pipes without emitting `end`.
+  for (const event of ["end", "close"]) {
+    stream.on(event, () => {
+      if (ended) return;
+      ended = true;
+      rejectWaiter(new Error("clipboard host closed without a response"));
+    });
+  }
 
   function rejectWaiter(error: unknown) {
     const waiter = waiters.shift();
@@ -395,3 +536,134 @@ try {
   transactionLock.unlock;
 }
 `;
+
+// The host reads two base64 lines (UTF-8 text, then an optional `HTML Format`
+// payload), reports `ready`, and restores after the next stdin line.
+const WIN32_CLIPBOARD_HOST = String.raw`
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+Add-Type -AssemblyName System.Windows.Forms
+
+$utf8 = [System.Text.UTF8Encoding]::new($false)
+$stdin = [System.IO.StreamReader]::new([Console]::OpenStandardInput(), $utf8)
+$stdout = [System.IO.StreamWriter]::new([Console]::OpenStandardOutput(), $utf8)
+$stdout.AutoFlush = $true
+
+function Send-HostMessage($message) {
+  $stdout.WriteLine((ConvertTo-Json -InputObject $message -Compress))
+}
+
+# GetClipboardSequenceNumber plays the role of NSPasteboard.changeCount.
+# Reflection.Emit binds it without Add-Type, which would spawn the C# compiler.
+$nativeAssembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly(
+  [System.Reflection.AssemblyName]::new('EgoBrowserClipboard'),
+  [System.Reflection.Emit.AssemblyBuilderAccess]::Run)
+$nativeBuilder = $nativeAssembly.DefineDynamicModule('EgoBrowserClipboard').DefineType(
+  'EgoBrowserClipboardNative', 'Public, Class')
+$sequenceMethod = $nativeBuilder.DefinePInvokeMethod(
+  'GetClipboardSequenceNumber',
+  'user32.dll',
+  [System.Reflection.MethodAttributes]'Public, Static, PinvokeImpl',
+  [System.Reflection.CallingConventions]::Standard,
+  [UInt32],
+  [Type[]]@(),
+  [System.Runtime.InteropServices.CallingConvention]::Winapi,
+  [System.Runtime.InteropServices.CharSet]::Auto)
+$sequenceMethod.SetImplementationFlags([System.Reflection.MethodImplAttributes]::PreserveSig)
+$native = $nativeBuilder.CreateType()
+
+# Returns $null for an empty clipboard. Formats that cannot be read are
+# skipped, so the restore is best effort for exotic or delayed-render data.
+function Save-Clipboard {
+  $source = [System.Windows.Forms.Clipboard]::GetDataObject()
+  if ($null -eq $source) { return $null }
+  $saved = [System.Windows.Forms.DataObject]::new()
+  $savedAny = $false
+  foreach ($format in $source.GetFormats($false)) {
+    try { $data = $source.GetData($format, $false) } catch { continue }
+    if ($null -ne $data) {
+      $saved.SetData($format, $false, $data)
+      $savedAny = $true
+    }
+  }
+  if ($savedAny) { return $saved }
+  return $null
+}
+
+function Restore-Clipboard($saved) {
+  if ($null -ne $saved) {
+    [System.Windows.Forms.Clipboard]::SetDataObject($saved, $true, 10, 100)
+    return
+  }
+  for ($attempt = 1; ; $attempt += 1) {
+    try {
+      [System.Windows.Forms.Clipboard]::Clear()
+      return
+    } catch {
+      if ($attempt -ge 10) { throw }
+      Start-Sleep -Milliseconds 100
+    }
+  }
+}
+
+$mutex = [System.Threading.Mutex]::new($false, 'Local\ego-browser-clipboard')
+$locked = $false
+$exitCode = 0
+try {
+  $text = $utf8.GetString([Convert]::FromBase64String($stdin.ReadLine()))
+  $htmlLine = $stdin.ReadLine()
+
+  try {
+    $locked = $mutex.WaitOne(5000)
+  } catch [System.Threading.AbandonedMutexException] {
+    $locked = $true
+  }
+  if (-not $locked) { throw 'another ego-browser process is using the clipboard' }
+
+  $saved = Save-Clipboard
+  try {
+    $temporary = [System.Windows.Forms.DataObject]::new()
+    $temporary.SetData([System.Windows.Forms.DataFormats]::UnicodeText, $false, $text)
+    if ($htmlLine) {
+      $html = [System.IO.MemoryStream]::new([Convert]::FromBase64String($htmlLine))
+      $temporary.SetData([System.Windows.Forms.DataFormats]::Html, $false, $html)
+    }
+    # copy=$true flushes every format now, so the paste never depends on this
+    # process pumping delayed-render messages while it waits on stdin.
+    [System.Windows.Forms.Clipboard]::SetDataObject($temporary, $true, 10, 100)
+  } catch {
+    try { Restore-Clipboard $saved } catch {}
+    throw
+  }
+
+  $temporarySequence = $native::GetClipboardSequenceNumber()
+  Send-HostMessage @{ state = 'ready' }
+  [void]$stdin.ReadLine()
+
+  if ($native::GetClipboardSequenceNumber() -ne $temporarySequence) {
+    Send-HostMessage @{ state = 'changed' }
+  } else {
+    Restore-Clipboard $saved
+    Send-HostMessage @{ state = 'restored' }
+  }
+} catch {
+  Send-HostMessage @{ state = 'error'; message = [string]$_.Exception.Message }
+  $exitCode = 1
+} finally {
+  if ($locked) { $mutex.ReleaseMutex() }
+  $mutex.Dispose()
+}
+exit $exitCode
+`;
+
+const WIN32_CLIPBOARD_HOST_COMMAND = Buffer.from(
+  WIN32_CLIPBOARD_HOST,
+  "utf16le",
+).toString("base64");
+
+export const __testing = {
+  beginNativeClipboardTransaction,
+  beginWin32ClipboardTransaction,
+  windowsHtmlClipboardFormat,
+  WIN32_CLIPBOARD_HOST,
+};

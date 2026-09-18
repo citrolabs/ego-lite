@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 
 import {
+  __testing,
   ClipboardRestoreError,
   withTemporaryClipboardContent,
   withTemporaryClipboardText,
@@ -166,4 +169,146 @@ test("clipboard transactions are serialized within one runtime", async () => {
     "action:second",
     "finish:second",
   ]);
+});
+
+test("paste explains the supported clipboard platforms", async () => {
+  await assert.rejects(
+    () => __testing.beginNativeClipboardTransaction("temporary", "linux"),
+    /requires macOS or Windows clipboard support.*insertText/,
+  );
+});
+
+test("Windows HTML clipboard offsets count UTF-8 bytes", () => {
+  const fragment = "<b>世界 🙂</b>";
+  const payload = __testing.windowsHtmlClipboardFormat(fragment);
+  const header = payload.toString("utf8");
+  const offset = (name) =>
+    Number(header.match(new RegExp(`^${name}:(\\d{10})\\r$`, "m"))[1]);
+
+  assert.match(header, /^Version:0\.9\r\n/);
+  assert.equal(
+    payload
+      .subarray(offset("StartFragment"), offset("EndFragment"))
+      .toString("utf8"),
+    fragment,
+  );
+  assert.equal(
+    payload.subarray(offset("StartHTML"), offset("EndHTML")).toString("utf8"),
+    `<html><body>\r\n<!--StartFragment-->${fragment}<!--EndFragment-->\r\n</body></html>`,
+  );
+  assert.equal(offset("EndHTML"), payload.length);
+});
+
+function fakeWindowsClipboardHost(respond) {
+  const child = new EventEmitter();
+  child.stdin = new PassThrough();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  const spawned = {};
+  const lines = [];
+  let pending = "";
+  child.stdin.setEncoding("utf8");
+  child.stdin.on("data", (chunk) => {
+    pending += chunk;
+    let newline;
+    while ((newline = pending.indexOf("\n")) >= 0) {
+      lines.push(pending.slice(0, newline));
+      pending = pending.slice(newline + 1);
+      respond(lines, (message) =>
+        child.stdout.write(`${JSON.stringify(message)}\n`),
+      );
+    }
+  });
+  child.stdin.on("finish", () => {
+    child.stdout.end();
+    setImmediate(() => child.emit("exit", spawned.exitCode ?? 0, null));
+  });
+  const spawnHost = (command, args, options) => {
+    Object.assign(spawned, { command, args, options });
+    return child;
+  };
+  return { spawnHost, spawned, lines };
+}
+
+test("Windows clipboard host receives text and HTML, then restores on signal", async () => {
+  const host = fakeWindowsClipboardHost((lines, emit) => {
+    if (lines.length === 2) emit({ state: "ready" });
+    if (lines.length === 3) emit({ state: "restored" });
+  });
+  const transaction = await __testing.beginWin32ClipboardTransaction(
+    { text: "A\t世界", html: "<td>A</td>" },
+    host.spawnHost,
+  );
+
+  assert.match(
+    host.spawned.command,
+    /WindowsPowerShell\\v1\.0\\powershell\.exe$/i,
+  );
+  const args = host.spawned.args;
+  assert.equal(args[args.indexOf("-InputFormat") + 1], "None");
+  assert.ok(args.includes("-Sta"));
+  assert.equal(
+    Buffer.from(args[args.indexOf("-EncodedCommand") + 1], "base64").toString(
+      "utf16le",
+    ),
+    __testing.WIN32_CLIPBOARD_HOST,
+  );
+  assert.equal(host.spawned.options.windowsHide, true);
+  assert.equal(
+    Buffer.from(host.lines[0], "base64").toString("utf8"),
+    "A\t世界",
+  );
+  assert.deepEqual(
+    Buffer.from(host.lines[1], "base64"),
+    __testing.windowsHtmlClipboardFormat("<td>A</td>"),
+  );
+
+  assert.equal(await transaction.finish(), "restored");
+  assert.equal(host.lines.length, 3);
+});
+
+test("Windows clipboard host sends an empty HTML line for plain text", async () => {
+  const host = fakeWindowsClipboardHost((lines, emit) => {
+    if (lines.length === 2) emit({ state: "ready" });
+    if (lines.length === 3) emit({ state: "changed" });
+  });
+  const transaction = await __testing.beginWin32ClipboardTransaction(
+    "plain",
+    host.spawnHost,
+  );
+
+  assert.equal(host.lines[1], "");
+  assert.equal(await transaction.finish(), "changed");
+});
+
+test("Windows clipboard host errors keep the host's message", async () => {
+  const host = fakeWindowsClipboardHost((lines, emit) => {
+    if (lines.length === 2) {
+      emit({
+        state: "error",
+        message: "another ego-browser process is using the clipboard",
+      });
+    }
+  });
+
+  await assert.rejects(
+    () => __testing.beginWin32ClipboardTransaction("plain", host.spawnHost),
+    /another ego-browser process is using the clipboard/,
+  );
+});
+
+test("Windows clipboard restore errors keep the host's message", async () => {
+  const host = fakeWindowsClipboardHost((lines, emit) => {
+    if (lines.length === 2) emit({ state: "ready" });
+    if (lines.length === 3) {
+      host.spawned.exitCode = 1;
+      emit({ state: "error", message: "OpenClipboard failed" });
+    }
+  });
+  const transaction = await __testing.beginWin32ClipboardTransaction(
+    "plain",
+    host.spawnHost,
+  );
+
+  await assert.rejects(() => transaction.finish(), /OpenClipboard failed/);
 });
