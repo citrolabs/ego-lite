@@ -2531,6 +2531,19 @@ test("metadata reads stay target-scoped while evaluate and screenshot activate t
       () => first.screenshot("/tmp/legacy.png"),
       /options must be an object/,
     );
+    for (const path of ["./step1-initial.png", "shots/before.png", ""]) {
+      await assert.rejects(
+        () => first.screenshot({ path }),
+        /page\.screenshot path must be an absolute file path/,
+        `page.screenshot must reject the relative path ${JSON.stringify(path)}`,
+      );
+    }
+    assert(
+      !fixture.calls.some(
+        ([kind, path]) => kind === "screenshot" && !path.startsWith("/"),
+      ),
+      "relative screenshot paths must be rejected before capture",
+    );
     assert.equal(
       fixture.activeTarget(),
       "target-1",
@@ -3015,6 +3028,18 @@ test("Page fetch saves a binary response without converting it to text", async (
     assert.equal(response.savedPath, path);
     assert.equal(response.body, undefined);
     assert.deepEqual(await readFile(path), Buffer.from("\x89PNG\r\n\x1a\n"));
+  });
+});
+
+test("Page fetch rejects a relative saveAs path before requesting", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/fetch");
+
+    await assert.rejects(
+      () => page.fetch("/image.png", { saveAs: "./image.png" }),
+      /page\.fetch saveAs must be an absolute file path/,
+    );
   });
 });
 

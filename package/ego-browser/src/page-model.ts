@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, isAbsolute } from "node:path";
 
 import {
   browserCdp,
@@ -2134,8 +2134,8 @@ class Page {
   async screenshot(options: PageScreenshotOptions = {}): Promise<string> {
     validatePublicApiOptions("Page.screenshot", options);
     const { path, fullPage, ...captureOptions } = options;
-    if (path !== undefined && (typeof path !== "string" || path.length === 0)) {
-      throw new TypeError("page.screenshot path must be a non-empty string");
+    if (path !== undefined) {
+      assertAbsoluteFilePath(path, "page.screenshot path");
     }
     const page = await this.#resolve();
     return this.#services.gate.withPage(page, async ({ sessionId }) => {
@@ -3340,12 +3340,25 @@ function serializeJsonValue(value: unknown, message: string): unknown {
   }
 }
 
+// The script does not run in the caller's shell working directory: the host
+// starts the Node context from the application's own directory, which is not
+// writable on Windows. Reject relative paths up front instead of surfacing a
+// confusing EPERM from that directory.
+function assertAbsoluteFilePath(path: unknown, label: string): void {
+  if (typeof path !== "string" || path.length === 0 || !isAbsolute(path)) {
+    throw new TypeError(`${label} must be an absolute file path`);
+  }
+}
+
 function pageFetchPayload(
   url: string,
   options: PageFetchOptions,
 ): { payload: PageFetchPayload; saveAs?: string } {
   validatePublicApiOptions("Page.fetch", options);
   const { timeout = 20_000, saveAs, ...requestOptions } = options;
+  if (saveAs !== undefined) {
+    assertAbsoluteFilePath(saveAs, "page.fetch saveAs");
+  }
   return {
     payload: {
       url,
