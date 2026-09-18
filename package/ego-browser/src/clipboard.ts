@@ -307,11 +307,17 @@ async function startClipboardHost(
   };
 }
 
+function describeClipboardArgument(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  return typeof value;
+}
+
 function validateClipboardInput(input: ClipboardInput): ClipboardInput {
   if (typeof input === "string") return input;
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new TypeError(
-      "page.keyboard.paste requires a string or { text, html? }",
+      `page.keyboard.paste requires a string or { text, html? }, received ${describeClipboardArgument(input)}`,
     );
   }
   const keys = Object.keys(input);
