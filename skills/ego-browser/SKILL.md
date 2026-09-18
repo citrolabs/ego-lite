@@ -48,7 +48,9 @@ Node.js APIs belong in the script; Page globals such as `window`, `document`,
 `page.evaluate()`. Do not import Playwright or launch another browser.
 
 The Node.js runtime uses ESM. When a script needs local files, load built-ins
-with dynamic imports such as `await import("node:fs/promises")`.
+with dynamic imports such as `await import("node:fs/promises")`. The script
+does not run in your shell's working directory, so use absolute paths for every
+file it reads or writes.
 
 Ego-browser deliberately exposes a small custom API. It is not Playwright, even
 where method names and options look similar. Use only the TaskSpace, Page,
@@ -269,6 +271,12 @@ await page.mouse.wheel(0, 600, { label: "scroll project board" });
 await page.keyboard.paste("hello\tworld");
 console.log({ screenshot: path });
 ```
+
+`path` must be absolute; relative paths are rejected. Omit `path` to write
+into the system temporary directory and use the returned file path. On
+Windows, write paths with forward slashes, such as
+`C:/Users/<name>/ego-shots/before.png`, because backslashes are escape
+characters inside JavaScript strings.
 
 Inspect the screenshot with an image-viewing tool. Coordinates use CSS pixels;
 keyboard names and `+`-separated chords follow Playwright syntax. Use

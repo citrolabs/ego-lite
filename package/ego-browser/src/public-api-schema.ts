@@ -258,7 +258,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     options: {
       path: option(
         "string",
-        "Output path; missing parent directories are created.",
+        "Absolute output path; missing parent directories are created. Omit to write into the system temporary directory.",
       ),
       fullPage: option("boolean", "Capture the full scrollable page."),
       clip: option("clip", "CSS-pixel clipping rectangle."),
@@ -387,7 +387,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
       timeout,
       saveAs: option(
         "nonEmptyString",
-        "Write the response body to this path without text conversion.",
+        "Write the response body to this absolute path without text conversion.",
       ),
       method: option("string", "HTTP method."),
       headers: option("stringRecord", "Request headers."),
