@@ -5055,6 +5055,10 @@ test("Page waitForURL validates its matcher and reports the last URL", async () 
       /predicate must return a boolean synchronously/,
     );
     await assert.rejects(
+      () => page.waitForURL((url) => url.includes("/search?"), { timeout: 10 }),
+      /url\.includes is not a function.*receives a URL object; use url\.href/,
+    );
+    await assert.rejects(
       () => page.waitForURL("**/{ready", { timeout: 10 }),
       /Invalid URL glob.*unmatched '\{'/,
     );
