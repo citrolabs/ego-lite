@@ -4025,6 +4025,31 @@ test("Page keyboard paste forwards plain-text and HTML clipboard representations
   });
 });
 
+test("Page keyboard paste names the invalid argument type", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a", { platform: "win32" });
+    const page = await openTestPage(task, "https://example.test/table");
+
+    for (const [value, received] of [
+      [undefined, "undefined"],
+      [null, "null"],
+      [["A", "B"], "an array"],
+      [42, "number"],
+    ]) {
+      await assert.rejects(
+        () => page.keyboard.paste(value),
+        new RegExp(
+          `requires a string or \\{ text, html\\? \\}, received ${received}$`,
+        ),
+      );
+    }
+    assert.equal(
+      fixture.calls.some((call) => call[0] === "clipboard"),
+      false,
+    );
+  });
+});
+
 test("Page keyboard paste still restores the clipboard when input fails", async () => {
   await withFixture(async (fixture) => {
     let restored = false;
@@ -5028,6 +5053,10 @@ test("Page waitForURL validates its matcher and reports the last URL", async () 
     await assert.rejects(
       () => page.waitForURL(async () => true, { timeout: 10 }),
       /predicate must return a boolean synchronously/,
+    );
+    await assert.rejects(
+      () => page.waitForURL((url) => url.includes("/search?"), { timeout: 10 }),
+      /url\.includes is not a function.*receives a URL object; use url\.href/,
     );
     await assert.rejects(
       () => page.waitForURL("**/{ready", { timeout: 10 }),

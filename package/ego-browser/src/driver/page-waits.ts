@@ -303,7 +303,17 @@ function compilePageURLMatcher(expected: PageURLMatcher): {
         } catch {
           return false;
         }
-        const result = expected(parsed);
+        let result: unknown;
+        try {
+          result = expected(parsed);
+        } catch (error) {
+          // Agents often treat the argument as a string (`url.includes(...)`).
+          if (!(error instanceof TypeError)) throw error;
+          throw new TypeError(
+            `page.waitForURL predicate threw: ${error.message}. The predicate receives a URL object; use url.href, url.pathname, or url.searchParams.`,
+            { cause: error },
+          );
+        }
         if (typeof result !== "boolean") {
           throw new TypeError(
             "page.waitForURL predicate must return a boolean synchronously",

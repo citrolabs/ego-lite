@@ -235,13 +235,19 @@ export class PageKeyboardController {
   }
 }
 
+function describeClipboardArgument(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  return typeof value;
+}
+
 function assertClipboardContent(
   content: unknown,
 ): asserts content is PageClipboardContent {
   if (typeof content === "string") return;
   if (!content || typeof content !== "object" || Array.isArray(content)) {
     throw new TypeError(
-      "page.keyboard.paste requires a string or { text, html? }",
+      `page.keyboard.paste requires a string or { text, html? }, received ${describeClipboardArgument(content)}`,
     );
   }
   const value = content as Record<string, unknown>;

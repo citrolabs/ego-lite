@@ -50,7 +50,9 @@ Node.js APIs belong in the script; Page globals such as `window`, `document`,
 The Node.js runtime uses ESM. When a script needs local files, load built-ins
 with dynamic imports such as `await import("node:fs/promises")`. The script
 does not run in your shell's working directory, so use absolute paths for every
-file it reads or writes.
+file it reads or writes. It also does not inherit your shell's environment
+variables: `process.env` will not contain values you set before running
+`ego-browser`, so write every input directly into the script.
 
 Ego-browser deliberately exposes a small custom API. It is not Playwright, even
 where method names and options look similar. Use only the TaskSpace, Page,
@@ -285,10 +287,10 @@ keyboard names and `+`-separated chords follow Playwright syntax. Use
 position and resolves when that motion completes. In each script invocation, move or
 click over the intended scrollable area before using it.
 
-On macOS, `keyboard.paste()` sends the native paste shortcut and then restores
-the user's clipboard. Pass `{ text, html }` when a rich editor needs structured
-clipboard content; `text` is the plain-text fallback. On other platforms, use
-`keyboard.insertText()` for plain text.
+On macOS and Windows, `keyboard.paste()` sends the native paste shortcut and
+then restores the user's clipboard. Pass `{ text, html }` when a rich editor
+needs structured clipboard content; `text` is the plain-text fallback. On other
+platforms, use `keyboard.insertText()` for plain text.
 
 ```js
 await page.keyboard.paste({
