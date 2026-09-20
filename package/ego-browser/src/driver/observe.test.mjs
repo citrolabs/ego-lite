@@ -137,7 +137,7 @@ test("snapshotText forwards a subtree root to the native snapshot", async () => 
   }
 });
 
-test("captureScreenshot skips page metric JavaScript while a native dialog is pending", async () => {
+test("captureScreenshot fails fast while a native dialog is pending", async () => {
   const writes = [];
   const restore = setOverrides({
     async writeFile(path, data) {
@@ -154,26 +154,35 @@ test("captureScreenshot skips page metric JavaScript while a native dialog is pe
       });
       sent.length = 0;
 
-      await captureScreenshot("/tmp/ego-browser-dialog-shot.png");
-
-      assert.equal(
-        sent.some((request) => request.method === "Runtime.evaluate"),
-        false,
+      // Chromium only answers Page.captureScreenshot after the renderer
+      // presents a new frame, which a modal dialog prevents. Report the dialog
+      // instead of waiting for the transport timeout.
+      const startedAt = Date.now();
+      await assert.rejects(
+        () => captureScreenshot("/tmp/ego-browser-dialog-shot.png"),
+        (error) => {
+          assert.equal(error.code, "EGO_PAGE_DIALOG_OPENED");
+          assert.equal(error.method, "Page.captureScreenshot");
+          assert.match(error.message, /alert dialog "Blocked"/);
+          return true;
+        },
       );
-      const screenshot = sent.find(
-        (request) => request.method === "Page.captureScreenshot",
+      assert(Date.now() - startedAt < 1_000);
+      assert.deepEqual(
+        sent.filter((request) =>
+          ["Runtime.evaluate", "Page.captureScreenshot"].includes(
+            request.method,
+          ),
+        ),
+        [],
+        "no renderer-bound command is sent while the dialog is open",
       );
-      assert.deepEqual(screenshot.params, {
-        format: "png",
-        captureBeyondViewport: false,
-      });
     });
   } finally {
     restore();
   }
 
-  assert.equal(writes.length, 1);
-  assert.equal(writes[0].path, "/tmp/ego-browser-dialog-shot.png");
+  assert.equal(writes.length, 0);
 });
 
 test("captureScreenshot clips the currently visible scrolled viewport", async () => {

@@ -159,6 +159,70 @@ export function pageJavaScriptDialogHandlingCase() {
       "Page.javascriptDialogOpening",
       (params) => params.type === "confirm"
     );
+
+    const blockedStartedAt = Date.now();
+    const snapshotError = await page.snapshot().then(
+      () => null,
+      (error) => error
+    );
+    assertEqual(
+      snapshotError?.code,
+      "EGO_PAGE_DIALOG_OPENED",
+      "page.snapshot fails with the dialog error while a confirm is open"
+    );
+    assertEqual(
+      Date.now() - blockedStartedAt < 5_000,
+      true,
+      "page.snapshot fails before the CDP transport timeout"
+    );
+    assertEqual(
+      String(snapshotError?.message).includes("Continue real E2E?"),
+      true,
+      "the dialog error names the open dialog"
+    );
+    assertEqual(
+      String(snapshotError?.message).includes("page.dismissDialog()"),
+      true,
+      "the dialog error explains how to close the dialog"
+    );
+    const rawCdpError = await page
+      .cdp("Page.getLayoutMetrics", {}, { timeout: 5_000 })
+      .then(
+        () => null,
+        (error) => error
+      );
+    assertEqual(
+      rawCdpError?.code,
+      "EGO_PAGE_DIALOG_OPENED",
+      "raw Page.getLayoutMetrics fails with the dialog error while a confirm is open"
+    );
+    assertEqual(
+      (await page.info()).dialog?.type,
+      "confirm",
+      "page.info still reports the open confirm"
+    );
+    const screenshotStartedAt = Date.now();
+    const screenshotError = await page.screenshot().then(
+      () => null,
+      (error) => error
+    );
+    assertEqual(
+      screenshotError?.code,
+      "EGO_PAGE_DIALOG_OPENED",
+      "page.screenshot fails with the dialog error while a confirm is open"
+    );
+    assertEqual(
+      Date.now() - screenshotStartedAt < 5_000,
+      true,
+      "page.screenshot fails before the CDP transport timeout"
+    );
+    const history = await page.cdp("Page.getNavigationHistory", {}, { timeout: 5_000 });
+    assertEqual(
+      Array.isArray(history?.entries),
+      true,
+      "browser-answered Page commands still work while a confirm is open"
+    );
+
     assertEqual(await page.dismissDialog(), true, "dismissDialog closes a confirm");
     await waitForDialogEvent(
       "Page.javascriptDialogClosed",

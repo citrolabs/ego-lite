@@ -136,6 +136,21 @@ function createFixture(rootDir) {
       const call = ["cdp", method, params, sessionId];
       if (timeoutMs !== undefined) call.push(timeoutMs);
       calls.push(call);
+      if (
+        pendingDialogs.has(sessionId) &&
+        !/^(Target|Browser)\./.test(method) &&
+        method !== "Page.handleJavaScriptDialog"
+      ) {
+        // The browser runtime fails renderer-bound commands fast while a
+        // modal dialog is open; the fixture reports the same error shape.
+        const error = new Error(
+          `${method} was not sent because a JavaScript dialog is open on this page`,
+        );
+        error.code = "EGO_PAGE_DIALOG_OPENED";
+        error.method = method;
+        error.dialog = pendingDialogs.get(sessionId);
+        throw error;
+      }
       if (method === "Page.getFrameTree")
         return {
           frameTree: {
@@ -3130,6 +3145,55 @@ test("Page click returns a pending JavaScript dialog without waiting for input c
       ),
     );
     assert.equal((await page.info()).url, "https://example.test/dialog");
+  });
+});
+
+test("Page snapshot fails fast with the dialog error while a dialog is open", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/dialog");
+    fixture.openDialogOnNextClick({
+      type: "confirm",
+      message: "Submit? This cannot be undone.",
+    });
+
+    assert.deepEqual(await page.click("#submit"), {
+      dialog: {
+        type: "confirm",
+        message: "Submit? This cannot be undone.",
+        url: "https://example.test/dialog",
+      },
+    });
+
+    const snapshotsBefore = fixture.calls.filter(
+      ([kind]) => kind === "snapshot",
+    ).length;
+    await assert.rejects(
+      () => page.snapshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_DIALOG_OPENED");
+        assert.equal(error.method, "Page.getFrameTree");
+        assert.deepEqual(error.dialog, {
+          type: "confirm",
+          message: "Submit? This cannot be undone.",
+          url: "https://example.test/dialog",
+        });
+        return true;
+      },
+    );
+    assert.equal(
+      fixture.calls.filter(([kind]) => kind === "snapshot").length,
+      snapshotsBefore,
+      "no native snapshot is attempted while the dialog blocks the page",
+    );
+
+    assert.equal(await page.dismissDialog(), true);
+    await page.snapshot();
+    assert.equal(
+      fixture.calls.filter(([kind]) => kind === "snapshot").length,
+      snapshotsBefore + 1,
+      "snapshot works again once the dialog is closed",
+    );
   });
 });
 

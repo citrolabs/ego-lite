@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 
 import {
   CdpRequestTimeoutError,
+  PageDialogOpenedError,
   browserCdp,
+  dialogBlocksMethod,
   drainBrowserEvents,
   drainPageEvents,
   ensureFrameSessions,
@@ -12,6 +14,7 @@ import {
   invalidateSession,
   networkActivity,
   pageNetworkSessions,
+  pendingDialog,
   prepareFileChooser,
   subscribeBrowserEvents,
   subscribePageEvents,
@@ -1891,4 +1894,392 @@ test("file chooser interception suppresses the native picker and returns its inp
     if (previous === undefined) delete globalThis.ego;
     else globalThis.ego = previous;
   }
+});
+
+/**
+ * A Page target whose renderer answers everything immediately, except the
+ * methods listed in `hold`, which stay pending until `answer()` is called.
+ */
+function dialogGateRuntime({ hold = [] } = {}) {
+  const heldMethods = new Set(hold);
+  const sent = [];
+  const held = new Map();
+  let pageSessionId;
+  const runtime = {
+    sent,
+    held,
+    get sessionId() {
+      return pageSessionId;
+    },
+    async listTabs() {
+      return {
+        tabs: [
+          {
+            targetId: "target-dialog",
+            active: true,
+            title: "Dialog",
+            url: "https://example.test/dialog",
+          },
+        ],
+      };
+    },
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      sent.push(request);
+      if (request.method === "Target.attachToTarget") {
+        pageSessionId = `session:${request.params.targetId}`;
+        queueMicrotask(() => {
+          runtime.onCDPMessage(
+            JSON.stringify({
+              id: request.id,
+              result: { sessionId: pageSessionId },
+            }),
+          );
+        });
+        return;
+      }
+      if (heldMethods.has(request.method)) {
+        held.set(request.id, request);
+        return;
+      }
+      queueMicrotask(() => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result: {} }));
+      });
+    },
+    emit(method, params, sessionId = pageSessionId) {
+      runtime.onCDPMessage(JSON.stringify({ sessionId, method, params }));
+    },
+    answer(id, result = {}) {
+      held.delete(id);
+      runtime.onCDPMessage(JSON.stringify({ id, result }));
+    },
+    heldRequest(method) {
+      return [...held.values()].find((request) => request.method === method);
+    },
+    async untilHeld(method) {
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        const request = runtime.heldRequest(method);
+        if (request) return request;
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+      throw new Error(`${method} was never sent`);
+    },
+  };
+  return runtime;
+}
+
+async function withDialogGateRuntime(options, fn) {
+  const previous = globalThis.ego;
+  const runtime = dialogGateRuntime(options);
+  globalThis.ego = runtime;
+  try {
+    return await fn(runtime);
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+}
+
+const CONFIRM_DIALOG = {
+  type: "confirm",
+  message: "Submit? This cannot be undone.",
+  url: "https://example.test/dialog",
+};
+
+test("dialogBlocksMethod holds every renderer-bound command and passes browser-answered ones", () => {
+  for (const method of [
+    "Page.getFrameTree",
+    "Page.getLayoutMetrics",
+    "Page.captureScreenshot",
+    "Page.enable",
+    "Page.navigate",
+    "Page.reload",
+    "Page.printToPDF",
+    "Runtime.evaluate",
+    "Input.dispatchMouseEvent",
+    "DOM.getDocument",
+    "DOM.setFileInputFiles",
+    "Accessibility.getFullAXTree",
+    "CSS.getComputedStyleForNode",
+    "Emulation.setDeviceMetricsOverride",
+    "Network.enable",
+    "Log.enable",
+  ]) {
+    assert.equal(dialogBlocksMethod(method), true, method);
+  }
+  for (const method of [
+    "Page.handleJavaScriptDialog",
+    "Page.close",
+    "Page.bringToFront",
+    "Page.getNavigationHistory",
+    "Page.setDownloadBehavior",
+    "Target.getTargets",
+    "Target.setAutoAttach",
+    "Browser.getVersion",
+    "Network.getCookies",
+    "Network.setCookie",
+    "Fetch.enable",
+    "Storage.getCookies",
+    "IO.read",
+  ]) {
+    assert.equal(dialogBlocksMethod(method), false, method);
+  }
+});
+
+test("a pending JavaScript dialog fails renderer-bound Page commands before they are sent", async () => {
+  await withDialogGateRuntime({}, async (runtime) => {
+    const sessionId = await ensureSession("target-dialog");
+    runtime.emit("Page.javascriptDialogOpening", CONFIRM_DIALOG);
+    runtime.sent.length = 0;
+
+    for (const method of [
+      "Page.getFrameTree",
+      "Page.getLayoutMetrics",
+      "Accessibility.getFullAXTree",
+      "DOM.getDocument",
+      "Runtime.evaluate",
+      "Input.dispatchMouseEvent",
+      "Page.navigate",
+    ]) {
+      const startedAt = Date.now();
+      await assert.rejects(
+        () => browserCdp(method, {}, sessionId, 5_000),
+        (error) => {
+          assert(error instanceof PageDialogOpenedError, method);
+          assert.equal(error.code, "EGO_PAGE_DIALOG_OPENED");
+          assert.equal(error.method, method);
+          assert.equal(error.sessionId, sessionId);
+          assert.equal(error.reason, "blocked");
+          assert.deepEqual(error.dialog, CONFIRM_DIALOG);
+          assert.match(
+            error.message,
+            new RegExp(
+              `^${method.replace(".", "\\.")} was not sent because a JavaScript confirm dialog "Submit\\? This cannot be undone\\." is open on this page`,
+            ),
+          );
+          assert.match(error.message, /await page\.acceptDialog\(\)/);
+          assert.match(error.message, /await page\.dismissDialog\(\)/);
+          assert.match(
+            error.message,
+            /page\.cdp\("Page\.handleJavaScriptDialog", \{ accept: true \}\)/,
+          );
+          return true;
+        },
+      );
+      assert(
+        Date.now() - startedAt < 1_000,
+        `${method} must not wait for the transport timeout`,
+      );
+    }
+    assert.deepEqual(runtime.sent, [], "held commands are never sent");
+
+    await browserCdp("Page.getNavigationHistory", {}, sessionId);
+    await browserCdp("Target.getTargets", {}, undefined);
+    assert.deepEqual(
+      runtime.sent.map((request) => request.method),
+      ["Page.getNavigationHistory", "Target.getTargets"],
+      "browser-answered commands still reach the browser",
+    );
+
+    await browserCdp(
+      "Page.handleJavaScriptDialog",
+      { accept: true },
+      sessionId,
+    );
+    assert.equal(
+      pendingDialog(sessionId),
+      null,
+      "a handled dialog no longer gates the session even before its closed event",
+    );
+    runtime.sent.length = 0;
+    await browserCdp("Page.getFrameTree", {}, sessionId);
+    assert.deepEqual(
+      runtime.sent.map((request) => request.method),
+      ["Page.getFrameTree"],
+    );
+  });
+});
+
+test("a JavaScript dialog interrupts in-flight renderer-bound commands and leaves browser-answered ones pending", async () => {
+  await withDialogGateRuntime(
+    { hold: ["Page.getFrameTree", "Page.getNavigationHistory"] },
+    async (runtime) => {
+      const sessionId = await ensureSession("target-dialog");
+      const frameTree = browserCdp("Page.getFrameTree", {}, sessionId, 5_000);
+      const history = browserCdp(
+        "Page.getNavigationHistory",
+        {},
+        sessionId,
+        5_000,
+      );
+      await runtime.untilHeld("Page.getFrameTree");
+      await runtime.untilHeld("Page.getNavigationHistory");
+
+      const startedAt = Date.now();
+      runtime.emit("Page.javascriptDialogOpening", CONFIRM_DIALOG);
+      await assert.rejects(frameTree, (error) => {
+        assert.equal(error.code, "EGO_PAGE_DIALOG_OPENED");
+        assert.equal(error.method, "Page.getFrameTree");
+        assert.equal(error.reason, "interrupted");
+        assert.match(
+          error.message,
+          /^a JavaScript confirm dialog "Submit\? This cannot be undone\." opened while Page\.getFrameTree was running/,
+        );
+        return true;
+      });
+      assert(Date.now() - startedAt < 1_000);
+
+      const historyRequest = runtime.heldRequest("Page.getNavigationHistory");
+      assert(historyRequest, "the browser-answered command stays pending");
+      runtime.answer(historyRequest.id, { currentIndex: 0, entries: [] });
+      assert.equal((await history).result.currentIndex, 0);
+    },
+  );
+});
+
+test("a transport timeout while a dialog is open reports the dialog", async () => {
+  await withDialogGateRuntime(
+    { hold: ["Page.getNavigationHistory"] },
+    async (runtime) => {
+      const sessionId = await ensureSession("target-dialog");
+      runtime.emit("Page.javascriptDialogOpening", CONFIRM_DIALOG);
+      await assert.rejects(
+        () => browserCdp("Page.getNavigationHistory", {}, sessionId, 20),
+        (error) => {
+          assert.equal(error.code, "EGO_PAGE_DIALOG_OPENED");
+          assert.equal(error.method, "Page.getNavigationHistory");
+          assert.equal(error.reason, "timeout");
+          assert.match(
+            error.message,
+            /^Page\.getNavigationHistory got no answer because a JavaScript confirm dialog/,
+          );
+          return true;
+        },
+      );
+    },
+  );
+});
+
+test("closing the dialog lets renderer-bound commands through again", async () => {
+  await withDialogGateRuntime({}, async (runtime) => {
+    const sessionId = await ensureSession("target-dialog");
+    runtime.emit("Page.javascriptDialogOpening", CONFIRM_DIALOG);
+    await assert.rejects(() => browserCdp("Page.getFrameTree", {}, sessionId), {
+      code: "EGO_PAGE_DIALOG_OPENED",
+    });
+    runtime.emit("Page.javascriptDialogClosed", { result: false });
+    assert.equal(pendingDialog(sessionId), null);
+    runtime.sent.length = 0;
+    await browserCdp("Page.getFrameTree", {}, sessionId);
+    assert.deepEqual(
+      runtime.sent.map((request) => request.method),
+      ["Page.getFrameTree"],
+    );
+  });
+});
+
+test("a renderer-bound timeout the runtime cannot attribute hints at an unseen dialog", async () => {
+  await withDialogGateRuntime(
+    { hold: ["Runtime.evaluate", "Target.getTargets"] },
+    async (runtime) => {
+      const sessionId = await ensureSession("target-dialog");
+      await assert.rejects(
+        () =>
+          browserCdp("Runtime.evaluate", { expression: "1" }, sessionId, 20),
+        (error) => {
+          assert(error instanceof CdpRequestTimeoutError);
+          assert.equal(error.code, "EGO_CDP_REQUEST_TIMEOUT");
+          assert.match(
+            error.message,
+            /^CDP request timed out: Runtime\.evaluate/,
+          );
+          assert.match(error.message, /did not answer within 20ms/);
+          assert.match(error.message, /earlier command or invocation/);
+          assert.match(error.message, /await page\.dismissDialog\(\)/);
+          return true;
+        },
+      );
+      await assert.rejects(
+        () => browserCdp("Target.getTargets", {}, undefined, 20),
+        (error) => {
+          assert(error instanceof CdpRequestTimeoutError);
+          assert.equal(
+            error.message,
+            "CDP request timed out: Target.getTargets",
+          );
+          return true;
+        },
+      );
+      assert.equal(pendingDialog(sessionId), null);
+    },
+  );
+});
+
+test("session setup stops waiting on a renderer once a dialog opens", async () => {
+  await withDialogGateRuntime(
+    { hold: ["Page.enable", "Network.enable"] },
+    async (runtime) => {
+      const startedAt = Date.now();
+      const session = ensureSession("target-dialog", 5_000);
+      await runtime.untilHeld("Page.enable");
+      await runtime.untilHeld("Network.enable");
+      runtime.emit("Page.javascriptDialogOpening", CONFIRM_DIALOG);
+      const sessionId = await session;
+      assert(
+        Date.now() - startedAt < 1_000,
+        "the session must be usable without waiting for the held enables",
+      );
+      assert.deepEqual(pendingDialog(sessionId), CONFIRM_DIALOG);
+
+      runtime.sent.length = 0;
+      await assert.rejects(
+        () => browserCdp("Runtime.evaluate", { expression: "1" }, sessionId),
+        { code: "EGO_PAGE_DIALOG_OPENED", reason: "blocked" },
+      );
+      // A cached session re-runs its enables; a known dialog must not make
+      // them wait on the renderer again.
+      assert.equal(await ensureSession("target-dialog", 5_000), sessionId);
+      assert.deepEqual(
+        runtime.sent.filter((request) => request.method === "Page.enable"),
+        [],
+        "Page.enable is not re-sent while the dialog is open",
+      );
+      await browserCdp(
+        "Page.handleJavaScriptDialog",
+        { accept: false },
+        sessionId,
+      );
+      assert.equal(pendingDialog(sessionId), null);
+    },
+  );
+});
+
+test("a dialog on the Page target gates its OOPIF sessions", async () => {
+  await withDialogGateRuntime({}, async (runtime) => {
+    const pageSessionId = await ensureSession("target-dialog");
+    runtime.emit("Target.attachedToTarget", {
+      sessionId: "session:frame-child",
+      targetInfo: {
+        targetId: "frame-child",
+        type: "iframe",
+        parentFrameId: "target-dialog",
+      },
+      waitingForDebugger: false,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    runtime.emit("Page.javascriptDialogOpening", CONFIRM_DIALOG);
+    assert.deepEqual(pendingDialog("session:frame-child"), CONFIRM_DIALOG);
+    runtime.sent.length = 0;
+    await assert.rejects(
+      () => browserCdp("Page.getFrameTree", {}, "session:frame-child"),
+      { code: "EGO_PAGE_DIALOG_OPENED", sessionId: "session:frame-child" },
+    );
+    assert.deepEqual(runtime.sent, []);
+
+    runtime.emit("Page.javascriptDialogClosed", { result: true });
+    assert.equal(pendingDialog("session:frame-child"), null);
+    assert.equal(pendingDialog(pageSessionId), null);
+  });
 });

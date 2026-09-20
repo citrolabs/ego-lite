@@ -395,6 +395,15 @@ await page.acceptDialog("prompt response");
 // Or: await page.dismissDialog();
 ```
 
+While a dialog is open, the page's renderer is paused. Page methods that need
+it, such as `page.snapshot()`, `page.screenshot()`, `page.evaluate()`, actions,
+and raw `page.cdp()` commands like `Page.getFrameTree`, fail immediately with
+`EGO_PAGE_DIALOG_OPENED` instead of waiting for a timeout; `page.info()` and
+the dialog methods keep working. A bare `CDP request timed out` on such a
+command can also mean a dialog opened before this script attached, for example
+in an earlier invocation; try `await page.dismissDialog()`, which returns
+`false` when none is open.
+
 A receipt describes only the dispatched action and immediate popup or dialog
 observations; it does not verify the resulting application state.
 

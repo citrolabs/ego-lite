@@ -2,7 +2,7 @@
 
 Generated from `package/ego-browser/src/public-api-schema.ts`.
 
-High-level Page actions return a receipt that may contain `popups` or a synchronous `dialog`. Handle a returned dialog with `page.acceptDialog(promptText?)` or `page.dismissDialog()` before continuing.
+High-level Page actions return a receipt that may contain `popups` or a synchronous `dialog`. Handle a returned dialog with `page.acceptDialog(promptText?)` or `page.dismissDialog()` before continuing. While a dialog is open, Page methods that need page JavaScript (such as `page.snapshot()`, `page.evaluate()`, actions, and raw `page.cdp()` commands) fail immediately with `EGO_PAGE_DIALOG_OPENED` instead of timing out.
 
 For an explicit popup wait, arm it before the action: `const popupPromise = page.waitForEvent("popup"); await page.click(selector); const popup = await popupPromise;`. Action receipts instead expose `{ label, targetId }` entries in `receipt.popups`; resolve one with `task.page(label)`.
 
