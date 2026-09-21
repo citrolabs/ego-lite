@@ -28,11 +28,15 @@ const OOPIF_AUTO_ATTACH_PARAMS = {
     { exclude: true },
   ],
 };
-const DIALOG_BLOCKED_METHOD = (method) =>
-  method.startsWith("Input.") ||
-  method.startsWith("Runtime.") ||
-  method === "DOM.setFileInputFiles" ||
-  method === "Page.navigate";
+// A modal JavaScript dialog stalls every command the renderer has to answer,
+// including Page.getFrameTree, Page.captureScreenshot, DOM.*, Accessibility.*,
+// and even Page.enable. Only methods the browser process answers on its own
+// keep working, so allow those and fail every other command fast instead of
+// letting it run into the transport timeout.
+const DIALOG_SAFE_METHOD = (method) =>
+  BROWSER_LEVEL(method) ||
+  method === "Page.handleJavaScriptDialog" ||
+  method === "Page.setDownloadBehavior";
 let nextMessageId = 1;
 const pending = new Map();
 const browserEvents = [];
@@ -118,9 +122,21 @@ export class PageDialogOpenedError extends Error {
     method: string,
     sessionId: string,
     dialog: Record<string, unknown>,
+    { alreadyOpen = false }: { alreadyOpen?: boolean } = {},
   ) {
+    const kind =
+      typeof dialog.type === "string" && dialog.type
+        ? `JavaScript ${dialog.type} dialog`
+        : "JavaScript dialog";
+    const text =
+      typeof dialog.message === "string" && dialog.message
+        ? ` (${JSON.stringify(dialog.message)})`
+        : "";
+    const situation = alreadyOpen
+      ? `${method} cannot run while a ${kind}${text} is open`
+      : `a ${kind}${text} opened while ${method} was running`;
     super(
-      `a JavaScript dialog opened while ${method} was running; handle the dialog before continuing`,
+      `${situation}; handle it with page.acceptDialog() or page.dismissDialog() before continuing`,
     );
     this.name = "PageDialogOpenedError";
     this.method = method;
@@ -452,7 +468,19 @@ function rawCdp(
   return new Promise<any>((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new CdpRequestTimeoutError(method, timeoutMs, sessionId));
+      // Commands sent outside browserCdp() skip its dialog check. Name the
+      // dialog if one is what stalled this command.
+      const dialog =
+        sessionId && !DIALOG_SAFE_METHOD(method)
+          ? pendingDialog(sessionId)
+          : null;
+      reject(
+        dialog
+          ? new PageDialogOpenedError(method, sessionId, dialog, {
+              alreadyOpen: true,
+            })
+          : new CdpRequestTimeoutError(method, timeoutMs, sessionId),
+      );
     }, timeoutMs);
     pending.set(id, {
       method,
@@ -493,9 +521,12 @@ export async function browserCdp(
   if (!explicit && !BROWSER_LEVEL(method)) {
     effective = await ensureSession();
   }
-  const dialog = effective ? pendingDialog(effective) : null;
-  if (dialog && DIALOG_BLOCKED_METHOD(method)) {
-    throw new PageDialogOpenedError(method, effective, dialog);
+  const dialog =
+    effective && !DIALOG_SAFE_METHOD(method) ? pendingDialog(effective) : null;
+  if (dialog) {
+    throw new PageDialogOpenedError(method, effective, dialog, {
+      alreadyOpen: true,
+    });
   }
   try {
     const response = await rawCdp(method, params, effective, timeoutMs);
@@ -848,11 +879,19 @@ export function drainPageEvents(sessionId) {
   return target ? target.events.splice(0, target.events.length) : [];
 }
 
+/**
+ * Return the JavaScript dialog blocking the Page that owns this session. An
+ * OOPIF session reports its top-level Page's dialog: Chromium delivers every
+ * dialog event on the Page session, and a dialog opened by any frame stalls
+ * that frame's renderer.
+ */
 export function pendingDialog(sessionId) {
   const targetId = sessionId
     ? sessionTargets.get(sessionId)
     : state.preferredTargetId || defaultTargetId;
-  const dialog = targetId ? targetStates.get(targetId)?.pendingDialog : null;
+  const dialog = targetId
+    ? targetStates.get(pageRootTargetId(targetId))?.pendingDialog
+    : null;
   return dialog ? { ...dialog } : null;
 }
 
@@ -1456,14 +1495,23 @@ function handleMessage(message) {
   }
   if (data.method === "Page.javascriptDialogOpening") {
     if (target) {
-      target.pendingDialog = data.params || {};
-      rejectCommandsBlockedByDialog(
-        sessionId,
-        target.pendingDialog as Record<string, unknown>,
-      );
+      // A Page event proves the domain is enabled even if the Page.enable
+      // response is stalled behind this dialog and rejected below.
+      target.pageEventsEnabled = true;
+      const root = targetStates.get(pageRootTargetId(targetId));
+      if (root) {
+        root.pendingDialog = data.params || {};
+        rejectCommandsBlockedByDialog(
+          targetId,
+          root.pendingDialog as Record<string, unknown>,
+        );
+      }
     }
   } else if (data.method === "Page.javascriptDialogClosed") {
-    if (target) target.pendingDialog = null;
+    const root = targetId
+      ? targetStates.get(pageRootTargetId(targetId))
+      : undefined;
+    if (root) root.pendingDialog = null;
   } else if (data.method === "Page.fileChooserOpened") {
     target?.fileChooserInterception?.resolve(data.params || {});
   }
@@ -1483,16 +1531,24 @@ function handleMessage(message) {
 }
 
 function rejectCommandsBlockedByDialog(
-  sessionId: string | undefined,
+  targetId: string,
   dialog: Record<string, unknown>,
 ) {
-  if (!sessionId) return;
+  // The dialog stalls whichever renderer opened it, and CDP does not say which
+  // frame session that is. Treat the whole Page tree as blocked.
+  const sessionIds = new Set(
+    pageTreeTargetIds(pageRootTargetId(targetId))
+      .map((id) => targetStates.get(id)?.sessionId)
+      .filter(Boolean),
+  );
   for (const [id, entry] of pending) {
-    if (entry.sessionId !== sessionId || !DIALOG_BLOCKED_METHOD(entry.method)) {
+    if (!sessionIds.has(entry.sessionId) || DIALOG_SAFE_METHOD(entry.method)) {
       continue;
     }
     pending.delete(id);
-    entry.reject(new PageDialogOpenedError(entry.method, sessionId, dialog));
+    entry.reject(
+      new PageDialogOpenedError(entry.method, entry.sessionId, dialog),
+    );
   }
 }
 

@@ -159,6 +159,33 @@ export function pageJavaScriptDialogHandlingCase() {
       "Page.javascriptDialogOpening",
       (params) => params.type === "confirm"
     );
+    // Chromium does not answer renderer commands while the confirm is open.
+    // Each must fail fast and name the dialog instead of running into the
+    // transport timeout.
+    for (const [label, operation] of [
+      ["snapshot", () => page.snapshot()],
+      ["screenshot", () => page.screenshot()],
+      ["raw Page.getFrameTree", () => page.cdp("Page.getFrameTree", {})],
+    ]) {
+      const startedAt = Date.now();
+      let dialogError;
+      try {
+        await operation();
+      } catch (error) {
+        dialogError = error;
+      }
+      assertEqual(
+        dialogError?.code,
+        "EGO_PAGE_DIALOG_OPENED",
+        label + " reports the open dialog"
+      );
+      assertIncludes(
+        dialogError.message,
+        "page.dismissDialog()",
+        label + " says how to handle the dialog"
+      );
+      assert(Date.now() - startedAt < 2_000, label + " fails fast");
+    }
     assertEqual(await page.dismissDialog(), true, "dismissDialog closes a confirm");
     await waitForDialogEvent(
       "Page.javascriptDialogClosed",

@@ -137,7 +137,7 @@ test("snapshotText forwards a subtree root to the native snapshot", async () => 
   }
 });
 
-test("captureScreenshot skips page metric JavaScript while a native dialog is pending", async () => {
+test("captureScreenshot fails fast while a native dialog is pending", async () => {
   const writes = [];
   const restore = setOverrides({
     async writeFile(path, data) {
@@ -154,26 +154,30 @@ test("captureScreenshot skips page metric JavaScript while a native dialog is pe
       });
       sent.length = 0;
 
-      await captureScreenshot("/tmp/ego-browser-dialog-shot.png");
-
+      // Chromium does not answer Page.captureScreenshot until the dialog
+      // closes, so the capture must not be attempted at all.
+      await assert.rejects(
+        () => captureScreenshot("/tmp/ego-browser-dialog-shot.png"),
+        (error) => {
+          assert.equal(error.code, "EGO_PAGE_DIALOG_OPENED");
+          assert.match(error.message, /page\.dismissDialog\(\)/);
+          return true;
+        },
+      );
       assert.equal(
-        sent.some((request) => request.method === "Runtime.evaluate"),
+        sent.some(
+          (request) =>
+            request.method === "Runtime.evaluate" ||
+            request.method === "Page.captureScreenshot",
+        ),
         false,
       );
-      const screenshot = sent.find(
-        (request) => request.method === "Page.captureScreenshot",
-      );
-      assert.deepEqual(screenshot.params, {
-        format: "png",
-        captureBeyondViewport: false,
-      });
     });
   } finally {
     restore();
   }
 
-  assert.equal(writes.length, 1);
-  assert.equal(writes[0].path, "/tmp/ego-browser-dialog-shot.png");
+  assert.equal(writes.length, 0);
 });
 
 test("captureScreenshot clips the currently visible scrolled viewport", async () => {
