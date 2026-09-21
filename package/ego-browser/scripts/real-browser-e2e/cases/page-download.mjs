@@ -214,8 +214,10 @@ export function pagePdfViewerDownloadCase() {
         "the file link opens the PDF in a new Page instead of downloading"
       );
       // Chromium's download icon identifies the button across locales and toolbar order,
-      // independently of ref/locator metadata printed beside snapshot buttons.
-      const downloadButton = "loc=css:cr-icon-button#save[iron-icon='cr:file-download']";
+      // independently of ref/locator metadata printed beside snapshot buttons. The icon
+      // is cr:file-download before Chromium 154 and cr:download after; "Save to Google
+      // Drive" also uses #save, so match the icon suffix rather than the id alone.
+      const downloadButton = "loc=css:cr-icon-button#save[iron-icon$='download']";
       await preview.waitForSelector(downloadButton, {
         state: "visible",
         timeout: 10_000,
