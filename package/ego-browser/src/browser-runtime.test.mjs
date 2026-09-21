@@ -1561,6 +1561,207 @@ test("a JavaScript dialog interrupts the blocked Page input command", async () =
   }
 });
 
+function withDialogRuntime(fn, { hold = [] } = {}) {
+  const previous = globalThis.ego;
+  const sent = [];
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      sent.push(request);
+      // Held methods behave like renderer commands stalled behind a dialog.
+      if (hold.includes(request.method)) return;
+      const result =
+        request.method === "Target.attachToTarget"
+          ? { sessionId: "session-page" }
+          : {};
+      queueMicrotask(() => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      });
+    },
+    emit(sessionId, method, params) {
+      runtime.onCDPMessage(JSON.stringify({ sessionId, method, params }));
+    },
+  };
+  globalThis.ego = runtime;
+  invalidateSession();
+  return Promise.resolve()
+    .then(() => fn({ runtime, sent }))
+    .finally(() => {
+      invalidateSession();
+      if (previous === undefined) delete globalThis.ego;
+      else globalThis.ego = previous;
+    });
+}
+
+const CONFIRM_DIALOG = {
+  type: "confirm",
+  message: "Submit? This cannot be undone.",
+  url: "https://example.test/form",
+};
+
+test("an open JavaScript dialog fails renderer commands fast and names the dialog", async () => {
+  await withDialogRuntime(async ({ runtime, sent }) => {
+    const attached = await browserCdp("Target.attachToTarget", {
+      targetId: "target-page",
+      flatten: true,
+    });
+    const sessionId = attached.result.sessionId;
+    runtime.emit(sessionId, "Page.javascriptDialogOpening", CONFIRM_DIALOG);
+    sent.length = 0;
+
+    for (const method of [
+      "Page.getFrameTree",
+      "Page.captureScreenshot",
+      "Page.getLayoutMetrics",
+      "Accessibility.getFullAXTree",
+      "DOM.getBoxModel",
+    ]) {
+      await assert.rejects(
+        () => browserCdp(method, {}, sessionId, 10_000),
+        (error) => {
+          assert.equal(error.code, "EGO_PAGE_DIALOG_OPENED");
+          assert.equal(error.method, method);
+          assert.deepEqual(error.dialog, CONFIRM_DIALOG);
+          assert.equal(
+            error.message,
+            `${method} cannot run while a JavaScript confirm dialog ` +
+              `("Submit? This cannot be undone.") is open; handle it with ` +
+              "page.acceptDialog() or page.dismissDialog() before continuing",
+          );
+          return true;
+        },
+      );
+    }
+    assert.deepEqual(sent, []);
+
+    // Browser-process methods still answer while the dialog is open.
+    await browserCdp("Target.getTargets", {});
+    await browserCdp(
+      "Page.setDownloadBehavior",
+      { behavior: "default" },
+      sessionId,
+    );
+    await browserCdp(
+      "Page.handleJavaScriptDialog",
+      { accept: false },
+      sessionId,
+    );
+    assert.deepEqual(
+      sent.map((request) => request.method),
+      [
+        "Target.getTargets",
+        "Page.setDownloadBehavior",
+        "Page.handleJavaScriptDialog",
+      ],
+    );
+
+    runtime.emit(sessionId, "Page.javascriptDialogClosed", { result: false });
+    await browserCdp("Page.getFrameTree", {}, sessionId);
+  });
+});
+
+test("a dialog rejects stalled in-flight commands across the Page's frame sessions", async () => {
+  await withDialogRuntime(
+    async ({ runtime, sent }) => {
+      const attached = await browserCdp("Target.attachToTarget", {
+        targetId: "target-page",
+        flatten: true,
+      });
+      const pageSession = attached.result.sessionId;
+      runtime.emit(pageSession, "Target.attachedToTarget", {
+        sessionId: "session-frame",
+        targetInfo: { targetId: "target-frame", type: "iframe" },
+        waitingForDebugger: false,
+      });
+
+      const pageTree = browserCdp("Page.getFrameTree", {}, pageSession, 10_000);
+      const frameTree = browserCdp(
+        "Page.getFrameTree",
+        {},
+        "session-frame",
+        10_000,
+      );
+      let downloadSettled = false;
+      const download = browserCdp(
+        "Page.setDownloadBehavior",
+        { behavior: "default" },
+        pageSession,
+        50,
+      ).finally(() => {
+        downloadSettled = true;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+
+      // Chromium reports a dialog opened by any frame on the Page session.
+      runtime.emit(pageSession, "Page.javascriptDialogOpening", CONFIRM_DIALOG);
+
+      for (const [promise, sessionId] of [
+        [pageTree, pageSession],
+        [frameTree, "session-frame"],
+      ]) {
+        await assert.rejects(promise, (error) => {
+          assert.equal(error.code, "EGO_PAGE_DIALOG_OPENED");
+          assert.equal(error.sessionId, sessionId);
+          assert.match(
+            error.message,
+            /^a JavaScript confirm dialog \("Submit\? This cannot be undone\."\) opened while Page\.getFrameTree was running;/,
+          );
+          return true;
+        });
+      }
+      assert.equal(downloadSettled, false, "safe commands stay in flight");
+      await assert.rejects(download, CdpRequestTimeoutError);
+
+      // New commands on the frame session fail before they are sent.
+      sent.length = 0;
+      await assert.rejects(
+        () =>
+          browserCdp(
+            "Accessibility.getFullAXTree",
+            {},
+            "session-frame",
+            10_000,
+          ),
+        (error) => error.code === "EGO_PAGE_DIALOG_OPENED",
+      );
+      assert.deepEqual(sent, []);
+    },
+    { hold: ["Page.getFrameTree", "Page.setDownloadBehavior"] },
+  );
+});
+
+test("a raw command stalled by a known dialog reports it instead of a bare timeout", async () => {
+  await withDialogRuntime(
+    async ({ runtime }) => {
+      const attached = await browserCdp("Target.attachToTarget", {
+        targetId: "target-page",
+        flatten: true,
+      });
+      const sessionId = attached.result.sessionId;
+      runtime.emit(sessionId, "Page.javascriptDialogOpening", CONFIRM_DIALOG);
+
+      // Network tracking sends Network.enable directly, outside browserCdp's
+      // pre-send check, so only its timeout can name the dialog.
+      await assert.rejects(
+        () => ensureNetworkTracking([sessionId], 20),
+        (error) => {
+          assert.equal(error.code, "EGO_PAGE_DIALOG_OPENED");
+          assert.equal(error.method, "Network.enable");
+          assert.match(error.message, /^Network\.enable cannot run while/);
+          return true;
+        },
+      );
+
+      runtime.emit(sessionId, "Page.javascriptDialogClosed", { result: true });
+      await assert.rejects(
+        () => ensureNetworkTracking([sessionId], 20),
+        CdpRequestTimeoutError,
+      );
+    },
+    { hold: ["Network.enable"] },
+  );
+});
+
 test("page event drains exclude unscoped browser events", async () => {
   const previous = globalThis.ego;
   const runtime = {

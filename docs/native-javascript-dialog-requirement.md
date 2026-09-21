@@ -26,6 +26,20 @@ No new binding is required. The existing CDP bridge must:
 Permission prompts and device choosers must continue to transfer control to
 the user.
 
+A dialog can outlive the `ego-browser nodejs` invocation that opened it. The
+SDK keeps dialog state per process, and while a dialog is open Chromium does
+not answer renderer commands, including `Page.enable`. The next invocation
+therefore cannot discover the dialog and every command it sends times out.
+Ego Lite 0.5.2.2 does not meet this requirement yet: in local runs the dialog
+was dismissed when the invocation exited, and sometimes the TaskSpace also
+moved to user control. In the field, the dialog stayed open and the next
+invocation timed out. When an invocation exits with a dialog open, the bridge
+must:
+
+- keep the dialog open and the TaskSpace Agent-owned;
+- report the open dialog to the next session that attaches to the Page, for
+  example by emitting `Page.javascriptDialogOpening` after `Page.enable`.
+
 Acceptance: trigger each JavaScript dialog from a real Page click, verify that
 the TaskSpace remains Agent-owned, accept a prompt with `promptText: "agent"`,
 dismiss a confirm, accept an alert, and verify the returned values and opening
