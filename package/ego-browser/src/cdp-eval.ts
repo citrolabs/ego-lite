@@ -1,3 +1,5 @@
+import { parse } from "acorn";
+
 import { browserCdp } from "./browser-runtime.js";
 import { state } from "./state.js";
 
@@ -59,8 +61,10 @@ export async function js(expression, targetId = undefined) {
         .sessionId
     : undefined;
   let finalExpression = expression;
-  if (hasReturnStatement(expression) && !expression.trim().startsWith("(")) {
-    finalExpression = `(function(){${expression}})()`;
+  if (hasReturnStatement(expression)) {
+    // Newlines keep a trailing line comment from swallowing the closing
+    // brace; async keeps top-level await valid inside the wrapper.
+    finalExpression = `(async function(){\n${expression}\n})()`;
   }
   return runtimeEvaluate(finalExpression, sessionId, true);
 }
@@ -152,67 +156,38 @@ function jsSnippet(expression, limit = 160) {
   return snippet.length > limit ? `${snippet.slice(0, limit - 3)}...` : snippet;
 }
 
+/**
+ * Whether the source has a `return` outside any nested function, meaning it
+ * must be wrapped in a function before Runtime.evaluate accepts it.
+ */
 export function hasReturnStatement(expression) {
-  let i = 0;
-  let stateName = "code";
-  let quote = "";
-  while (i < expression.length) {
-    const ch = expression[i];
-    const next = expression[i + 1] || "";
-    if (stateName === "code") {
-      if (ch === "'" || ch === '"' || ch === "`") {
-        stateName = "string";
-        quote = ch;
-        i += 1;
-        continue;
-      }
-      if (ch === "/" && next === "/") {
-        stateName = "line_comment";
-        i += 2;
-        continue;
-      }
-      if (ch === "/" && next === "*") {
-        stateName = "block_comment";
-        i += 2;
-        continue;
-      }
-      if (expression.startsWith("return", i)) {
-        const before = i > 0 ? expression[i - 1] : "";
-        const after = expression[i + 6] || "";
-        if (!/[A-Za-z0-9_]/.test(before) && !/[A-Za-z0-9_]/.test(after)) {
-          return true;
-        }
-      }
-      i += 1;
-      continue;
-    }
-    if (stateName === "line_comment") {
-      if (ch === "\n") {
-        stateName = "code";
-      }
-      i += 1;
-      continue;
-    }
-    if (stateName === "block_comment") {
-      if (ch === "*" && next === "/") {
-        stateName = "code";
-        i += 2;
-        continue;
-      }
-      i += 1;
-      continue;
-    }
-    if (stateName === "string") {
-      if (ch === "\\") {
-        i += 2;
-        continue;
-      }
-      if (ch === quote) {
-        stateName = "code";
-        quote = "";
-      }
-      i += 1;
-    }
+  try {
+    return containsOuterReturn(
+      parse(expression, {
+        ecmaVersion: "latest",
+        allowReturnOutsideFunction: true,
+        allowAwaitOutsideFunction: true,
+      }),
+    );
+  } catch {
+    // Leave invalid or unsupported syntax untouched for the browser to report.
+    return false;
   }
-  return false;
+}
+
+function containsOuterReturn(node) {
+  if (!node || typeof node !== "object") return false;
+  if (node.type === "ReturnStatement") return true;
+  if (
+    node.type === "FunctionDeclaration" ||
+    node.type === "FunctionExpression" ||
+    node.type === "ArrowFunctionExpression"
+  ) {
+    return false;
+  }
+  return Object.values(node).some((child) =>
+    Array.isArray(child)
+      ? child.some(containsOuterReturn)
+      : containsOuterReturn(child),
+  );
 }
