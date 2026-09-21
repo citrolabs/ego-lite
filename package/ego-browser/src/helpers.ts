@@ -158,7 +158,7 @@ export async function switchTaskSpace(nameOrId) {
   if (!ego || typeof ego.useTaskSpace !== "function") {
     throw new Error("switchTaskSpace requires ego.useTaskSpace");
   }
-  const space = await findTaskSpace(nameOrId);
+  const space = await findTaskSpace(nameOrId, "switchTaskSpace");
   if (!isAgentOwned(space.ownership)) {
     throw new Error(
       `switchTaskSpace requires an agent-owned task space, got ownership ${JSON.stringify(space.ownership)}`,
@@ -174,6 +174,7 @@ export async function switchTaskSpace(nameOrId) {
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
 export async function newTaskSpace(name, profileId?: string) {
+  assertTaskSpaceName("newTaskSpace", name);
   return (await createTaskSpaceResolution(name, profileId)).descriptor;
 }
 
@@ -223,6 +224,7 @@ async function createTaskSpaceResolution(
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
 export async function useOrCreateTaskSpace(nameOrId) {
+  assertTaskSpaceLocator("useOrCreateTaskSpace", nameOrId);
   return (await resolveTaskSpace(nameOrId)).descriptor;
 }
 
@@ -283,6 +285,7 @@ export async function taskSpace(
   nameOrId,
   options: { profileId?: string } = {},
 ) {
+  assertTaskSpaceLocator("taskSpace", nameOrId);
   validatePublicApiOptions("taskSpace", options);
   const { profileId } = options;
   if (profileId === undefined) {
@@ -332,7 +335,7 @@ async function initializeResolvedTaskSpace(resolution) {
  * @returns {Promise<import('./page-model.js').TaskSpace>}
  */
 export async function claimTaskSpace(nameOrId) {
-  const space = await findTaskSpace(nameOrId);
+  const space = await findTaskSpace(nameOrId, "claimTaskSpace");
   const claimed = await claimResolvedTaskSpace(space, "claimTaskSpace");
   const task = createTaskSpaceHandle({ ...claimed, ownership: "agent" });
   await captureTaskSpaceUserBoundary(task);
@@ -370,7 +373,7 @@ async function selectTaskSpaceIfProvided(
   op = "taskSpace",
 ) {
   if (nameOrId === undefined) return;
-  const match = await findTaskSpace(nameOrId);
+  const match = await findTaskSpace(nameOrId, op);
   await selectTaskSpace(ego, match, op);
 }
 
@@ -443,7 +446,7 @@ export async function handOffTaskSpace(nameOrId?: string | number) {
     throw new Error("handOffTaskSpace requires ego.handOffTaskSpace");
   }
   if (nameOrId !== undefined) {
-    const match = await findTaskSpace(nameOrId);
+    const match = await findTaskSpace(nameOrId, "handOffTaskSpace");
     if (match.ownership === "user") {
       return { done: false, skipped: "user-owned" as const };
     }
@@ -465,7 +468,7 @@ export async function takeOverTaskSpace(nameOrId?: string | number) {
   }
   let descriptor;
   if (nameOrId !== undefined) {
-    descriptor = await findTaskSpace(nameOrId);
+    descriptor = await findTaskSpace(nameOrId, "takeOverTaskSpace");
     await selectTaskSpace(ego, descriptor, "takeOverTaskSpace");
   }
   await invokeEgo("takeOverTaskSpace", () => ego.takeOverTaskSpace());
@@ -560,11 +563,36 @@ function taskSpaceNumericId(space, op: string) {
   return space.id;
 }
 
-async function findTaskSpace(nameOrId) {
+async function findTaskSpace(nameOrId, op: string) {
+  assertTaskSpaceLocator(op, nameOrId);
   const spaces = await listTaskSpaces();
   const match = findMatchingTaskSpace(spaces, nameOrId);
   if (!match) throw new Error(`task space not found: ${nameOrId}`);
   return match;
+}
+
+// Reject bad locators before any native call: an unmatched string name falls
+// through to creating a space, so undefined must never reach that branch.
+function assertTaskSpaceLocator(op: string, nameOrId: unknown) {
+  if (typeof nameOrId === "number" && Number.isSafeInteger(nameOrId)) return;
+  if (typeof nameOrId === "string" && nameOrId.trim() !== "") return;
+  throw new TypeError(
+    `${op} expects a task-space name (non-empty string) or numeric id, got ${describeLocator(nameOrId)}. ` +
+      `listTaskSpaces() entries expose the numeric id as "id"; pass entry.id.`,
+  );
+}
+
+function assertTaskSpaceName(op: string, name: unknown) {
+  if (typeof name === "string" && name.trim() !== "") return;
+  throw new TypeError(
+    `${op} expects a non-empty task-space name, got ${describeLocator(name)}`,
+  );
+}
+
+function describeLocator(value: unknown) {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number" || value == null) return String(value);
+  return typeof value;
 }
 
 function findMatchingTaskSpace(spaces, nameOrId) {

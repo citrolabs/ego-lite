@@ -261,6 +261,51 @@ test("taskSpace creates a new space with an explicit browser profile", async () 
   ]);
 });
 
+test("task-space helpers reject invalid locators before any native call", async () => {
+  const calls = [];
+  const record =
+    (name) =>
+    async (...args) => {
+      calls.push([name, ...args]);
+      throw new Error(`unexpected ${name}`);
+    };
+  const invalid = [undefined, null, "", "   ", {}, NaN, 1.5];
+  await withEgo(
+    {
+      listTaskSpaces: record("listTaskSpaces"),
+      createTaskSpace: record("createTaskSpace"),
+      useTaskSpace: record("useTaskSpace"),
+      claimTaskSpace: record("claimTaskSpace"),
+    },
+    async () => {
+      for (const value of invalid) {
+        await assert.rejects(
+          () => taskSpace(value),
+          (error) =>
+            error instanceof TypeError &&
+            /taskSpace expects a task-space name \(non-empty string\) or numeric id/.test(
+              error.message,
+            ) &&
+            /pass entry\.id/.test(error.message),
+        );
+        await assert.rejects(() => useOrCreateTaskSpace(value), TypeError);
+        await assert.rejects(() => switchTaskSpace(value), TypeError);
+        await assert.rejects(() => claimTaskSpace(value), TypeError);
+      }
+      await assert.rejects(
+        () => taskSpace(undefined, { profileId: "Profile 2" }),
+        /taskSpace expects a task-space name/,
+      );
+      await assert.rejects(
+        () => newTaskSpace(undefined),
+        /newTaskSpace expects a non-empty task-space name, got undefined/,
+      );
+      await assert.rejects(() => newTaskSpace(7), TypeError);
+    },
+  );
+  assert.deepEqual(calls, []);
+});
+
 test("taskSpace manages a newly created space's default tab as p1", async () => {
   const calls = [];
   await withEgo(
