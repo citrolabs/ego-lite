@@ -109,7 +109,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: "TaskSpace.page",
     signature: "task.page(label)",
-    summary: "Create a lazy Page handle for a durable page label.",
+    summary:
+      "Create a lazy handle for an existing managed Page label; it neither creates a Page nor checks that the label exists.",
   },
   {
     name: "TaskSpace.userPage",
