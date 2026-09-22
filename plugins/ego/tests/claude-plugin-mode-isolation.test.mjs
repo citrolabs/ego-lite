@@ -5,13 +5,12 @@ import test from "node:test";
 const repoFile = (path) => new URL(`../../../${path}`, import.meta.url);
 
 const standaloneSkillPath = "skills/ego-browser/SKILL.md";
+const guidePath = "package/ego-browser/skill/GUIDE.md";
 const claudePluginRoot = "plugins/ego";
 const claudeManifestPath = `${claudePluginRoot}/.claude-plugin/plugin.json`;
 const claudeSkillPath = `${claudePluginRoot}/skills/ego-browser/SKILL.md`;
 const claudeSkillSupportPaths = [
   `${claudePluginRoot}/skills/ego-browser/references/install.md`,
-  `${claudePluginRoot}/skills/ego-browser/references/api.md`,
-  `${claudePluginRoot}/skills/ego-browser/references/clearing-state.md`,
   `${claudePluginRoot}/skills/ego-browser/scripts/install.sh`,
 ];
 const runtimeTerms =
@@ -83,7 +82,7 @@ test("Claude marketplace routes the plugin to its portable subtree", () => {
   assert.equal(marketplace.plugins[0].source, `./${claudePluginRoot}`);
 });
 
-test("Claude plugin subtree contains its manifest and complete Skill only", () => {
+test("Claude plugin subtree contains its manifest and Skill only", () => {
   for (const path of [
     claudeManifestPath,
     claudeSkillPath,
@@ -127,25 +126,32 @@ test("Claude plugin publishes under the ego install and slash namespace", () => 
   assert.doesNotMatch(pluginReadme, /ego-skills|browser-skills/);
 });
 
-test("standalone Skill keeps the heredoc execution contract", () => {
+test("standalone Skill defers to the versioned CLI guide", () => {
   const skill = readRequiredFile(standaloneSkillPath);
 
-  assert.match(skill, /ego-browser nodejs <<'EOF'/);
+  assert.match(skill, /^ego-browser skill$/m);
   assertPureSkillText(skill, "standalone Skill");
 });
 
-test("portable Skill and support files use the same heredoc contract", () => {
+test("versioned guide keeps the heredoc execution contract", () => {
+  const guide = readRequiredFile(guidePath);
+
+  assert.match(guide, /ego-browser nodejs <<'EOF'/);
+  assertPureSkillText(guide, "versioned guide");
+});
+
+test("portable Skill and support files match the standalone Skill", () => {
   const standalone = readRequiredFile(standaloneSkillPath);
   const portable = readRequiredFile(claudeSkillPath);
   const support = claudeSkillSupportPaths.map(readRequiredFile).join("\n");
 
   assert.equal(portable, standalone);
-  assert.match(portable, /ego-browser nodejs <<'EOF'/);
+  assert.match(support, /ego-browser nodejs <<'EOF'/);
   assertPureSkillText(`${portable}\n${support}`, "portable Skill package");
 });
 
-test("portable Skill restores v2 Pages across script rounds", () => {
-  const skill = readRequiredFile(claudeSkillPath);
+test("versioned guide restores v2 Pages across script rounds", () => {
+  const skill = readRequiredFile(guidePath);
 
   assert.match(
     skill,
@@ -169,11 +175,6 @@ test("source plugin links directly to the canonical Skill", () => {
   );
 });
 
-test("both Skill copies preserve TaskSpace safety policy", () => {
-  for (const [label, path] of [
-    ["standalone Skill", standaloneSkillPath],
-    ["portable Skill", claudeSkillPath],
-  ]) {
-    assertTaskSpaceSafety(readRequiredFile(path), label);
-  }
+test("versioned guide preserves TaskSpace safety policy", () => {
+  assertTaskSpaceSafety(readRequiredFile(guidePath), "versioned guide");
 });

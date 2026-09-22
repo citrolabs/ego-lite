@@ -16,7 +16,7 @@ export function agentWorkspace() {
     return bundledSkill;
   }
 
-  return resolve(REPO_ROOT, "..", "..", "skills", "ego-browser");
+  return resolve(REPO_ROOT, "..", "skill");
 }
 
 function resolvePath(path) {

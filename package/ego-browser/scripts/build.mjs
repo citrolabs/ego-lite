@@ -9,15 +9,15 @@ import resolve from "@rollup/plugin-node-resolve";
 import typescript from "@rollup/plugin-typescript";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const repoRoot = dirname(dirname(root));
 const distDir = join(root, "dist");
 const outDir = join(distDir, "out");
 const bundledCliDir = outDir;
 const bundledCli = join(bundledCliDir, "index.js");
-const skillSourceDir = join(repoRoot, "skills", "ego-browser");
+const bundledSkillCli = join(bundledCliDir, "skill.js");
+const skillSourceDir = join(root, "skill");
 const bundledSkillDir = join(outDir, "ego-browser");
 const buildLock = join(root, ".build.lock");
-const bundledSkillEntries = ["SKILL.md", "learnings", "references", "scripts"];
+const bundledSkillEntries = ["GUIDE.md", "learnings", "topics"];
 
 let lock;
 try {
@@ -54,7 +54,6 @@ try {
   });
 
   const rollupConfig = {
-    input: join(root, "src/index.ts"),
     external: [...builtinModules, ...builtinModules.map((m) => `node:${m}`)],
     plugins: [
       resolve(),
@@ -68,9 +67,14 @@ try {
       }),
     ],
   };
-  const bundle = await rollup(rollupConfig);
-  await bundle.write({ file: bundledCli, format: "esm", sourcemap: false });
-  await bundle.close();
+  for (const [input, file] of [
+    ["src/index.ts", bundledCli],
+    ["src/skill-cli.ts", bundledSkillCli],
+  ]) {
+    const bundle = await rollup({ ...rollupConfig, input: join(root, input) });
+    await bundle.write({ file, format: "esm", sourcemap: false });
+    await bundle.close();
+  }
 
   await mkdir(bundledSkillDir, { recursive: true });
   for (const entry of bundledSkillEntries) {
@@ -79,6 +83,7 @@ try {
     });
   }
   await chmod(bundledCli, 0o755);
+  await chmod(bundledSkillCli, 0o755);
 } finally {
   await lock.close();
   await rm(buildLock, { force: true });

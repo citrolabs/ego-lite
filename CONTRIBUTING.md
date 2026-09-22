@@ -7,9 +7,9 @@ provided separately by the installed ego lite app.
 ![ego lite architecture: AI agents, the Skill, the Node.js runtime, and isolated task spaces](docs/assets/ego-lite-architecture.png)
 
 For the product overview, see [README.md](README.md). For the agent-facing API,
-read [SKILL.md](skills/ego-browser/SKILL.md) and the generated
-[API reference](skills/ego-browser/references/api.md). Repository conventions live
-in [AGENTS.md](AGENTS.md).
+read the [usage guide](package/ego-browser/skill/GUIDE.md) and the generated
+[API reference](docs/api-reference.md). Repository conventions live in
+[AGENTS.md](AGENTS.md).
 
 ## Set up and build
 
@@ -35,16 +35,18 @@ Local dependency installation also installs the Git hooks configured in
 | Output                  | Purpose                                                                                                                    |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `dist/out/index.js`     | The single-file ESM SDK loaded by the ego lite CLI or embedded host. Use this file for browser debugging and distribution. |
-| `dist/out/ego-browser/` | The matching Skill package: `SKILL.md`, `references/`, `scripts/`, and `learnings/`.                                       |
+| `dist/out/skill.js`     | The `ego-browser skill` renderer that prints the adjacent usage guide.                                                     |
+| `dist/out/ego-browser/` | The matching usage guide: `GUIDE.md`, `topics/`, and `learnings/`.                                                         |
 | `dist/src/`             | Compiled runtime modules used by the repository's unit tests.                                                              |
 | `dist/scripts/`         | Compiled TypeScript maintenance scripts, including the site-learning validator.                                            |
 
-The release payload is the contents of `dist/out/`: `index.js` and the adjacent
-`ego-browser/` directory. Keep them together when copying a standalone payload so
-the SDK can discover its matching Skill resources. `dist/src/index.js` is not the
+The release payload is the contents of `dist/out/`: `index.js`, `skill.js`, and
+the adjacent `ego-browser/` directory. Keep them together when copying a
+standalone payload so the SDK and `ego-browser skill` find the matching guide. `dist/src/index.js` is not the
 single-file release entry point.
 
-Edit source files under `src/`, `scripts/`, or `skills/ego-browser/`, then rebuild.
+Edit source files under `src/`, `scripts/`, `skill/`, or `../../skills/ego-browser/`,
+then rebuild.
 Build output is generated and must not be committed. The build replaces `dist/`
 and uses `.build.lock` to prevent concurrent builds.
 
@@ -168,20 +170,21 @@ ego lite CLI explicitly.
 | `package/ego-browser/src/element-resolver.ts`, `page-ref-registry.ts`, `page-ledger.ts` | Element resolution and durable Page/ref identity.                                      |
 | `package/ego-browser/src/driver/`                                                       | Browser action, input, observation, and wait implementations.                          |
 | `package/ego-browser/scripts/real-browser-e2e/`                                         | Real-browser fixtures and regression cases.                                            |
-| `skills/ego-browser/`                                                                   | The canonical Skill, generated API reference, installation script, and site learnings. |
+| `package/ego-browser/skill/`                                                            | The versioned usage guide, its topics, and site learnings.                             |
+| `skills/ego-browser/`                                                                   | The published entry Skill, installation guide, and installation script.                |
 
 Keep changes focused and match the surrounding style. Runtime code uses ESM,
 TypeScript, and `.js` import extensions. Classify element-resolution failures
 honestly as transient or permanent because retry behavior depends on them.
 
 When changing a public API, update its schema, implementation, regression tests,
-and Skill together. Regenerate the reference with:
+and usage guide together. Regenerate the reference with:
 
 ```bash
 npm run generate:api-docs
 ```
 
-Keep reusable site behavior in `skills/ego-browser/learnings/<site>/`. Start from
+Keep reusable site behavior in `package/ego-browser/skill/learnings/<site>/`. Start from
 an existing pack, declare its tools in `manifest.json`, and use stable URLs and
 selectors. Do not put credentials or one-off task history in learning packs.
 

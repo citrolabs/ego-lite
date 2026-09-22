@@ -27,7 +27,7 @@ export class EgoBrowserSkillStaleError extends Error {
     super(
       [
         `${STALE_SKILL_PREFIX} This script uses the old egoBrowser.${member} API.`,
-        "Re-read the installed ego-browser skill and retry with the current TaskSpace/Page API. Start with:",
+        "Run `ego-browser skill` to read the guide for this version and retry with the current TaskSpace/Page API. Start with:",
         "  const task = await taskSpace(nameOrId)",
       ].join("\n"),
     );

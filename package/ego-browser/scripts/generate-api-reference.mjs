@@ -8,10 +8,8 @@ import { publicApiMarkdown } from "../dist/src/public-api-schema.js";
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const outputPath = join(
   dirname(dirname(packageRoot)),
-  "skills",
-  "ego-browser",
-  "references",
-  "api.md",
+  "docs",
+  "api-reference.md",
 );
 const expected = await format(publicApiMarkdown(), { parser: "markdown" });
 
@@ -24,7 +22,7 @@ if (process.argv.includes("--check")) {
   }
   if (actual !== expected) {
     throw new Error(
-      "skills/ego-browser/references/api.md is stale; run npm run generate:api-docs",
+      "docs/api-reference.md is stale; run npm run generate:api-docs",
     );
   }
 } else {

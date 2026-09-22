@@ -10,7 +10,7 @@ runtime.
 
 The runtime in this repository consumes these bindings and may expose only a
 subset of them through its higher-level helpers. Agent automation should
-normally follow `skills/ego-browser/SKILL.md`; runtime maintainers may access
+normally follow the guide printed by `ego-browser skill`; runtime maintainers may access
 `globalThis.ego` directly when working with the native bridge.
 
 ## Runtime Model

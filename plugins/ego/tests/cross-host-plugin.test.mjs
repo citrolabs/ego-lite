@@ -244,12 +244,12 @@ test("OpenCode adapter injects only instructions and the Skill slash command", a
   );
 });
 
-test("portable Skill is the standalone heredoc Skill without runtime tools", () => {
+test("portable Skill is the standalone Skill without runtime tools", () => {
   const standalone = read("skills/ego-browser/SKILL.md");
   const portable = read(`${pluginRoot}/skills/ego-browser/SKILL.md`);
 
   assert.equal(portable, standalone);
-  assert.match(portable, /ego-browser nodejs <<'EOF'/);
+  assert.match(portable, /^ego-browser skill$/m);
   assertPureSkillText(portable, "portable Skill");
 });
 
@@ -298,10 +298,10 @@ test("portable Skill includes Codex UI metadata", () => {
   assert.match(metadata, /default_prompt: ["'][^"']*\$ego-browser/);
 });
 
-test("standalone Skill remains the heredoc source of truth", () => {
-  const skill = read("skills/ego-browser/SKILL.md");
-  assert.match(skill, /ego-browser nodejs <<'EOF'/);
-  assertPureSkillText(skill, "standalone Skill");
+test("versioned guide remains the heredoc source of truth", () => {
+  const guide = read("package/ego-browser/skill/GUIDE.md");
+  assert.match(guide, /ego-browser nodejs <<'EOF'/);
+  assertPureSkillText(guide, "versioned guide");
 });
 
 test("plugin README documents every host as a pure-Skill install", () => {

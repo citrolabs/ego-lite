@@ -1,6 +1,10 @@
+---
+description: Read before clearing any cookie, cache, or storage; some clears reach the whole browser profile and cannot be undone.
+---
+
 # Clearing cookies, cache, and storage
 
-Read this file before clearing any cookie, cache, or storage. These commands look interchangeable but differ in how far they reach. A task space picks a browser profile when it is created, and that profile's cookie jar and HTTP cache are shared with the user's own tabs and with every other task space on the same profile. Measured from inside an agent space on a default profile: the current page saw 1 cookie, the profile held 3478 across 1161 domains.
+Read this before clearing any cookie, cache, or storage. These commands look interchangeable but differ in how far they reach. A task space picks a browser profile when it is created, and that profile's cookie jar and HTTP cache are shared with the user's own tabs and with every other task space on the same profile. Measured from inside an agent space on a default profile: the current page saw 1 cookie, the profile held 3478 across 1161 domains.
 
 ## What each command reaches
 

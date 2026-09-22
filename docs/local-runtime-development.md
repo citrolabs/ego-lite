@@ -43,7 +43,7 @@ EOF
 ```
 
 For browser automation, keep the same command and write the heredoc using the
-API documented by the current checkout in `skills/ego-browser/SKILL.md`.
+API documented by the current checkout in `package/ego-browser/skill/GUIDE.md`.
 
 Every manual invocation needs `--sdk-path`; it is not a persistent setting.
 Do not use `npm link` or replace files inside the Ego Lite application bundle.
@@ -71,12 +71,33 @@ task-space selection, takeover, or browser interaction is part of a successful
 run. A fresh agent can use this command without any context from an earlier
 debugging session.
 
-## Keep the Skill aligned
+## Keep the guide aligned
 
-The Skill describes the APIs implemented by the runtime. When an agent is used,
-load `skills/ego-browser/SKILL.md` from the same checkout as the bundle. A Skill
-from another release may generate helper calls that the local runtime does not
-support.
+The usage guide describes the APIs implemented by the runtime. Agents read it
+with `ego-browser skill`, which prints the guide bundled next to the SDK the
+command selected. A guide from another release may generate helper calls that
+the local runtime does not support.
+
+`ego-browser skill` picks the guide in this order:
+
+1. `--skill-dir <dir>` on that command.
+2. `EGO_BROWSER_SKILL_DIR`.
+3. The `ego-browser/` directory next to the selected SDK. When the debug SDK
+   entry or `--sdk-path` points at `dist/out/index.js`, this is
+   `dist/out/ego-browser/`, so the guide follows the local build.
+4. The guide bundled with Ego Lite.
+
+To edit the guide without rebuilding, point the override at the source:
+
+```bash
+export EGO_BROWSER_SKILL_DIR="$PWD/skill"
+ego-browser skill | head -1
+```
+
+The first output line names the directory the guide came from. Unset the
+variable or remove the debug SDK entry to return to the bundled guide. Without
+an Ego Lite build that provides `ego-browser skill`, run the renderer directly:
+`node dist/out/skill.js [topic]`.
 
 ## Troubleshooting
 

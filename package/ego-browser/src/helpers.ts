@@ -133,7 +133,7 @@ export async function profiles() {
  *   completeTaskSpace { keep: false }   -> claims it, then closes it
  *   takeOverTaskSpace / waitForAgentControl -> no ownership check (operates as-is)
  *
- * Keep this table in sync with the one in skills/ego-browser/SKILL.md.
+ * Keep this table in sync with the one in skill/GUIDE.md.
  */
 
 /**

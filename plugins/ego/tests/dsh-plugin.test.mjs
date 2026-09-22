@@ -68,10 +68,10 @@ test("DSH plugin exposes only the Skill service contract", async () => {
   );
 });
 
-test("packaged plugin Skill uses heredoc and contains no repl tools", () => {
+test("packaged plugin Skill defers to the CLI guide and contains no repl tools", () => {
   const skill = readFileSync(packagedSkillUrl, "utf8");
 
-  assert.match(skill, /ego-browser nodejs <<'EOF'/);
+  assert.match(skill, /^ego-browser skill$/m);
   assert.doesNotMatch(
     skill,
     /\brepl_(?:start|eval|read|status|interrupt|stop)\b/,
@@ -125,7 +125,7 @@ test("DSH registers only the packaged Skill as a bundled provider", async () => 
     skill.content,
     canonical.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trimStart(),
   );
-  assert.match(skill.content, /ego-browser nodejs <<'EOF'/);
+  assert.match(skill.content, /^ego-browser skill$/m);
   assert.doesNotMatch(
     skill.content,
     /\brepl_(?:start|eval|read|status|interrupt|stop)\b/,

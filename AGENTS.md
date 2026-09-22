@@ -4,7 +4,7 @@
 
 `ego-browser` is a Node.js CDP browser-automation harness for AI agents. It drives the ego lite browser through `globalThis.ego` bindings (provided by the closed-source ego lite app), exposes a compact snapshot/ref workflow, and layers reusable site-specific knowledge ("learnings") on top of the browser runtime.
 
-This repo contains the open-source harness and the agent skill package — **not** the browser itself. The ego lite app bundles its own `ego-browser` binary that embeds this runtime; `skills/ego-browser/SKILL.md` documents that binary's usage (`ego-browser nodejs <<'EOF' ... EOF`). The repo CLI built here takes the heredoc directly on stdin with no subcommand.
+This repo contains the open-source harness and the agent skill package — **not** the browser itself. The ego lite app bundles its own `ego-browser` binary that embeds this runtime. The usage guide for that binary (`ego-browser nodejs <<'EOF' ... EOF`) lives in `package/ego-browser/skill/GUIDE.md` and ships with the runtime; `ego-browser skill` prints it. `skills/ego-browser/SKILL.md` is only a stable entry that tells agents to run `ego-browser skill`, so the guide always matches the installed browser. The repo CLI built here takes the heredoc directly on stdin with no subcommand.
 
 ## Architecture & Data Flow
 
@@ -20,8 +20,9 @@ This repo contains the open-source harness and the agent skill package — **not
 - `src/element-resolver.ts` resolves all target forms — `@N` refs, `loc=css:` / `loc=role:` / `loc=href:` locators, `xpath=`, raw CSS — and classifies failures as `transient` (retryable) or `permanent`.
 - `src/page-ref-registry.ts` + `src/page-ledger.ts`: v2 Page refs (`@21`, not `@e21`) are SDK-assigned ids bound to one frame/document/backend node. Their mappings and invalidation persist across rounds; partial snapshots merge by node identity and full snapshots replace the active set. Missing refs require a fresh snapshot. `src/ref-map.ts` + `src/ref-state.ts` retain the v1 native-ref refresh behavior.
 - `src/driver/` — `nav` (tabs, navigation), `pointer` (click/scroll/drag), `keyboard`, `observe` (snapshot/screenshot), `waits`, `files` (upload), `element-ops` (objectId handles), `load`.
-- `src/learning/` — discovery, validation, and execution of site skills from `skills/ego-browser/learnings/<site>/manifest.json` (`runSiteTool`, `runSiteBrowserTool`, `learnContext`).
-- `src/state.ts` is the shared mutable runtime state singleton; `src/env.ts` resolves the agent workspace (`EGO_BROWSER_AGENT_WORKSPACE`, falling back to the skill dir bundled next to the build output, then the repo's `skills/ego-browser`).
+- `src/learning/` — discovery, validation, and execution of site skills from `skill/learnings/<site>/manifest.json` (`runSiteTool`, `runSiteBrowserTool`, `learnContext`).
+- `src/state.ts` is the shared mutable runtime state singleton; `src/env.ts` resolves the agent workspace (`EGO_BROWSER_AGENT_WORKSPACE`, falling back to the guide dir bundled next to the build output, then `package/ego-browser/skill`).
+- `src/skill-guide.ts` + `src/skill-cli.ts` render `ego-browser skill [topic]`: the guide bundled next to the SDK (or `--skill-dir` / `EGO_BROWSER_SKILL_DIR`), its topic index, and an end marker. `npm run check:skill-size` keeps the output below agent truncation limits.
 - `src/help-runtime.ts` parses the built bundle's JSDoc with acorn at runtime to power `help()` — JSDoc on exported helpers is therefore user-facing documentation.
 
 Data flow: `stdin JS` → `runMain()` → `helperContext()` helpers → browser runtime/CDP → snapshot or DOM/AX resolution → optional site tools → `cliLog(...)`.
@@ -41,9 +42,10 @@ Task spaces are isolated browsing contexts with an ownership model (`agent` / `u
 
 - `package/ego-browser/src/` — runtime, helpers, resolver, drivers, learning subsystem.
 - `package/ego-browser/src/**/*.test.mjs` — tests are colocated with the code (there is no separate `test/` directory).
-- `package/ego-browser/scripts/` — `build.mjs` (esbuild per-file → `dist/src`, rollup bundle → `dist/out/index.js`, copies `skills/ego-browser` → `dist/out/ego-browser`), `validate-site-skills.ts`, and the real-browser E2E runner.
-- `skills/ego-browser/` — agent skill package: `SKILL.md` (canonical agent-facing usage guide), `references/install.md`, `scripts/install.sh`.
-- `skills/ego-browser/learnings/` — reusable per-site experience packs (`manifest.json` + `notes/` + `tools/` + `browser-tools/`).
+- `package/ego-browser/scripts/` — `build.mjs` (esbuild per-file → `dist/src`, rollup bundle → `dist/out/index.js`, bundles `src/skill-cli.ts` → `dist/out/skill.js`, copies `skill/` → `dist/out/ego-browser`), `validate-site-skills.ts`, and the real-browser E2E runner.
+- `package/ego-browser/skill/` — versioned usage guide: `GUIDE.md` (canonical agent-facing usage guide), `topics/<name>.md` (situational guides with a `description` frontmatter), `learnings/`.
+- `package/ego-browser/skill/learnings/` — reusable per-site experience packs (`manifest.json` + `notes/` + `tools/` + `browser-tools/`).
+- `skills/ego-browser/` — published entry Skill: `SKILL.md` (points to `ego-browser skill`), `references/install.md`, `scripts/install.sh`. Keep it version-independent.
 
 ## Development Commands
 
@@ -63,7 +65,8 @@ Run from `package/ego-browser/`:
   compatibility helpers keep their original units.
 - Helpers are injected into the script scope, not imported by agent scripts.
 - New v2 APIs go through `public-api-schema.ts`; keep runtime validation,
-  generated reference, architecture, and `SKILL.md` in sync.
+  generated reference, architecture, and `skill/GUIDE.md` in sync.
+- Situational guidance belongs in a new `skill/topics/<name>.md`; keep the main guide within the `check:skill-size` budget.
 - Snapshot refs (`@N`) are short-lived; re-snapshot after navigation or DOM changes and prefer stable `loc=...` values for reuse.
 - Element-resolution failures should use `ElementResolutionError` with an honest `transient`/`permanent` kind — wait loops rely on it.
 - The code prefers the small shared state singleton (`src/state.ts`) over threading connection state through call sites.
