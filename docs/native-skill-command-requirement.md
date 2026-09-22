@@ -70,7 +70,7 @@ Acceptance:
 1. `ego-browser skill` prints a first line starting
    `[ego-browser:skill] ego-browser guide v` and a last line starting
    `[ego-browser:skill] end of guide v`, with the browser closed.
-2. `ego-browser skill windows` prints the Windows topic.
+2. `ego-browser skill clearing-state` prints the clearing-state topic.
    `ego-browser skill missing` exits with status `2` and lists the available
    topics on stderr.
 3. `ego-browser skill --sdk-path <checkout>/package/ego-browser/dist/out/index.js`
