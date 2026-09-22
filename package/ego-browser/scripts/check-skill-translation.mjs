@@ -4,12 +4,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
-const repoRoot = dirname(dirname(packageRoot));
-const canonicalPath = join(repoRoot, "skills/ego-browser/SKILL.md");
-const translationPath = join(
-  repoRoot,
-  "skills/ego-browser/workbench/SKILL.zh.v2.md",
-);
+const canonicalPath = join(packageRoot, "skill/GUIDE.md");
+const translationPath = join(packageRoot, "skill/workbench/GUIDE.zh.md");
 
 let translation;
 try {

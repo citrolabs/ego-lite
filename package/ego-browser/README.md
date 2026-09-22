@@ -37,10 +37,10 @@ Use `-h` or `--help` to print the local CLI usage.
 
 ## Skill workspace
 
-By default the runtime loads agent helpers and site learnings from the sibling skill package:
+By default the runtime loads agent helpers and site learnings from the guide bundled next to the SDK (`dist/out/ego-browser`), built from:
 
 ```text
-../../skills/ego-browser
+skill/
 ```
 
 Override with `EGO_BROWSER_AGENT_WORKSPACE`:
@@ -82,8 +82,8 @@ scripts/
   build.mjs              esbuild bundling
 ```
 
-See `../../skills/ego-browser/SKILL.md` for the agent-facing workflow and
-`../../skills/ego-browser/references/api.md` for the generated v2 API reference.
+See `skill/GUIDE.md` for the agent-facing workflow (printed by `ego-browser skill`)
+and `../../docs/api-reference.md` for the generated v2 API reference.
 The old global helpers remain available as a v1 compatibility surface for
 existing scripts.
 
@@ -110,10 +110,10 @@ existing scripts.
   preserved the requested string byte-for-byte. Business postconditions remain
   explicit Page reads or waits.
 - New public APIs must be added to `public-api-schema.ts`; runtime validation,
-  default `help()`, the generated reference, and the Skill must remain aligned.
+  default `help()`, the generated reference, and the usage guide must remain aligned.
 - Embedded hosts should await the exported `disposeEgoSdk()` hook before
   discarding a Node context; see `../../docs/native-sdk-lifecycle-requirement.md`.
-- Site-specific reusable experience belongs under `skills/ego-browser/learnings/`, not in this package.
+- Site-specific reusable experience belongs under `skill/learnings/`, not in the runtime source.
 
 ## License
 

@@ -11,13 +11,14 @@
     "build": "node scripts/build.mjs",
     "generate:api-docs": "npm run build && node scripts/generate-api-reference.mjs",
     "check:api-docs": "node scripts/generate-api-reference.mjs --check",
+    "check:skill-size": "node scripts/check-skill-size.mjs",
     "check:skill-translation": "node scripts/check-skill-translation.mjs",
     "e2e": "node scripts/run-real-browser-e2e.mjs",
     "prepare": "if [ \"$CI\" = \"true\" ]; then exit 0; fi; cd ../.. && lefthook install",
     "style:check": "prettier --check \"src/**/*.{ts,mjs,js}\" \"scripts/**/*.{ts,mjs,js}\" package.json README.md",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && npm run check:api-docs && npm run check:skill-translation && npm run typecheck && node --test \"src/**/*.test.mjs\"",
-    "validate:site-skills": "npm run build && EGO_BROWSER_AGENT_WORKSPACE=../../skills/ego-browser node dist/scripts/validate-site-skills.js"
+    "test": "npm run build && npm run check:api-docs && npm run check:skill-size && npm run check:skill-translation && npm run typecheck && node --test \"src/**/*.test.mjs\"",
+    "validate:site-skills": "npm run build && EGO_BROWSER_AGENT_WORKSPACE=skill node dist/scripts/validate-site-skills.js"
   },
   "engines": {
     "node": ">=22"

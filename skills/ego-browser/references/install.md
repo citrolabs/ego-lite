@@ -1,6 +1,6 @@
 # Install ego lite
 
-Read this file only when ego lite isn't installed yet, or when the user asks to install ego lite. For day-to-day browser work, go back to `SKILL.md`.
+Read this file when ego lite isn't installed yet, when `ego-browser` does not know the `skill` command, or when the user asks to install ego lite. For day-to-day browser work, run `ego-browser skill` and follow the guide it prints.
 
 The ego-browser skill depends on the ego lite browser: the `ego-browser` command is provided by the ego lite app. Once ego lite is installed and you've completed onboarding, no additional setup is normally needed.
 
@@ -37,6 +37,16 @@ Onboarding is a step the user completes in the GUI, on either platform:
 - Onboarding registers the `ego-browser` command on the PATH.
 
 After the app opens, wait for the user to confirm they've finished onboarding before continuing. On Windows the PATH entry only reaches processes started afterwards, so open a new terminal before checking for the command.
+
+## Update an older ego lite
+
+If `ego-browser` exists but reports that `skill` is an unknown command, the installed ego lite predates the bundled usage guide. Ask the user before updating, then run:
+
+```bash
+ego-browser upgrade
+```
+
+After the update finishes, run `ego-browser skill` again.
 
 ## After installing: confirm `ego-browser` is available
 
@@ -81,11 +91,11 @@ In PowerShell or cmd, where heredoc does not exist:
 ego-browser nodejs -e "console.log('ego-browser ready')"
 ```
 
-Printing `ego-browser ready` means the environment is ready. See the "Run browser scripts" section of `SKILL.md` for the full per-shell rules before writing a real script.
+Printing `ego-browser ready` means the environment is ready. Run `ego-browser skill` for the usage guide, including the per-shell rules, before writing a real script.
 
 ## After that, return to the original task
 
-Once the environment is ready, return to the user's original task and continue with the task space flow in `SKILL.md` — start from `taskSpace(name)` and proceed as usual.
+Once the environment is ready, return to the user's original task: run `ego-browser skill` and follow the guide it prints.
 
 ## Troubleshooting
 

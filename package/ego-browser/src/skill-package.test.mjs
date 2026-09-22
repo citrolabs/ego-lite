@@ -5,21 +5,38 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
+const guideSource = fileURLToPath(new URL("../skill/", import.meta.url));
 const bundledSkill = fileURLToPath(
   new URL("../dist/out/ego-browser/", import.meta.url),
 );
 
-test("the bundled Skill contains only publishable project resources", async () => {
+test("the bundled guide contains only publishable guide resources", async () => {
   assert.deepEqual((await readdir(bundledSkill)).sort(), [
-    "SKILL.md",
+    "GUIDE.md",
     "learnings",
-    "references",
-    "scripts",
+    "topics",
   ]);
   assert.equal(
-    await readFile(join(bundledSkill, "SKILL.md"), "utf8"),
-    await readFile(join(repoRoot, "skills/ego-browser/SKILL.md"), "utf8"),
+    await readFile(join(bundledSkill, "GUIDE.md"), "utf8"),
+    await readFile(join(guideSource, "GUIDE.md"), "utf8"),
   );
+});
+
+test("the guide CLI is bundled next to the SDK", async () => {
+  const outDir = fileURLToPath(new URL("../dist/out/", import.meta.url));
+  assert.ok((await readdir(outDir)).includes("skill.js"));
+});
+
+test("the published Skill is an entry that defers to the bundled guide", async () => {
+  const entryDir = join(repoRoot, "skills/ego-browser");
+  const entry = await readFile(join(entryDir, "SKILL.md"), "utf8");
+
+  assert.deepEqual((await readdir(join(entryDir, "references"))).sort(), [
+    "install.md",
+  ]);
+  assert.match(entry, /^ego-browser skill$/m);
+  assert.match(entry, /\[ego-browser:skill\] end of guide/);
+  assert.doesNotMatch(entry, /taskSpace\(/);
 });
 
 test("project Agent and Codex entries share the canonical Skill", async () => {
