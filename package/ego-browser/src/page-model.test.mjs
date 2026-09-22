@@ -1572,6 +1572,62 @@ test("TaskSpace finish validates every retained label before closing Pages", asy
   });
 });
 
+test("Page reports existing labels when an Agent uses one it never created", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    await openTestPage(task, "https://example.test/one");
+
+    const guessed = task.page("p2");
+    assert.ok(guessed, "task.page returns a handle even for an unknown label");
+    await assert.rejects(
+      () => guessed.url(),
+      (error) => {
+        assert.match(error.message, /^page label not found: p2\. /);
+        assert.match(error.message, /Managed Pages in task space 7: p1\./);
+        assert.match(error.message, /await task\.newPage\(\)/);
+        return true;
+      },
+    );
+  });
+});
+
+test("Page reports a finished task when used after finish in the same round", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a", {
+      async completeTaskSpace() {},
+    });
+    const page = await openTestPage(task, "https://example.test/one");
+    await task.finish({ keep: ["p1"] });
+
+    await assert.rejects(
+      () => page.url(),
+      /^Error: page label not found: p1\. Task space 7 already finished/,
+    );
+  });
+});
+
+test("Page reports user ownership when a later round reuses a finished task's label", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a", {
+      async completeTaskSpace() {},
+    });
+    await openTestPage(task, "https://example.test/one");
+    await task.finish({ keep: ["p1"] });
+
+    const nextRound = createTaskSpaceHandle(
+      { id: 7, name: "research", ownership: "user" },
+      {
+        ledger: new PageLedgerStore({ rootDir: fixture.rootDir }),
+        ...fixture.services,
+      },
+    );
+    await assert.rejects(
+      () => nextRound.page("p1").url(),
+      /^Error: page label not found: p1\. Task space 7 is owned by the user/,
+    );
+  });
+});
+
 test("handoff preserves user-created tabs as unknown and captures the active user page", async () => {
   await withFixture(async (fixture) => {
     const firstRound = taskForRound(fixture, "round-a", {

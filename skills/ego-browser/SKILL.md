@@ -148,6 +148,11 @@ reports the configured Page budget when it is reached.
 `task.newPage()` creates another blank Page when multiple Pages must stay open.
 Navigate it separately with `page.goto()`.
 
+`task.page(label)` only refers to a Page that already exists; it never creates
+one, and its handle is always truthy, so `task.page("p2") || await task.newPage()`
+and `if (!page)` do not detect a missing label. Use labels printed by earlier
+output or by `await task.pages()`, and call `await task.newPage()` to create one.
+
 `await task.pages()` returns managed Pages. `await task.tabs()` returns every tab in the
 space as `{ label?, page, targetId, title, url, active, openedBy }`. A tab
 without a label is unmanaged; adopt it before operating:
@@ -493,6 +498,10 @@ const userPage = task.userPage();
 When the task succeeds, close the TaskSpace by default with
 `await task.finish({ keep: [] })`. Call `finish()` exactly once and wait for it
 to resolve before reporting completion.
+
+`finish()` ends the task and all of its Page labels, including Pages kept for the
+user. Put it last in the final round only; do not operate any Page after it in
+the same script or in later rounds.
 
 Keeping Pages is a rare exception: retain only necessary Pages when the user
 explicitly asks, or when the result must remain in the browser for the user to
