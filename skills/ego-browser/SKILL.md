@@ -72,6 +72,16 @@ same `.mjs` file directly:
 ego-browser nodejs < C:\Users\<name>\ego\task.mjs
 ```
 
+### Later rounds with a script file
+
+Each run is a new process, and earlier rounds have already run. Write a new,
+complete file for every round (`round-01.mjs`, `round-02.mjs`, ...) instead of
+editing the previous one, which would replay old steps. Keep one goal's files in
+a new directory named for the goal plus the date and time, such as
+`C:/Users/<name>/ego/laptop-prices-20260922-1405/`, and only run files written
+in this conversation. Create files with your file tool, not PowerShell
+`Set-Content`, `Out-File`, or `>`, which write ANSI or UTF-16 on 5.1.
+
 ### When the script fails to parse
 
 `SyntaxError: await is only valid in async functions and the top level bodies of
