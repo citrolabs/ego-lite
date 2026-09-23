@@ -1,0 +1,41 @@
+name: Windows Host
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-host.yml"
+      - "package/ego-windows-host/**"
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - ".github/workflows/windows-host.yml"
+      - "package/ego-windows-host/**"
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # --ignore-scripts: installing the file:../ego-browser dependency would
+      # otherwise run ego-browser's prepare script (lefthook install), which is
+      # unnecessary in CI and not yet Windows-safe (see #148).
+      - name: Install dependencies
+        working-directory: package/ego-windows-host
+        run: npm ci --ignore-scripts
+
+      - name: Run tests
+        working-directory: package/ego-windows-host
+        run: npm test
