@@ -74,43 +74,13 @@ ego-browser nodejs < C:\Users\<name>\ego\task.mjs
 
 ### Later rounds with a script file
 
-A script file holds one round, not the whole task history. Earlier rounds have
-already run, so do not edit the previous file to append the next steps: write a
-new, complete file for every round and run it the same way.
-
-Keep the files for one user goal in a directory of their own, named for that
-goal plus the current date and time, such as
-`C:/Users/<name>/ego/laptop-prices-20260922-1405/`. Never reuse a directory or
-file from another conversation or goal, and only run a file you wrote in this
-conversation; an older file with the same name runs its steps against its own
-task space.
-
-```js
-// C:/Users/<name>/ego/laptop-prices-20260922-1405/round-01.mjs
-const task = await taskSpace("compare laptop prices");
-await task.page("p1").goto("https://example.com/laptops");
-console.log({ taskSpaceId: task.spaceId });
-console.log(await task.page("p1").snapshot());
-```
-
-```js
-// C:/Users/<name>/ego/laptop-prices-20260922-1405/round-02.mjs
-// Resume the space id printed by round 01.
-const task = await taskSpace(7);
-const page = task.page("p1");
-await page.click("@12", { label: "open first result" });
-console.log(await page.snapshot());
-```
-
-```powershell
-ego-browser nodejs -e "await import('file:///C:/Users/<name>/ego/laptop-prices-20260922-1405/round-02.mjs')"
-```
-
-Create each file with your file-creation tool, which writes UTF-8. Do not write
-it with PowerShell `Set-Content`, `Out-File`, or `>`: Windows PowerShell 5.1
-writes ANSI or UTF-16 by default. A new file per round also keeps stale steps
-from an earlier round, such as actions after `task.finish()`, out of the next
-run.
+Each run is a new process, and earlier rounds have already run. Write a new,
+complete file for every round (`round-01.mjs`, `round-02.mjs`, ...) instead of
+editing the previous one, which would replay old steps. Keep one goal's files in
+a new directory named for the goal plus the date and time, such as
+`C:/Users/<name>/ego/laptop-prices-20260922-1405/`, and only run files written
+in this conversation. Create files with your file tool, not PowerShell
+`Set-Content`, `Out-File`, or `>`, which write ANSI or UTF-16 on 5.1.
 
 ### When the script fails to parse
 
