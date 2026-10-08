@@ -5,8 +5,9 @@ date: "2026-10-08"
 
 # ego-browser
 
-Use `help()` for signatures and uncommon options of APIs named below. For
-installation or connection problems, read `references/install.md` in the
+Call `help()` or `help("page.click")` to print signatures and uncommon options
+of APIs named below; it prints by itself, so do not wrap it in `console.log`.
+For installation or connection problems, read `references/install.md` in the
 ego-browser Skill directory.
 
 ## Run browser scripts

@@ -281,7 +281,16 @@ test("cli e2e exposes the unified helperContext surface (help present, internals
   );
 
   assert.equal(result.exitCode, 0);
-  assert.deepEqual(firstJsonLine(result.stdout), {
+  const lines = result.stdout.trim().split(/\r?\n/);
+  assert.deepEqual(lines.slice(0, -1), [
+    "TaskSpace.newPage",
+    "",
+    "Create and durably label a blank Page.",
+    "",
+    "await task.newPage()",
+    'Legacy helper hidden from default help: click. Use help("legacy", "click").',
+  ]);
+  assert.deepEqual(JSON.parse(lines.at(-1)), {
     helpType: "function",
     publicHelp:
       "TaskSpace.newPage\n\nCreate and durably label a blank Page.\n\nawait task.newPage()",

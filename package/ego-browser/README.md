@@ -29,7 +29,7 @@ Local invocation without the browser (for debugging the helper bundle itself) re
 
 ```bash
 node dist/out/index.js <<'JS'
-console.log(await help())
+help()
 JS
 ```
 

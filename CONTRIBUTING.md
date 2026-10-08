@@ -58,7 +58,7 @@ Pass the absolute bundle path to the installed CLI:
 
 ```bash
 ego-browser nodejs --sdk-path "$PWD/dist/out/index.js" <<'EOF'
-console.log(help());
+help();
 EOF
 ```
 
@@ -72,7 +72,7 @@ standalone CLI reads JavaScript directly from stdin:
 
 ```bash
 node dist/out/index.js <<'EOF'
-console.log(await help());
+help();
 EOF
 ```
 
@@ -103,7 +103,7 @@ the SDK after every edit:
 ```bash
 npm run build
 ego-browser nodejs <<'EOF'
-console.log(help());
+help();
 EOF
 ```
 
@@ -115,7 +115,7 @@ the selected link or explicitly load the debug entry:
 readlink "$HOME/Library/Application Support/Citro Labs/debug/index.js"
 ego-browser nodejs \
   --sdk-path "$HOME/Library/Application Support/Citro Labs/debug/index.js" <<'EOF'
-console.log(help());
+help();
 EOF
 ```
 

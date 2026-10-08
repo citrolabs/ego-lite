@@ -88,6 +88,31 @@ test("a clean run flushes buffered cliLog output in order", async () => {
   assert.equal(result.stdout, "one\ntwo\n");
 });
 
+test("help() prints its text without an explicit log", async () => {
+  const result = await runScript(`help("TaskSpace.newPage");`);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(
+    result.stdout,
+    "TaskSpace.newPage\n\nCreate and durably label a blank Page.\n\nawait task.newPage()\n",
+  );
+});
+
+test("the embedded SDK prints help() through the host cliLog and returns the text", async () => {
+  const { installEgoSdk } = await import("../dist/src/index.js");
+  const lines = [];
+  const target = {};
+  installEgoSdk(target, { cliLog: (line) => lines.push(line) });
+
+  const text = target.help("TaskSpace.newPage");
+
+  assert.equal(
+    text,
+    "TaskSpace.newPage\n\nCreate and durably label a blank Page.\n\nawait task.newPage()",
+  );
+  assert.deepEqual(lines, [text]);
+});
+
 test("round console methods share the buffered output channel", async () => {
   const result = await runScript(`
     console.log("plain", { value: 1 });

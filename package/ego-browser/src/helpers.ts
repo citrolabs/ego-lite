@@ -7,6 +7,7 @@ import { invokeEgo, probeAgentControl } from "./ego-errors.js";
 import { help as helpRuntime, formatHelp } from "./help-runtime.js";
 import { validatePublicApiOptions } from "./public-api-schema.js";
 import { createStaleEgoBrowserGuard } from "./skill-migration.js";
+import { bufferOutput } from "./output-sink.js";
 import { cdp, decodeUnserializableJsValue, js } from "./cdp-eval.js";
 import * as pointer from "./driver/pointer.js";
 import * as keyboard from "./driver/keyboard.js";
@@ -668,7 +669,12 @@ export async function learnContext(url = undefined) {
   });
 }
 
-export function helperContext(extra: any = {}) {
+export function helperContext(
+  extra: any = {},
+  {
+    printHelp = (text: string) => bufferOutput(`${text}\n`),
+  }: { printHelp?: (text: string) => void } = {},
+) {
   const { newTab: _newTab, ...publicNav } = nav;
   const all = {
     ...pointer,
@@ -704,11 +710,18 @@ export function helperContext(extra: any = {}) {
     // The formal 1.3 Skill starts through egoBrowser.*. Keep a narrow guard so
     // stale conversations get a recovery instruction instead of a ReferenceError.
     egoBrowser: createStaleEgoBrowserGuard(),
+    // help() prints its text so `ego-browser nodejs -e 'help()'` shows it, and
+    // still returns the text for scripts that already log or inspect it.
     help: (...names: string[]) => {
       const result = helpRuntime(all, ...names);
-      if (typeof result === "string") return result;
-      if (Array.isArray(result)) return result.map(formatHelp).join("\n\n");
-      return formatHelp(result);
+      const text =
+        typeof result === "string"
+          ? result
+          : Array.isArray(result)
+            ? result.map(formatHelp).join("\n\n")
+            : formatHelp(result);
+      printHelp(text);
+      return text;
     },
   };
 }
