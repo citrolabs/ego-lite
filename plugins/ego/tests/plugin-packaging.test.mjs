@@ -344,7 +344,7 @@ function assertArtifacts(root, output, name, version, skillName) {
         apply({ skills: { registerProvider: create => { provider = create(); } } });
         const [candidate] = await provider.list();
         const skill = await provider.get(candidate);
-        assert.match(skill.content, /await taskSpace/);
+        assert.match(skill.content, /^ego-browser skill$/m);
         assert.ok(existsSync(skill.path));
       `,
           ],

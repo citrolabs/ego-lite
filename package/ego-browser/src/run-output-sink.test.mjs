@@ -160,7 +160,7 @@ test("a swallowed 1.3 skill mismatch discards business output and explains recov
 
   assert.equal(result.exitCode, 0);
   assert.match(result.stdout, /\[ego-browser:skill-stale\]/);
-  assert.match(result.stdout, /re-read the installed ego-browser skill/i);
+  assert.match(result.stdout, /Run `ego-browser skill`/);
   assert.match(result.stdout, /taskSpace\(nameOrId\)/);
   assert.doesNotMatch(result.stdout, /before stale|caught:|after stale/);
   assert.equal(result.stdout.match(/\[ego-browser:skill-stale\]/g).length, 1);

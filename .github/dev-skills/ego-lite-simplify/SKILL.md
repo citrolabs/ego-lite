@@ -15,7 +15,7 @@ Reduce concepts and maintenance surface, not just line count. Prefer a few well-
 4. Identify the relevant boundary before judging code:
    - `globalThis.ego` is supplied by the closed-source app; `docs/native-bindings-api.md` documents that external contract.
    - The runtime has direct CLI and embedded SDK startup paths.
-   - Public agent APIs must stay aligned across implementation, tests, `help()`, and `skills/ego-browser/SKILL.md`.
+   - Public agent APIs must stay aligned across implementation, tests, `help()`, and `package/ego-browser/skill-body/SKILL.md`.
    - Browser state can outlive the short Node.js process.
 
 ## Find strong candidates
@@ -39,8 +39,8 @@ Use `rg` first. Search exact symbols, method forms, event names, configuration k
 
 Classify evidence as:
 
-- **Production:** `package/ego-browser/src`, runtime scripts, build and loader paths, and shipped site learnings.
-- **Contract:** public JSDoc consumed by `help()`, `skills/ego-browser/SKILL.md`, architecture documents, and native binding behavior.
+- **Production:** `package/ego-browser/src`, runtime scripts, build and loader paths.
+- **Contract:** public JSDoc consumed by `help()`, `package/ego-browser/skill-body/SKILL.md`, architecture documents, and native binding behavior.
 - **Non-production:** tests, fixtures, snapshots, comments, and historical or draft documents.
 - **Ambiguous:** examples and development scripts; inspect how they are invoked before deciding.
 
@@ -68,6 +68,6 @@ Follow spec-driven TDD when changing code:
 4. Keep comments in English and explain only non-obvious constraints.
 5. Prefer deleting a state or transition over adding another abstraction around it.
 
-Run the narrowest relevant checks first. From `package/ego-browser/`, use `npm test` for runtime changes, `npm run e2e` for real task-space/browser behavior, and `npm run validate:site-skills` for learning changes. Finish with `git diff --check` and report any verification that could not run.
+Run the narrowest relevant checks first. From `package/ego-browser/`, use `npm test` for runtime changes, `npm run e2e` for real task-space/browser behavior, and `npm --prefix ../../plugins/ego test` for Skill or plugin changes. Finish with `git diff --check` and report any verification that could not run.
 
 Never edit generated build output as the source of a simplification. Never remove a defensive path until its trust or lifecycle boundary is understood.

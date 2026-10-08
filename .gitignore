@@ -80,10 +80,10 @@ task/
 test-e2e/
 test/
 # Translated skill (local only)
-skills/ego-browser/SKILL.zh.md
+package/ego-browser/skill-body/SKILL.zh.md
 
 # Local documentation workbench and research notes
-skills/ego-browser/workbench/
+package/ego-browser/skill-body/workbench/
 
 # Local Chinese documentation
 docs/zh/

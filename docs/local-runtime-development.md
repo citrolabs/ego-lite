@@ -43,7 +43,7 @@ EOF
 ```
 
 For browser automation, keep the same command and write the heredoc using the
-API documented by the current checkout in `skills/ego-browser/SKILL.md`.
+API documented by the current checkout in `package/ego-browser/skill-body/SKILL.md`.
 
 Every manual invocation needs `--sdk-path`; it is not a persistent setting.
 Do not use `npm link` or replace files inside the Ego Lite application bundle.
@@ -73,10 +73,11 @@ debugging session.
 
 ## Keep the Skill aligned
 
-The Skill describes the APIs implemented by the runtime. When an agent is used,
-load `skills/ego-browser/SKILL.md` from the same checkout as the bundle. A Skill
-from another release may generate helper calls that the local runtime does not
-support.
+The usage guide describes the APIs implemented by the runtime. `ego-browser skill`
+prints the guide next to the SDK it loads, so an agent that runs it with the same
+`--sdk-path` (or the debug override) reads the guide from the same checkout as
+the bundle. A guide from another release may generate helper calls that the
+local runtime does not support.
 
 ## Troubleshooting
 

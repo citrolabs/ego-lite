@@ -37,25 +37,7 @@ Use `-h` or `--help` to print the local CLI usage.
 
 ## Skill workspace
 
-By default the runtime loads agent helpers and site learnings from the sibling skill package:
-
-```text
-../../skills/ego-browser
-```
-
-Override with `EGO_BROWSER_AGENT_WORKSPACE`:
-
-```bash
-EGO_BROWSER_AGENT_WORKSPACE=/path/to/skill ego-browser nodejs <<'EOF'
-cliLog(await siteSkills())
-EOF
-```
-
-Site learnings under `agentWorkspace()/learnings/<site>/` are always active and read on every helper call. Validate them with:
-
-```bash
-npm run validate:site-skills
-```
+The usage guide lives in `skill-body/SKILL.md`. The build renders it to `dist/out/ego-browser/SKILL.md` next to the bundle, where `ego-browser skill` prints it. The runtime loads optional `agent_helpers.js` and `.env` from that directory; override it with `EGO_BROWSER_AGENT_WORKSPACE`.
 
 ## Source layout
 
@@ -77,13 +59,12 @@ src/
     files.ts             uploadFile
   http.ts                serverFetch, browserFetch
   cdp-eval.ts            cdp() and js() raw eval
-  learning/              site-learnings discovery and manifest validation
 scripts/
   build.mjs              esbuild bundling
 ```
 
-See `../../skills/ego-browser/SKILL.md` for the agent-facing workflow and
-`../../skills/ego-browser/references/api.md` for the generated v2 API reference.
+See `skill-body/SKILL.md` for the agent-facing workflow and `help()` for the v2
+API reference.
 The old global helpers remain available as a v1 compatibility surface for
 existing scripts.
 
@@ -110,10 +91,9 @@ existing scripts.
   preserved the requested string byte-for-byte. Business postconditions remain
   explicit Page reads or waits.
 - New public APIs must be added to `public-api-schema.ts`; runtime validation,
-  default `help()`, the generated reference, and the Skill must remain aligned.
+  default `help()`, and the usage guide must remain aligned.
 - Embedded hosts should await the exported `disposeEgoSdk()` hook before
   discarding a Node context; see `../../docs/native-sdk-lifecycle-requirement.md`.
-- Site-specific reusable experience belongs under `skills/ego-browser/learnings/`, not in this package.
 
 ## License
 
