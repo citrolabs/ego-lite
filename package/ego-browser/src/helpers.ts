@@ -21,6 +21,13 @@ import {
   initializeTaskSpaceHandle,
   rollbackCreatedTaskSpace,
 } from "./page-model.js";
+import {
+  loadBrowserToolSource,
+  loadLearnedContext,
+  runNodeSiteTool,
+  siteSkillsForUrl as siteSkillsForUrlCore,
+  wrapBrowserTool,
+} from "./learning/index.js";
 
 export { NAME } from "./state.js";
 export { cdp, js } from "./cdp-eval.js";
@@ -605,6 +612,62 @@ function findMatchingTaskSpace(spaces, nameOrId) {
   return undefined;
 }
 
+export async function siteSkillsForUrl(url) {
+  return siteSkillsForUrlCore(url, {
+    agentWorkspace: state.agentWorkspace(),
+  });
+}
+
+/**
+ * Return site skills matching a URL, or the current page URL when omitted.
+ * @param {string} [url] URL to inspect for site skills.
+ * @returns {Promise<Array<object|string>>}
+ */
+export async function siteSkills(url = undefined) {
+  const targetUrl = url ?? (await nav.pageInfo()).url ?? "";
+  return siteSkillsForUrl(targetUrl);
+}
+
+/**
+ * Run a learned Node site tool with the helper context.
+ * @param {string} siteId Site identifier.
+ * @param {string} toolName Tool name within the site.
+ * @param {object} [args] Tool arguments.
+ * @returns {Promise<any>} Tool result.
+ */
+export async function runSiteTool(siteId, toolName, args: any = {}) {
+  return runNodeSiteTool(siteId, toolName, args, helperContext(), {
+    agentWorkspace: state.agentWorkspace(),
+  });
+}
+
+/**
+ * Run a learned browser-side site tool in the current page.
+ * @param {string} siteId Site identifier.
+ * @param {string} toolName Tool name within the site.
+ * @param {object} [args] Tool arguments.
+ * @returns {Promise<any>} Browser tool result.
+ */
+export async function runSiteBrowserTool(siteId, toolName, args: any = {}) {
+  const source = await loadBrowserToolSource(siteId, toolName, {
+    agentWorkspace: state.agentWorkspace(),
+  });
+  return js(wrapBrowserTool(source, args));
+}
+
+/**
+ * Load learned context for the current page or a given URL.
+ * Returns accumulated site knowledge: notes content, available tools, usage examples.
+ * @param {string} [url] URL to inspect. Defaults to current page.
+ * @returns {Promise<object>} Learned context with knowledge and tool signatures.
+ */
+export async function learnContext(url = undefined) {
+  const targetUrl = url ?? (await nav.pageInfo()).url ?? "";
+  return loadLearnedContext(targetUrl, {
+    agentWorkspace: state.agentWorkspace(),
+  });
+}
+
 export function helperContext(extra: any = {}) {
   const { newTab: _newTab, ...publicNav } = nav;
   const all = {
@@ -618,6 +681,11 @@ export function helperContext(extra: any = {}) {
     js,
     serverFetch,
     browserFetch,
+    siteSkills,
+    siteSkillsForUrl,
+    runSiteTool,
+    runSiteBrowserTool,
+    learnContext,
     profiles,
     listTaskSpaces,
     switchTaskSpace,

@@ -39,7 +39,7 @@ Use `rg` first. Search exact symbols, method forms, event names, configuration k
 
 Classify evidence as:
 
-- **Production:** `package/ego-browser/src`, runtime scripts, build and loader paths.
+- **Production:** `package/ego-browser/src`, runtime scripts, build and loader paths, and shipped site learnings.
 - **Contract:** public JSDoc consumed by `help()`, `package/ego-browser/skill-body/SKILL.md`, architecture documents, and native binding behavior.
 - **Non-production:** tests, fixtures, snapshots, comments, and historical or draft documents.
 - **Ambiguous:** examples and development scripts; inspect how they are invoked before deciding.
@@ -68,6 +68,6 @@ Follow spec-driven TDD when changing code:
 4. Keep comments in English and explain only non-obvious constraints.
 5. Prefer deleting a state or transition over adding another abstraction around it.
 
-Run the narrowest relevant checks first. From `package/ego-browser/`, use `npm test` for runtime changes, `npm run e2e` for real task-space/browser behavior, and `npm --prefix ../../plugins/ego test` for Skill or plugin changes. Finish with `git diff --check` and report any verification that could not run.
+Run the narrowest relevant checks first. From `package/ego-browser/`, use `npm test` for runtime changes, `npm run e2e` for real task-space/browser behavior, and `npm run validate:site-skills` for learning changes. Finish with `git diff --check` and report any verification that could not run.
 
 Never edit generated build output as the source of a simplification. Never remove a defensive path until its trust or lifecycle boundary is understood.

@@ -38,6 +38,7 @@ jobs:
       - name: Test agent plugin
         working-directory: plugins/ego
         run: npm test
+      - run: npm run validate:site-skills
       - name: Archive release payload
         if: env.SHOULD_RELEASE == 'true'
         run: tar -czf dist/ego-browser-release-payload.tar.gz -C dist/out .

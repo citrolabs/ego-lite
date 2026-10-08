@@ -22,7 +22,8 @@ must implement. Everything else lives in this repository.
 dist/out/
 ├── index.js                     SDK bundle
 ├── ego-browser/
-│   └── SKILL.md                 usage guide printed by `ego-browser skill`
+│   ├── SKILL.md                 usage guide printed by `ego-browser skill`
+│   └── learnings/               site learnings the SDK reads at runtime
 └── agent-skills/
     └── ego-browser/             entry Skill to install into ~/.agents/skills/ego-browser
         ├── SKILL.md
@@ -32,8 +33,8 @@ dist/out/
         └── assets/
 ```
 
-Ship `dist/out/` as one unit inside the app, keeping `ego-browser/SKILL.md`
-next to `index.js`.
+Ship `dist/out/` as one unit inside the app, keeping `ego-browser/` next to
+`index.js`.
 
 ## 1. Add the `ego-browser skill` subcommand
 

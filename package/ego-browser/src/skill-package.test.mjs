@@ -16,7 +16,10 @@ test("the bundled usage guide is the source guide between version and end marker
   const version = /^version: "([^"]+)"$/m.exec(source)[1];
   const lines = bundled.trimEnd().split("\n");
 
-  assert.deepEqual(await readdir(join(outDir, "ego-browser")), ["SKILL.md"]);
+  assert.deepEqual((await readdir(join(outDir, "ego-browser"))).sort(), [
+    "SKILL.md",
+    "learnings",
+  ]);
   assert.equal(
     lines[0],
     `[ego-browser:skill] ego-browser usage guide v${version}`,

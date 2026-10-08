@@ -35,15 +35,15 @@ Local dependency installation also installs the Git hooks configured in
 | Output                  | Purpose                                                                                                                    |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `dist/out/index.js`     | The single-file ESM SDK loaded by the ego lite CLI or embedded host. Use this file for browser debugging and distribution. |
-| `dist/out/ego-browser/` | The matching usage guide `SKILL.md`, printed by `ego-browser skill`.                                                       |
+| `dist/out/ego-browser/` | The matching usage guide `SKILL.md`, printed by `ego-browser skill`, and the site `learnings/`.                            |
 | `dist/out/agent-skills/` | The entry Skill the browser installs into `~/.agents/skills/ego-browser`.                                                 |
 | `dist/src/`             | Compiled runtime modules used by the repository's unit tests.                                                              |
-| `dist/scripts/`         | Compiled TypeScript maintenance scripts.                                                                                   |
+| `dist/scripts/`         | Compiled TypeScript maintenance scripts, including the site-learning validator.                                            |
 
 The release payload is the contents of `dist/out/`: `index.js`, the adjacent
-`ego-browser/` guide, and `agent-skills/`. Keep them together when copying a
-standalone payload so `ego-browser skill` prints the guide that matches the SDK.
-See [the `ego-browser skill` contract](docs/ego-browser-skill-command.md). `dist/src/index.js` is not the
+`ego-browser/` guide and learnings, and `agent-skills/`. Keep them together when
+copying a standalone payload so `ego-browser skill` prints the guide that matches
+the SDK. See [the `ego-browser skill` contract](docs/ego-browser-skill-command.md). `dist/src/index.js` is not the
 single-file release entry point.
 
 Edit source files under `src/`, `scripts/`, `skill-body/`, or `skills/ego-browser/`, then rebuild.
@@ -144,6 +144,7 @@ For additional CLI setup and troubleshooting, see
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `npm test`                     | Builds the SDK, checks any local Skill translation, typechecks, then runs `src/**/*.test.mjs` with Node's test runner.                                 |
 | `npm run style:check`          | Checks formatting of runtime source, build scripts, and package documentation.                                                                         |
+| `npm run validate:site-skills` | Builds and validates the site-learning packs. Run this when changing their manifests, tools, notes, or validation code.                                |
 | `npm run e2e`                  | Builds the current checkout and runs the complete real-browser suite with its SDK.                                                                     |
 
 Tests live next to the runtime source and use `node:assert/strict`, injected
@@ -169,7 +170,7 @@ ego lite CLI explicitly.
 | `package/ego-browser/src/element-resolver.ts`, `page-ref-registry.ts`, `page-ledger.ts` | Element resolution and durable Page/ref identity.                                      |
 | `package/ego-browser/src/driver/`                                                       | Browser action, input, observation, and wait implementations.                          |
 | `package/ego-browser/scripts/real-browser-e2e/`                                         | Real-browser fixtures and regression cases.                                            |
-| `package/ego-browser/skill-body/SKILL.md`                                               | The canonical usage guide printed by `ego-browser skill`.                              |
+| `package/ego-browser/skill-body/`                                                       | The canonical usage guide printed by `ego-browser skill`, and site learnings.          |
 | `skills/ego-browser/`                                                                   | The thin entry Skill, installation guide, and installation script.                     |
 
 Keep changes focused and match the surrounding style. Runtime code uses ESM,
@@ -178,6 +179,10 @@ honestly as transient or permanent because retry behavior depends on them.
 
 When changing a public API, update its schema, implementation, regression tests,
 and the usage guide together.
+
+Keep reusable site behavior in `package/ego-browser/skill-body/learnings/<site>/`. Start from
+an existing pack, declare its tools in `manifest.json`, and use stable URLs and
+selectors. Do not put credentials or one-off task history in learning packs.
 
 ## Submit a pull request
 
@@ -200,7 +205,7 @@ check is inapplicable, exclude only `branch-up-to-date` with
 
 [CI](.github/workflows/ci.yml) runs on pull requests, pushes to `dev` and `main`,
 and version tags. It installs dependencies, checks formatting and dependency
-vulnerabilities, and runs `npm test`. The real-browser
+vulnerabilities, runs `npm test`, and validates site learnings. The real-browser
 E2E suite is a local gate and is not run by this GitHub-hosted workflow.
 
 The current release behavior is:

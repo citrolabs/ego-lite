@@ -37,7 +37,25 @@ Use `-h` or `--help` to print the local CLI usage.
 
 ## Skill workspace
 
-The usage guide lives in `skill-body/SKILL.md`. The build renders it to `dist/out/ego-browser/SKILL.md` next to the bundle, where `ego-browser skill` prints it. The runtime loads optional `agent_helpers.js` and `.env` from that directory; override it with `EGO_BROWSER_AGENT_WORKSPACE`.
+The usage guide and site learnings live in `skill-body/`. The build renders the guide to `dist/out/ego-browser/SKILL.md`, where `ego-browser skill` prints it, and copies `learnings/` next to it. By default the runtime loads agent helpers and site learnings from that directory:
+
+```text
+dist/out/ego-browser
+```
+
+Override with `EGO_BROWSER_AGENT_WORKSPACE`:
+
+```bash
+EGO_BROWSER_AGENT_WORKSPACE=/path/to/skill ego-browser nodejs <<'EOF'
+cliLog(await siteSkills())
+EOF
+```
+
+Site learnings under `agentWorkspace()/learnings/<site>/` are always active and read on every helper call. Validate them with:
+
+```bash
+npm run validate:site-skills
+```
 
 ## Source layout
 
@@ -59,6 +77,7 @@ src/
     files.ts             uploadFile
   http.ts                serverFetch, browserFetch
   cdp-eval.ts            cdp() and js() raw eval
+  learning/              site-learnings discovery and manifest validation
 scripts/
   build.mjs              esbuild bundling
 ```
@@ -94,6 +113,7 @@ existing scripts.
   default `help()`, and the usage guide must remain aligned.
 - Embedded hosts should await the exported `disposeEgoSdk()` hook before
   discarding a Node context; see `../../docs/native-sdk-lifecycle-requirement.md`.
+- Site-specific reusable experience belongs under `skill-body/learnings/`, not in the runtime source.
 
 ## License
 
