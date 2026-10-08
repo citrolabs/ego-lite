@@ -22,15 +22,15 @@ must implement. Everything else lives in this repository.
 dist/out/
 ├── index.js                     SDK bundle
 ├── ego-browser/
-│   ├── SKILL.md                 usage guide printed by `ego-browser skill`
-│   └── learnings/               site learnings the SDK reads at runtime
+│   └── SKILL.md                 usage guide printed by `ego-browser skill`
 └── agent-skills/
     └── ego-browser/             entry Skill to install into ~/.agents/skills/ego-browser
         ├── SKILL.md
         ├── references/
         ├── scripts/
         ├── agents/
-        └── assets/
+        ├── assets/
+        └── learnings/           site learnings; the SDK reads this bundled copy
 ```
 
 Ship `dist/out/` as one unit inside the app, keeping `ego-browser/` next to
@@ -60,9 +60,9 @@ Ship `dist/out/` as one unit inside the app, keeping `ego-browser/` next to
 
 Errors:
 
-| Case | Behavior |
-| --- | --- |
-| Any extra argument, e.g. `ego-browser skill foo` | Print usage to stderr, exit non-zero |
+| Case                                                    | Behavior                                                                                     |
+| ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| Any extra argument, e.g. `ego-browser skill foo`        | Print usage to stderr, exit non-zero                                                         |
 | `ego-browser/SKILL.md` missing next to the resolved SDK | Print the path that was checked to stderr, exit non-zero; do not fall back to another source |
 
 Also list `skill` in `ego-browser help`, e.g. "Print the usage guide for this
@@ -76,11 +76,11 @@ to run `ego-browser upgrade`.
 
 On every launch, check `~/.agents/skills/ego-browser`:
 
-| Current state | Action |
-| --- | --- |
-| Missing | Copy `agent-skills/ego-browser/` there as real files |
+| Current state                                                              | Action                                                                                             |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Missing                                                                    | Copy `agent-skills/ego-browser/` there as real files                                               |
 | A symlink the browser created earlier (to `~/.local/share/ego/ego-skills`) | Replace it with a copy of `agent-skills/ego-browser/`, then delete `~/.local/share/ego/ego-skills` |
-| Anything else (installed by the user or a package manager) | Leave it untouched |
+| Anything else (installed by the user or a package manager)                 | Leave it untouched                                                                                 |
 
 Stop extracting the full Skill to `~/.local/share/ego/ego-skills`. After the
 entry Skill is in place, the browser never writes `~/.agents/skills` again;

@@ -23,12 +23,11 @@ const distDir = join(root, "dist");
 const outDir = join(distDir, "out");
 const bundledCliDir = outDir;
 const bundledCli = join(bundledCliDir, "index.js");
-// The usage guide printed by `ego-browser skill` and the site learnings the
-// runtime reads next to the bundle, both versioned with this SDK.
+// The usage guide printed by `ego-browser skill`, versioned with this SDK.
 const guideSource = join(root, "skill-body", "SKILL.md");
-const learningsSource = join(root, "skill-body", "learnings");
 const bundledGuideDir = join(outDir, "ego-browser");
-// The thin entry Skill the browser installs into ~/.agents/skills/ego-browser.
+// The entry Skill the browser installs into ~/.agents/skills/ego-browser. It
+// carries the site learnings, which the runtime also reads from this copy.
 const entrySkillSourceDir = join(repoRoot, "skills", "ego-browser");
 const bundledEntrySkillDir = join(outDir, "agent-skills", "ego-browser");
 const entrySkillEntries = [
@@ -37,6 +36,7 @@ const entrySkillEntries = [
   "scripts",
   "agents",
   "assets",
+  "learnings",
 ];
 // Claude Code keeps 30,000 characters of command output; leave headroom.
 const maxGuideLength = 25_000;
@@ -100,9 +100,6 @@ try {
     join(bundledGuideDir, "SKILL.md"),
     renderGuide(await readFile(guideSource, "utf8")),
   );
-  await cp(learningsSource, join(bundledGuideDir, "learnings"), {
-    recursive: true,
-  });
   for (const entry of entrySkillEntries) {
     await cp(
       join(entrySkillSourceDir, entry),

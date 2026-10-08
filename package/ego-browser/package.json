@@ -15,7 +15,7 @@
     "style:check": "prettier --check \"src/**/*.{ts,mjs,js}\" \"scripts/**/*.{ts,mjs,js}\" package.json README.md",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && npm run check:skill-translation && npm run typecheck && node --test \"src/**/*.test.mjs\"",
-    "validate:site-skills": "npm run build && EGO_BROWSER_AGENT_WORKSPACE=skill-body node dist/scripts/validate-site-skills.js"
+    "validate:site-skills": "npm run build && EGO_BROWSER_AGENT_WORKSPACE=../../skills/ego-browser node dist/scripts/validate-site-skills.js"
   },
   "engines": {
     "node": ">=22"

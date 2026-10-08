@@ -20,8 +20,8 @@ This repo contains the open-source harness and the agent skill package — **not
 - `src/element-resolver.ts` resolves all target forms — `@N` refs, `loc=css:` / `loc=role:` / `loc=href:` locators, `xpath=`, raw CSS — and classifies failures as `transient` (retryable) or `permanent`.
 - `src/page-ref-registry.ts` + `src/page-ledger.ts`: v2 Page refs (`@21`, not `@e21`) are SDK-assigned ids bound to one frame/document/backend node. Their mappings and invalidation persist across rounds; partial snapshots merge by node identity and full snapshots replace the active set. Missing refs require a fresh snapshot. `src/ref-map.ts` + `src/ref-state.ts` retain the v1 native-ref refresh behavior.
 - `src/driver/` — `nav` (tabs, navigation), `pointer` (click/scroll/drag), `keyboard`, `observe` (snapshot/screenshot), `waits`, `files` (upload), `element-ops` (objectId handles), `load`.
-- `src/learning/` — discovery, validation, and execution of site skills from `skill-body/learnings/<site>/manifest.json` (`runSiteTool`, `runSiteBrowserTool`, `learnContext`).
-- `src/state.ts` is the shared mutable runtime state singleton; `src/env.ts` resolves the agent workspace (`EGO_BROWSER_AGENT_WORKSPACE`, falling back to the guide dir bundled next to the build output, then the package's `skill-body`).
+- `src/learning/` — discovery, validation, and execution of site skills from `skills/ego-browser/learnings/<site>/manifest.json` (`runSiteTool`, `runSiteBrowserTool`, `learnContext`).
+- `src/state.ts` is the shared mutable runtime state singleton; `src/env.ts` resolves the agent workspace (`EGO_BROWSER_AGENT_WORKSPACE`, falling back to the entry Skill bundled next to the build output, then the repo's `skills/ego-browser`).
 - `src/help-runtime.ts` parses the built bundle's JSDoc with acorn at runtime to power `help()` — JSDoc on exported helpers is therefore user-facing documentation.
 
 Data flow: `stdin JS` → `runMain()` → `helperContext()` helpers → browser runtime/CDP → snapshot or DOM/AX resolution → optional site tools → `cliLog(...)`.
@@ -41,10 +41,10 @@ Task spaces are isolated browsing contexts with an ownership model (`agent` / `u
 
 - `package/ego-browser/src/` — runtime, helpers, resolver, drivers, learning subsystem.
 - `package/ego-browser/src/**/*.test.mjs` — tests are colocated with the code (there is no separate `test/` directory).
-- `package/ego-browser/scripts/` — `build.mjs` (esbuild per-file → `dist/src`, rollup bundle → `dist/out/index.js`, renders `skill-body/SKILL.md` → `dist/out/ego-browser/SKILL.md` with version and end markers and copies `skill-body/learnings` next to it, copies the entry Skill → `dist/out/agent-skills/ego-browser`), `validate-site-skills.ts`, and the real-browser E2E runner.
+- `package/ego-browser/scripts/` — `build.mjs` (esbuild per-file → `dist/src`, rollup bundle → `dist/out/index.js`, renders `skill-body/SKILL.md` → `dist/out/ego-browser/SKILL.md` with version and end markers, copies the entry Skill and its learnings → `dist/out/agent-skills/ego-browser`), `validate-site-skills.ts`, and the real-browser E2E runner.
 - `package/ego-browser/skill-body/SKILL.md` — canonical agent-facing usage guide, printed by `ego-browser skill`.
-- `skills/ego-browser/` — thin entry Skill published to skill markets and plugins: `SKILL.md`, `references/install.md`, `references/clearing-state.md`, `scripts/install.sh`. See `docs/ego-browser-skill-command.md` for the browser-side contract.
-- `package/ego-browser/skill-body/learnings/` — reusable per-site experience packs (`manifest.json` + `notes/` + `tools/` + `browser-tools/`).
+- `skills/ego-browser/` — thin entry Skill published to skill markets and plugins: `SKILL.md`, `references/install.md`, `references/clearing-state.md`, `scripts/install.sh`, and the site `learnings/`. See `docs/ego-browser-skill-command.md` for the browser-side contract.
+- `skills/ego-browser/learnings/` — reusable per-site experience packs (`manifest.json` + `notes/` + `tools/` + `browser-tools/`).
 
 ## Development Commands
 

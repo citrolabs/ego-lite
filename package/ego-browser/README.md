@@ -37,10 +37,10 @@ Use `-h` or `--help` to print the local CLI usage.
 
 ## Skill workspace
 
-The usage guide and site learnings live in `skill-body/`. The build renders the guide to `dist/out/ego-browser/SKILL.md`, where `ego-browser skill` prints it, and copies `learnings/` next to it. By default the runtime loads agent helpers and site learnings from that directory:
+The usage guide lives in `skill-body/SKILL.md`; the build renders it to `dist/out/ego-browser/SKILL.md`, where `ego-browser skill` prints it. Site learnings live in the entry Skill at `../../skills/ego-browser/learnings/`; the build copies the entry Skill to `dist/out/agent-skills/ego-browser`. By default the runtime loads agent helpers and site learnings from that bundled entry Skill:
 
 ```text
-dist/out/ego-browser
+dist/out/agent-skills/ego-browser
 ```
 
 Override with `EGO_BROWSER_AGENT_WORKSPACE`:
@@ -113,7 +113,7 @@ existing scripts.
   default `help()`, and the usage guide must remain aligned.
 - Embedded hosts should await the exported `disposeEgoSdk()` hook before
   discarding a Node context; see `../../docs/native-sdk-lifecycle-requirement.md`.
-- Site-specific reusable experience belongs under `skill-body/learnings/`, not in the runtime source.
+- Site-specific reusable experience belongs under `../../skills/ego-browser/learnings/`, not in this package.
 
 ## License
 
