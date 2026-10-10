@@ -120,6 +120,11 @@ and diagnose the CLI or installation only if it fails.
 - Use exactly one TaskSpace for the entire user goal. Create it once, print its
   `spaceId`, and resume that same space in later rounds. Use multiple spaces
   only when the user explicitly requests them.
+- Task space names are unique. `taskSpace(name)` resumes your own space with
+  that name instead of creating a second one. If the name belongs to a
+  user-owned space, it fails with `EGO_TASK_SPACE_NAME_IN_USE`: ask the user
+  whether to work in that space (then `claimTaskSpace(id)`), or pick another
+  name.
 - Never use a new TaskSpace to recover from a stuck, blocked, timed-out, or
   unexpected Page. Recover within the existing space; if it cannot continue,
   stop and ask the user.

@@ -71,7 +71,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     name: "taskSpace",
     signature: "await taskSpace(nameOrId, { profileId? })",
     summary:
-      "Reuse or create an Agent-owned task space; a new space starts with managed Page p1, and profileId applies only when creating it.",
+      "Reuse or create an Agent-owned task space; a name held by a user-owned space fails with EGO_TASK_SPACE_NAME_IN_USE. A new space starts with managed Page p1, and profileId applies only when creating it.",
     options: {
       profileId: option(
         "nonEmptyString",

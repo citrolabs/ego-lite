@@ -220,7 +220,26 @@ test("taskspace e2e claims and selects an existing user-owned task space", async
   ]);
 });
 
-test("taskspace e2e useOrCreateTaskSpace selects user-owned spaces without claiming and surfaces the owned user-control guidance", async () => {
+test("taskspace e2e useOrCreateTaskSpace reports a user-owned name as in use without selecting or claiming it", async () => {
+  const ego = new FakeEgo([
+    {
+      taskId: "checkout-flow",
+      id: 7,
+      name: "checkout-flow",
+      createdBy: "user",
+      ownership: "user",
+    },
+  ]);
+
+  await assert.rejects(
+    () =>
+      runTaskspaceScript(ego, `await useOrCreateTaskSpace("checkout-flow")`),
+    /already exists and belongs to the user \(id 7\)/,
+  );
+  assert.deepEqual(ego.calls, [["listTaskSpaces"]]);
+});
+
+test("taskspace e2e useOrCreateTaskSpace selects a user-owned space targeted by id without claiming and surfaces the owned user-control guidance", async () => {
   const ego = new FakeEgo([
     {
       taskId: "checkout-flow",
@@ -234,8 +253,7 @@ test("taskspace e2e useOrCreateTaskSpace selects user-owned spaces without claim
   // Native rejects with error_code EGO_TASK_SPACE_USER_IN_CONTROL, so the agent
   // sees ego-browser's owned guidance block, not the raw native text.
   await assert.rejects(
-    () =>
-      runTaskspaceScript(ego, `await useOrCreateTaskSpace("checkout-flow")`),
+    () => runTaskspaceScript(ego, `await useOrCreateTaskSpace(7)`),
     /has taken control of this task space/,
   );
   assert.deepEqual(ego.calls, [["listTaskSpaces"], ["useTaskSpace", 7]]);
