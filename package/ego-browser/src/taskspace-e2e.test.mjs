@@ -236,7 +236,7 @@ test("taskspace e2e useOrCreateTaskSpace selects user-owned spaces without claim
   await assert.rejects(
     () =>
       runTaskspaceScript(ego, `await useOrCreateTaskSpace("checkout-flow")`),
-    /has taken control of this task space/,
+    /Control of this task space is with the user/,
   );
   assert.deepEqual(ego.calls, [["listTaskSpaces"], ["useTaskSpace", 7]]);
 });

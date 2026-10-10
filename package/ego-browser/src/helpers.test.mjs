@@ -774,7 +774,7 @@ test("useOrCreateTaskSpace selects user-owned spaces without claiming and surfac
     async () => {
       await assert.rejects(
         () => useOrCreateTaskSpace("checkout-flow"),
-        /useOrCreateTaskSpace: The user has taken control of this task space/,
+        /useOrCreateTaskSpace: Control of this task space is with the user/,
       );
     },
   );

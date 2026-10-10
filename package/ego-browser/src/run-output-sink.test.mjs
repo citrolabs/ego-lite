@@ -140,7 +140,7 @@ test("a hard stop discards console output together with cliLog output", async ()
     ego,
   );
 
-  assert.match(result.stdout, /taken control of this task space/);
+  assert.match(result.stdout, /Control of this task space is with the user/);
   assert.doesNotMatch(result.stdout, /before|after/);
 });
 
@@ -164,7 +164,7 @@ test("a swallowed user-control hard stop discards all output and prints the guid
 
   assert.equal(result.exitCode, 0);
   // Only the owned guidance survives — none of the script's own logging.
-  assert.match(result.stdout, /taken control of this task space/);
+  assert.match(result.stdout, /Control of this task space is with the user/);
   assert.match(result.stdout, /takeOverTaskSpace\(spaceId\)/);
   assert.doesNotMatch(result.stdout, /visiting|failed|ok |summary/);
   // Printed exactly once, even though every loop iteration re-reported the hard stop.
@@ -251,7 +251,7 @@ test("a swallowed snapshot hard stop (rejected, not resolved) also collapses to 
 
   assert.equal(result.exitCode, 0);
   // The owned guidance survives once; the native wording and business logs are dropped.
-  assert.match(result.stdout, /taken control of this task space/);
+  assert.match(result.stdout, /Control of this task space is with the user/);
   assert.match(result.stdout, /takeOverTaskSpace\(spaceId\)/);
   assert.doesNotMatch(result.stdout, /native wording/);
   assert.doesNotMatch(result.stdout, /visiting|failed|ok |summary/);
@@ -276,7 +276,10 @@ test("an uncaught hard stop discards output without double-printing the message"
   // The thrown Error already surfaces the message (the host prints it), so the sink
   // discards the buffer and stays silent rather than printing the guidance a second time.
   assert.ok(result.error, "expected runMain to reject");
-  assert.match(result.error.message, /taken control of this task space/);
+  assert.match(
+    result.error.message,
+    /Control of this task space is with the user/,
+  );
   assert.equal(result.stdout, "");
 });
 
