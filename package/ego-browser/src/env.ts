@@ -11,7 +11,7 @@ export function agentWorkspace() {
     return resolvePath(process.env.EGO_BROWSER_AGENT_WORKSPACE);
   }
 
-  const bundledSkill = resolve(SRC_DIR, "ego-browser");
+  const bundledSkill = resolve(SRC_DIR, "agent-skills", "ego-browser");
   if (existsSync(bundledSkill)) {
     return bundledSkill;
   }

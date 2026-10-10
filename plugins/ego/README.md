@@ -18,19 +18,19 @@ From the repository root, build all nine artifacts with one command:
 npm --prefix plugins/ego run package
 ```
 
-The output directory is `dist/plugins/ego-v2.0.0/`:
+The output directory is `dist/plugins/ego-v2.1.0/`:
 
 | Host             | Artifact                          | Contents                                            |
 | ---------------- | --------------------------------- | --------------------------------------------------- |
-| Claude Code      | `ego-claude-code-v2.0.0.zip`      | Claude plugin                                       |
-| Codex            | `ego-codex-v2.0.0.zip`            | Codex plugin at the archive root, plus marketplace  |
-| Cursor           | `ego-cursor-v2.0.0.zip`           | Cursor plugin                                       |
-| GitHub Copilot   | `ego-github-copilot-v2.0.0.zip`   | Claude-compatible plugin                            |
-| Grok Build       | `ego-grok-build-v2.0.0.zip`       | Agent Plugins manifest and Skill                    |
-| WorkBuddy        | `ego-workbuddy-v2.0.0.zip`        | Local marketplace and WorkBuddy/CodeBuddy manifests |
-| QwenWork Desktop | `ego-qwenwork-v2.0.0.zip`         | Claude-compatible expert kit                        |
-| OpenCode         | `ego-opencode-v2.0.0.tgz`         | `@citrolabs/ego-opencode` npm package               |
-| DeepSeek Harness | `ego-deepseek-harness-v2.0.0.tgz` | `@citrolabs/ego-deepseek-harness` npm bundle        |
+| Claude Code      | `ego-claude-code-v2.1.0.zip`      | Claude plugin                                       |
+| Codex            | `ego-codex-v2.1.0.zip`            | Codex plugin at the archive root, plus marketplace  |
+| Cursor           | `ego-cursor-v2.1.0.zip`           | Cursor plugin                                       |
+| GitHub Copilot   | `ego-github-copilot-v2.1.0.zip`   | Claude-compatible plugin                            |
+| Grok Build       | `ego-grok-build-v2.1.0.zip`       | Agent Plugins manifest and Skill                    |
+| WorkBuddy        | `ego-workbuddy-v2.1.0.zip`        | Local marketplace and WorkBuddy/CodeBuddy manifests |
+| QwenWork Desktop | `ego-qwenwork-v2.1.0.zip`         | Claude-compatible expert kit                        |
+| OpenCode         | `ego-opencode-v2.1.0.tgz`         | `@citrolabs/ego-opencode` npm package               |
+| DeepSeek Harness | `ego-deepseek-harness-v2.1.0.tgz` | `@citrolabs/ego-deepseek-harness` npm bundle        |
 
 Every ZIP includes a host-specific `README.md` at its root; npm archives include
 it under `package/`. The WorkBuddy ZIP contains a marketplace root with the
@@ -179,7 +179,7 @@ JavaScript entry point:
 
 ```bash
 mkdir -p /absolute/path/to/ego-opencode
-tar -xzf /absolute/path/to/ego-opencode-v2.0.0.tgz -C /absolute/path/to/ego-opencode
+tar -xzf /absolute/path/to/ego-opencode-v2.1.0.tgz -C /absolute/path/to/ego-opencode
 opencode plugin "file:///absolute/path/to/ego-opencode/package/index.js" -g
 ```
 
@@ -202,7 +202,7 @@ directory to the desired profile:
 
 ```bash
 mkdir -p /absolute/path/to/ego-deepseek-harness
-tar -xzf /absolute/path/to/ego-deepseek-harness-v2.0.0.tgz -C /absolute/path/to/ego-deepseek-harness
+tar -xzf /absolute/path/to/ego-deepseek-harness-v2.1.0.tgz -C /absolute/path/to/ego-deepseek-harness
 dsh plugin --profile web add /absolute/path/to/ego-deepseek-harness/package
 dsh --profile web --dump-config
 dsh --profile web
@@ -238,7 +238,9 @@ EOF
 ## Development
 
 `skills/ego-browser` is a relative symlink to `../../../skills/ego-browser`.
-Edit the canonical Skill; the packager materializes it in temporary directories
+It is the thin entry Skill; the usage guide it points to lives in
+`package/ego-browser/skill-body/SKILL.md` and ships with ego lite. Edit the
+canonical entry Skill; the packager materializes it in temporary directories
 and leaves the source link untouched. Unexpected or broken links fail packaging.
 
 Plugin tests belong in `plugins/ego/tests/` and run independently of browser

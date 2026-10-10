@@ -81,7 +81,7 @@ test("user-control reason lookup ignores inherited object properties", () => {
     error: "constructor",
     error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
   });
-  assert.match(message, /The user has taken control/);
+  assert.match(message, /Control of this task space is with the user/);
   assert.doesNotMatch(message, /constructor/);
 });
 
@@ -90,7 +90,7 @@ test("unknown user-control reasons fall back without exposing the raw key", () =
     error: "future_permission_reason",
     error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
   });
-  assert.match(message, /The user has taken control/);
+  assert.match(message, /Control of this task space is with the user/);
   assert.doesNotMatch(message, /future_permission_reason/);
 });
 
@@ -99,7 +99,7 @@ test("the retired site-dialog handoff reason uses generic user-control guidance"
     error: "fallback_site_dialog_required_notice",
     error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
   });
-  assert.match(message, /The user has taken control/);
+  assert.match(message, /Control of this task space is with the user/);
   assert.doesNotMatch(message, /dialog that requires review/);
   assert.doesNotMatch(message, /fallback_site_dialog_required_notice/);
 });
@@ -165,6 +165,23 @@ test("resolveEgoError overrides the native error message with the owned wording 
   assert.doesNotMatch(message, /\b7\b/);
 });
 
+test("inactive guidance does not attribute an agent-finished task to the user", () => {
+  // task.finish({ keep: [...] }) leaves the space user-owned; a later
+  // takeOverTaskSpace() gets this code without any user action.
+  const { message } = resolveEgoError("EGO_TASK_SPACE_INACTIVE");
+  assert.doesNotMatch(message, /user has taken control/i);
+  assert.match(message, /task\.finish\(\)/);
+  assert.match(message, /takeOverTaskSpace\(\) cannot resume/);
+  assert.match(message, /claimTaskSpace\(spaceId\)/);
+});
+
+test("user-control guidance names both the agent handoff and a browser takeover", () => {
+  const { message } = resolveEgoError("EGO_TASK_SPACE_USER_IN_CONTROL");
+  assert.doesNotMatch(message, /user has taken control/i);
+  assert.match(message, /task\.handOff\(\)/);
+  assert.match(message, /takeover in the browser/);
+});
+
 test("resolveEgoError keeps the native error message for an unknown future code", () => {
   assert.deepEqual(
     resolveEgoError({
@@ -205,7 +222,7 @@ test("resolveEgoError falls back to the raw code for a bare non-owned code", () 
 test("resolveEgoError uses the id-less guidance block for a bare user-control code", () => {
   const { code, message } = resolveEgoError("EGO_TASK_SPACE_USER_IN_CONTROL");
   assert.equal(code, "EGO_TASK_SPACE_USER_IN_CONTROL");
-  assert.match(message, /taken control of this task space/);
+  assert.match(message, /Control of this task space is with the user/);
   assert.match(message, /takeOverTaskSpace\(spaceId\)/);
   assert.doesNotMatch(message, /<id>/);
 });

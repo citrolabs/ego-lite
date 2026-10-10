@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 
 import {
   PUBLIC_API_SCHEMA,
-  publicApiMarkdown,
   validatePublicApiOptions,
 } from "../dist/src/public-api-schema.js";
 
@@ -133,76 +132,4 @@ test("schema-driven option validation rejects unknown and invalid fields", () =>
     () => validatePublicApiOptions("TaskSpace.finish", { keep: ["p2", "p2"] }),
     /keep must be "all" or an array of unique non-empty Page labels/,
   );
-});
-
-test("the generated reference contains signatures and option descriptions", () => {
-  const markdown = publicApiMarkdown();
-  assert.match(markdown, /`await profiles\(\)`/);
-  assert.doesNotMatch(markdown, /`await showTaskState\(state\)`/);
-  assert.match(
-    markdown,
-    /`await page\.click\(selector, \{ button\?, clickCount\?, delay\?, position\?, force\?, timeout\?, label\? \}\)`/,
-  );
-  assert.match(markdown, /`label`.*user-visible action description/);
-  assert.match(markdown, /`await listTaskSpaces\(\)`/);
-  assert.match(markdown, /`await taskSpace\(nameOrId, \{ profileId\? \}\)`/);
-  assert.match(markdown, /a new space starts with managed Page p1/);
-  assert.match(markdown, /`await task\.newPage\(\)`/);
-  assert.match(
-    markdown,
-    /`await task\.finish\(\{ keep \}\)`.*return a receipt with retained and closed managed Page labels/,
-  );
-  assert.doesNotMatch(markdown, /task\.close/);
-  assert.match(
-    markdown,
-    /`await page\.goto\(url, \{ referer\?, timeout\?, waitUntil\? \}\)`/,
-  );
-  assert.match(
-    markdown,
-    /`await page\.reload\(\{ timeout\?, waitUntil\? \}\)`/,
-  );
-  assert.match(
-    markdown,
-    /`await page\.snapshot\(\{ scope\?, root\?, includeActionMarks\?, includeStableLocator\? \}\)`/,
-  );
-  assert.match(markdown, /`root`.*snapshot ref/);
-  assert.match(
-    markdown,
-    /`await page\.selectOption\(selector, valueOrValues, \{ timeout\? \}\)`/,
-  );
-  assert.match(
-    markdown,
-    /`await page\.waitForEvent\(event, \{ timeout\? \}\)`.*"popup" or "download"/,
-  );
-  assert.match(
-    markdown,
-    /`await page\.waitForURL\(urlMatcher, \{ timeout\? \}\)`.*Playwright-style glob.*predicate receiving a URL object/,
-  );
-  assert.match(
-    markdown,
-    /`await page\.waitForFunction\(fnOrString, argument\?, \{ timeout\?, polling\? \}\)`/,
-  );
-  assert.match(
-    markdown,
-    /`await page\.keyboard\.press\(chord, \{ delay\? \}\)`.*Named keys are case-insensitive.*single-character keys preserve case/,
-  );
-  assert.match(
-    markdown,
-    /const downloadPromise = page\.waitForEvent\("download"\); await page\.click\(selector\)/,
-  );
-  assert.match(markdown, /page\.acceptDialog\(promptText\?\)/);
-  assert.match(markdown, /page\.dismissDialog\(\)/);
-  assert.doesNotMatch(markdown, /Page\.handleJavaScriptDialog/);
-  assert.match(markdown, /no state defaults to load/);
-  assert.match(markdown, /value-or-label string/);
-  assert.match(markdown, /\{ value\?, label\?, index\? \}/);
-  assert.match(markdown, /terminal `:has-text\("\.\.\."\)`/);
-  assert.match(markdown, /`loc=role:\.\.\.\[name\*="\.\.\."\]`/);
-  assert.doesNotMatch(markdown, /task\.openPage/);
-  assert.match(markdown, /Create and durably label a blank Page/);
-  assert.match(
-    markdown,
-    /Maximum wait for the element to become usable in milliseconds; defaults to 3000/,
-  );
-  assert.match(markdown, /missing parent directories are created/);
 });

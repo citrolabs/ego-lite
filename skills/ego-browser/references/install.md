@@ -1,10 +1,20 @@
-# Install ego lite
+# Install or upgrade ego lite
 
-Read this file only when ego lite isn't installed yet, or when the user asks to install ego lite. For day-to-day browser work, go back to `SKILL.md`.
+Read this file only when `ego-browser` is not found, when `ego-browser skill` reports an unknown command, or when the user asks to install ego lite. For day-to-day browser work, run `ego-browser skill` and follow its output.
 
 The ego-browser skill depends on the ego lite browser: the `ego-browser` command is provided by the ego lite app. Once ego lite is installed and you've completed onboarding, no additional setup is normally needed.
 
 ego lite website: https://lite.ego.app/
+
+## Upgrade an older ego lite
+
+If `ego-browser` exists but `ego-browser skill` reports `Unknown command: skill`, the installed ego lite is older than this skill. Ask the user for approval, then run:
+
+```bash
+ego-browser upgrade
+```
+
+If `upgrade` is also an unknown command, reinstall with the steps below. Then continue with "After installing: confirm `ego-browser` is available".
 
 ## Install on macOS
 
@@ -81,11 +91,15 @@ In PowerShell or cmd, where heredoc does not exist:
 ego-browser nodejs -e "console.log('ego-browser ready')"
 ```
 
-Printing `ego-browser ready` means the environment is ready. See the "Run browser scripts" section of `SKILL.md` for the full per-shell rules before writing a real script.
+Printing `ego-browser ready` means the environment is ready. Finally confirm that the installed ego lite prints its usage guide:
+
+```bash
+ego-browser skill
+```
 
 ## After that, return to the original task
 
-Once the environment is ready, return to the user's original task and continue with the task space flow in `SKILL.md` — start from `taskSpace(name)` and proceed as usual.
+Once the environment is ready, return to the user's original task: run `ego-browser skill` and follow its output.
 
 ## Troubleshooting
 

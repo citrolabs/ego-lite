@@ -17,7 +17,7 @@ test("the 1.3 egoBrowser namespace stops with current API guidance", () => {
         assert.equal(error.name, "EgoBrowserSkillStaleError");
         assert.ok(error.message.startsWith(STALE_SKILL_PREFIX));
         assert.match(error.message, new RegExp(`egoBrowser\\.${method}`));
-        assert.match(error.message, /re-read the installed ego-browser skill/i);
+        assert.match(error.message, /Run `ego-browser skill`/);
         assert.match(error.message, /taskSpace\(nameOrId\)/);
         return true;
       },

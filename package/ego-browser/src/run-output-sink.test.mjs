@@ -88,6 +88,31 @@ test("a clean run flushes buffered cliLog output in order", async () => {
   assert.equal(result.stdout, "one\ntwo\n");
 });
 
+test("help() prints its text without an explicit log", async () => {
+  const result = await runScript(`help("TaskSpace.newPage");`);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(
+    result.stdout,
+    "TaskSpace.newPage\n\nCreate and durably label a blank Page.\n\nawait task.newPage()\n",
+  );
+});
+
+test("the embedded SDK prints help() through the host cliLog and returns the text", async () => {
+  const { installEgoSdk } = await import("../dist/src/index.js");
+  const lines = [];
+  const target = {};
+  installEgoSdk(target, { cliLog: (line) => lines.push(line) });
+
+  const text = target.help("TaskSpace.newPage");
+
+  assert.equal(
+    text,
+    "TaskSpace.newPage\n\nCreate and durably label a blank Page.\n\nawait task.newPage()",
+  );
+  assert.deepEqual(lines, [text]);
+});
+
 test("round console methods share the buffered output channel", async () => {
   const result = await runScript(`
     console.log("plain", { value: 1 });
@@ -115,7 +140,7 @@ test("a hard stop discards console output together with cliLog output", async ()
     ego,
   );
 
-  assert.match(result.stdout, /taken control of this task space/);
+  assert.match(result.stdout, /Control of this task space is with the user/);
   assert.doesNotMatch(result.stdout, /before|after/);
 });
 
@@ -139,7 +164,7 @@ test("a swallowed user-control hard stop discards all output and prints the guid
 
   assert.equal(result.exitCode, 0);
   // Only the owned guidance survives — none of the script's own logging.
-  assert.match(result.stdout, /taken control of this task space/);
+  assert.match(result.stdout, /Control of this task space is with the user/);
   assert.match(result.stdout, /takeOverTaskSpace\(spaceId\)/);
   assert.doesNotMatch(result.stdout, /visiting|failed|ok |summary/);
   // Printed exactly once, even though every loop iteration re-reported the hard stop.
@@ -160,7 +185,7 @@ test("a swallowed 1.3 skill mismatch discards business output and explains recov
 
   assert.equal(result.exitCode, 0);
   assert.match(result.stdout, /\[ego-browser:skill-stale\]/);
-  assert.match(result.stdout, /re-read the installed ego-browser skill/i);
+  assert.match(result.stdout, /Run `ego-browser skill`/);
   assert.match(result.stdout, /taskSpace\(nameOrId\)/);
   assert.doesNotMatch(result.stdout, /before stale|caught:|after stale/);
   assert.equal(result.stdout.match(/\[ego-browser:skill-stale\]/g).length, 1);
@@ -226,7 +251,7 @@ test("a swallowed snapshot hard stop (rejected, not resolved) also collapses to 
 
   assert.equal(result.exitCode, 0);
   // The owned guidance survives once; the native wording and business logs are dropped.
-  assert.match(result.stdout, /taken control of this task space/);
+  assert.match(result.stdout, /Control of this task space is with the user/);
   assert.match(result.stdout, /takeOverTaskSpace\(spaceId\)/);
   assert.doesNotMatch(result.stdout, /native wording/);
   assert.doesNotMatch(result.stdout, /visiting|failed|ok |summary/);
@@ -251,7 +276,10 @@ test("an uncaught hard stop discards output without double-printing the message"
   // The thrown Error already surfaces the message (the host prints it), so the sink
   // discards the buffer and stays silent rather than printing the guidance a second time.
   assert.ok(result.error, "expected runMain to reject");
-  assert.match(result.error.message, /taken control of this task space/);
+  assert.match(
+    result.error.message,
+    /Control of this task space is with the user/,
+  );
   assert.equal(result.stdout, "");
 });
 

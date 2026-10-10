@@ -71,7 +71,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     name: "taskSpace",
     signature: "await taskSpace(nameOrId, { profileId? })",
     summary:
-      "Reuse or create an Agent-owned task space; a new space starts with managed Page p1, and profileId applies only when creating it.",
+      "Reuse or create an Agent-owned task space; a name held by a user-owned space fails with EGO_TASK_SPACE_NAME_IN_USE. A new space starts with managed Page p1, and profileId applies only when creating it.",
     options: {
       profileId: option(
         "nonEmptyString",
@@ -698,63 +698,6 @@ export function validatePublicApiOptions(name: string, value: unknown): void {
 
 function validationMessage(entry: PublicApiEntry, message: string): string {
   return `${message}. Expected: ${entry.signature}`;
-}
-
-export function publicApiMarkdown(): string {
-  const groups = new Map<string, PublicApiEntry[]>();
-  for (const entry of PUBLIC_API_SCHEMA) {
-    const group = entry.name.startsWith("TaskSpace.")
-      ? "TaskSpace"
-      : entry.name.startsWith("Download.")
-        ? "Download"
-        : entry.name.startsWith("Page.mouse.")
-          ? "Page.mouse"
-          : entry.name.startsWith("Page.keyboard.")
-            ? "Page.keyboard"
-            : entry.name.startsWith("Page.")
-              ? "Page"
-              : "Entry points";
-    const entries = groups.get(group) || [];
-    entries.push(entry);
-    groups.set(group, entries);
-  }
-
-  const lines = [
-    "# ego-browser v2 API reference",
-    "",
-    "Generated from `package/ego-browser/src/public-api-schema.ts`.",
-    "",
-    "High-level Page actions return a receipt that may contain `popups` or a synchronous `dialog`. Handle a returned dialog with `page.acceptDialog(promptText?)` or `page.dismissDialog()` before continuing.",
-    "",
-    'For an explicit popup wait, arm it before the action: `const popupPromise = page.waitForEvent("popup"); await page.click(selector); const popup = await popupPromise;`. Action receipts instead expose `{ label, targetId }` entries in `receipt.popups`; resolve one with `task.page(label)`.',
-    "",
-    'For a download, arm the event before the action and save the returned artifact explicitly: `const downloadPromise = page.waitForEvent("download"); await page.click(selector); const download = await downloadPromise; await download.saveAs(absolutePath);`.',
-    "",
-    'Selectors accept refs, Ego locators, XPath, and raw CSS. A small compatibility subset also accepts `css=...`, terminal `:has-text("...")` and `:text-is("...")`, `>> nth=N` after CSS/text/href selectors (`N` is `-1` or non-negative), and `loc=role:...[name*="..."]`.',
-  ];
-  for (const [group, entries] of groups) {
-    lines.push(
-      "",
-      `## ${group}`,
-      "",
-      "| API | Options | Purpose |",
-      "| --- | --- | --- |",
-    );
-    for (const entry of entries) {
-      const options = entry.options
-        ? Object.entries(entry.options)
-            .map(([name, specification]) => {
-              const values = specification.values
-                ? ` (${specification.values.join(", ")})`
-                : "";
-              return `\`${name}\`${values} — ${specification.description}`;
-            })
-            .join("<br>")
-        : "—";
-      lines.push(`| \`${entry.signature}\` | ${options} | ${entry.summary} |`);
-    }
-  }
-  return `${lines.join("\n").trimEnd()}\n`;
 }
 
 function displayName(name: string): string {

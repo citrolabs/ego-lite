@@ -60,7 +60,11 @@ export function installEgoSdk(
     return target;
   }
   if (target === globalThis) installPageContextGuard(target);
-  const context = options.context || helpers.helperContext();
+  const usingDefaultCliLog = !options.cliLog;
+  const cliLogFn = options.cliLog || createCliLog();
+  const context =
+    options.context ||
+    helpers.helperContext({}, { printHelp: (text) => cliLogFn(text) });
   const readySignal = Promise.resolve(options.ready);
   // The host may reject readiness before a helper is called. Mark the promise
   // as observed while preserving the same rejection for every helper await.
@@ -88,8 +92,6 @@ export function installEgoSdk(
   // Install the 1.3 migration guard explicitly so embedded SDK execution and
   // the direct CLI produce the same actionable error.
   installStaleEgoBrowserGuard(target);
-  const usingDefaultCliLog = !options.cliLog;
-  const cliLogFn = options.cliLog || createCliLog();
   Object.defineProperty(target, "cliLog", {
     value: cliLogFn,
     writable: true,

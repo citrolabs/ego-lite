@@ -1,4 +1,13 @@
-import { chmod, cp, mkdir, open, readdir, rm } from "node:fs/promises";
+import {
+  chmod,
+  cp,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { builtinModules } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,10 +23,24 @@ const distDir = join(root, "dist");
 const outDir = join(distDir, "out");
 const bundledCliDir = outDir;
 const bundledCli = join(bundledCliDir, "index.js");
-const skillSourceDir = join(repoRoot, "skills", "ego-browser");
-const bundledSkillDir = join(outDir, "ego-browser");
+// The usage guide printed by `ego-browser skill`, versioned with this SDK.
+const guideSource = join(root, "skill-body", "SKILL.md");
+const bundledGuideDir = join(outDir, "ego-browser");
+// The entry Skill the browser installs into ~/.agents/skills/ego-browser. It
+// carries the site learnings, which the runtime also reads from this copy.
+const entrySkillSourceDir = join(repoRoot, "skills", "ego-browser");
+const bundledEntrySkillDir = join(outDir, "agent-skills", "ego-browser");
+const entrySkillEntries = [
+  "SKILL.md",
+  "references",
+  "scripts",
+  "agents",
+  "assets",
+  "learnings",
+];
+// Claude Code keeps 30,000 characters of command output; leave headroom.
+const maxGuideLength = 25_000;
 const buildLock = join(root, ".build.lock");
-const bundledSkillEntries = ["SKILL.md", "learnings", "references", "scripts"];
 
 let lock;
 try {
@@ -72,16 +95,46 @@ try {
   await bundle.write({ file: bundledCli, format: "esm", sourcemap: false });
   await bundle.close();
 
-  await mkdir(bundledSkillDir, { recursive: true });
-  for (const entry of bundledSkillEntries) {
-    await cp(join(skillSourceDir, entry), join(bundledSkillDir, entry), {
-      recursive: true,
-    });
+  await mkdir(bundledGuideDir, { recursive: true });
+  await writeFile(
+    join(bundledGuideDir, "SKILL.md"),
+    renderGuide(await readFile(guideSource, "utf8")),
+  );
+  for (const entry of entrySkillEntries) {
+    await cp(
+      join(entrySkillSourceDir, entry),
+      join(bundledEntrySkillDir, entry),
+      { recursive: true },
+    );
   }
   await chmod(bundledCli, 0o755);
 } finally {
   await lock.close();
   await rm(buildLock, { force: true });
+}
+
+// Replace the source frontmatter with the version line and end marker that
+// `ego-browser skill` prints verbatim; agents use the marker to detect truncation.
+function renderGuide(source) {
+  const match = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(source);
+  const version = match && /^version: "([^"]+)"$/m.exec(match[1])?.[1];
+  if (!version) {
+    throw new Error(`${guideSource} needs frontmatter with a version`);
+  }
+  const guide = [
+    `[ego-browser:skill] ego-browser usage guide v${version}`,
+    "",
+    match[2].trim(),
+    "",
+    `[ego-browser:skill] end of guide v${version}`,
+    "",
+  ].join("\n");
+  if (guide.length > maxGuideLength) {
+    throw new Error(
+      `the bundled usage guide is ${guide.length} characters; keep it under ${maxGuideLength} so agents do not truncate it`,
+    );
+  }
+  return guide;
 }
 
 async function tsEntryPoints(dirs) {

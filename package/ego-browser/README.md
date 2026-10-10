@@ -29,7 +29,7 @@ Local invocation without the browser (for debugging the helper bundle itself) re
 
 ```bash
 node dist/out/index.js <<'JS'
-console.log(await help())
+help()
 JS
 ```
 
@@ -37,10 +37,10 @@ Use `-h` or `--help` to print the local CLI usage.
 
 ## Skill workspace
 
-By default the runtime loads agent helpers and site learnings from the sibling skill package:
+The usage guide lives in `skill-body/SKILL.md`; the build renders it to `dist/out/ego-browser/SKILL.md`, where `ego-browser skill` prints it. Site learnings live in the entry Skill at `../../skills/ego-browser/learnings/`; the build copies the entry Skill to `dist/out/agent-skills/ego-browser`. By default the runtime loads agent helpers and site learnings from that bundled entry Skill:
 
 ```text
-../../skills/ego-browser
+dist/out/agent-skills/ego-browser
 ```
 
 Override with `EGO_BROWSER_AGENT_WORKSPACE`:
@@ -82,8 +82,8 @@ scripts/
   build.mjs              esbuild bundling
 ```
 
-See `../../skills/ego-browser/SKILL.md` for the agent-facing workflow and
-`../../skills/ego-browser/references/api.md` for the generated v2 API reference.
+See `skill-body/SKILL.md` for the agent-facing workflow and `help()` for the v2
+API reference.
 The old global helpers remain available as a v1 compatibility surface for
 existing scripts.
 
@@ -110,10 +110,10 @@ existing scripts.
   preserved the requested string byte-for-byte. Business postconditions remain
   explicit Page reads or waits.
 - New public APIs must be added to `public-api-schema.ts`; runtime validation,
-  default `help()`, the generated reference, and the Skill must remain aligned.
+  default `help()`, and the usage guide must remain aligned.
 - Embedded hosts should await the exported `disposeEgoSdk()` hook before
   discarding a Node context; see `../../docs/native-sdk-lifecycle-requirement.md`.
-- Site-specific reusable experience belongs under `skills/ego-browser/learnings/`, not in this package.
+- Site-specific reusable experience belongs under `../../skills/ego-browser/learnings/`, not in this package.
 
 ## License
 
