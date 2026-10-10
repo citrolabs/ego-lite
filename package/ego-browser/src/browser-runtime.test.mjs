@@ -1333,7 +1333,10 @@ test("a failed permission probe falls back to generic user-control guidance", as
     await assert.rejects(
       () => browserCdp("Browser.getVersion", {}, undefined, 1000),
       (error) => {
-        assert.match(error.message, /The user has taken control/);
+        assert.match(
+          error.message,
+          /Control of this task space is with the user/,
+        );
         assert.doesNotMatch(error.message, /probe transport failed/);
         return true;
       },

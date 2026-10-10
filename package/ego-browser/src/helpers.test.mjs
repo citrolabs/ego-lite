@@ -786,7 +786,10 @@ test("useOrCreateTaskSpace reports a user-owned name as EGO_TASK_SPACE_NAME_IN_U
             /^useOrCreateTaskSpace: A task space named "checkout-flow" already exists and belongs to the user \(id 7\)/,
           );
           assert.match(error.message, /claimTaskSpace\(7\)/);
-          assert.doesNotMatch(error.message, /taken control/);
+          assert.doesNotMatch(
+            error.message,
+            /Control of this task space is with the user/,
+          );
           return true;
         },
       );
@@ -828,7 +831,7 @@ test("useOrCreateTaskSpace selects a user-owned space targeted by id without cla
     async () => {
       await assert.rejects(
         () => useOrCreateTaskSpace(7),
-        /useOrCreateTaskSpace: The user has taken control of this task space/,
+        /useOrCreateTaskSpace: Control of this task space is with the user/,
       );
     },
   );

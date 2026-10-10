@@ -47,16 +47,19 @@ export type EgoErrorCode = (typeof EGO_ERROR_CODES)[number];
  * specific than any static line.
  */
 const EGO_ERROR_MESSAGES: Partial<Record<EgoErrorCode, string>> = {
+  // The native code does not say who ended the task or moved control: the
+  // agent's own task.finish() / task.handOff() produce the same codes as user
+  // actions in the browser. Keep this wording neutral about the cause.
   EGO_TASK_SPACE_INACTIVE: [
-    "The user has taken control of this task space and ended the task, so it is no longer assigned to the agent and browser commands are paused.",
-    "This is a hard stop, not an obstacle to route around — do not retry and do not take ownership back on your own.",
-    "Wait until the user explicitly asks you to continue, then claim the space and resume:",
+    "This task space is no longer assigned to the agent: its task has ended, either through task.finish() or by the user, so browser commands are paused.",
+    "This is a hard stop, not an obstacle to route around — do not retry and do not take ownership back on your own. takeOverTaskSpace() cannot resume an ended task.",
+    "Wait until the user explicitly asks you to continue in this space, then claim it and resume:",
     "  const task = await claimTaskSpace(spaceId)",
     "",
-    `Offer the user choices like "Continue" or "Finish task" if your harness supports it; otherwise tell them: "You now control this task space. Reply 'continue' when ready and I will resume."`,
+    `Offer the user choices like "Continue" or "Done" if your harness supports it; otherwise tell them: "This task has ended and the space is yours. Reply 'continue' if you want me to resume in it."`,
   ].join("\n"),
   EGO_TASK_SPACE_USER_IN_CONTROL: [
-    "The user has taken control of this task space, so browser commands are paused.",
+    "Control of this task space is with the user, either through task.handOff() or a takeover in the browser, so browser commands are paused.",
     "This is a hard stop, not an obstacle to route around — do not retry and do not take control back on your own.",
     "Wait until the user explicitly asks you to continue, then take control back and resume:",
     "  const task = await takeOverTaskSpace(spaceId)",

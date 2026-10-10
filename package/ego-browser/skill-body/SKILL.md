@@ -496,9 +496,11 @@ const userPage = task.userPage();
 
 Adopt `userPage` if it is unmanaged. Use `waitForControl()` only when the current
 script must wait in place. Claim a user-owned or inactive space only when the
-user explicitly asks. Find its numeric id first; names may be duplicated.
-`listTaskSpaces()` entries expose that id as `id` (`spaceId` exists only on a
-TaskSpace handle), so pass `entry.id` to `claimTaskSpace()` or `taskSpace()`:
+user explicitly asks; this includes a space you finished with kept Pages, which
+`takeOverTaskSpace()` cannot resume. Find its numeric id first; names may be
+duplicated. `listTaskSpaces()` entries expose that id as `id` (`spaceId` exists
+only on a TaskSpace handle), so pass `entry.id` to `claimTaskSpace()` or
+`taskSpace()`:
 
 ```js
 const spaces = await listTaskSpaces();

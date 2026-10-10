@@ -254,7 +254,7 @@ test("taskspace e2e useOrCreateTaskSpace selects a user-owned space targeted by 
   // sees ego-browser's owned guidance block, not the raw native text.
   await assert.rejects(
     () => runTaskspaceScript(ego, `await useOrCreateTaskSpace(7)`),
-    /has taken control of this task space/,
+    /Control of this task space is with the user/,
   );
   assert.deepEqual(ego.calls, [["listTaskSpaces"], ["useTaskSpace", 7]]);
 });
