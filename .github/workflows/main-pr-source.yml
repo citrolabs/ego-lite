@@ -10,8 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Require dev branch
+        env:
+          HEAD_REF: ${{ github.head_ref }}
         run: |
-          if [ "${{ github.head_ref }}" != "dev" ]; then
+          if [ "$HEAD_REF" != "dev" ]; then
             echo "Pull requests into main must come from the dev branch."
             exit 1
           fi

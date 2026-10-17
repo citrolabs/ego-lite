@@ -2,7 +2,7 @@
 
 <img src="docs/assets/banner.png" alt="ego lite" width="100%" />
 
-**The fastest browser for AI agents to run browser automation**
+**The fastest browser for AI agents to run web automation**
 
 <a href="https://trendshift.io/repositories/42334?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-42334" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/42334" alt="citrolabs%2Fego-lite | Trendshift" width="250" height="55"/></a>
 
@@ -15,13 +15,23 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-3DA639?style=for-the-badge" alt="License MIT" /></a>
 </p>
 
+<p>
+  <b>English</b> ·
+  <a href="README.zh-CN.md">简体中文</a> ·
+  <a href="README.ja.md">日本語</a> ·
+  <a href="README.ko.md">한국어</a> ·
+  <a href="README.pt.md">Português</a> ·
+  <a href="README.es.md">Español</a> ·
+  <a href="README.fr.md">Français</a> ·
+  <a href="README.it.md">Italiano</a> ·
+  <a href="README.ru.md">Русский</a>
+</p>
+
 </div>
 
-ego (lite) is a browser where you and your AI agents work in parallel. Your agents run multiple browser tasks in their own Spaces while your tabs stay yours, and tasks complete faster on fewer tokens.
+ego (lite) is a browser where you and your AI agents work in parallel. Your agents run their browser tasks in their own Spaces, isolated workspaces inside the same browser, while you keep browsing in yours, so no agent ever takes the browser away from you. And the automation itself finishes faster, on fewer tokens.
 
-> **Linux support is here.** macOS remains primary; Linux is fully automated via Chrome/Chromium + CDP (`EGO_LINUX=1` or auto-detect). See `skills/ego-browser/references/install.md` → *Linux* section. Windows is on the [roadmap](https://lite.ego.app/roadmap).
-
-Existing tools like browser-use and agent-browser are browser automation frameworks: they need a separate browser to drive, logins never carry cleanly, and you and the agent end up fighting for the same tabs. ego lite is one browser designed from the start for the two of you to share. No extra setup, and the agent can always reach your real logins and tabs through `ego-browser`.
+Existing tools like browser-use and agent-browser are a bridge to the browser, not a browser of their own: they need a separate one to drive, your browser data rarely carries over intact, the connection is unstable, and you and the agent end up fighting over control of the browser. ego lite is one browser designed from the start for the two of you to share. No extra setup, and the agent can always reach your real logins and tabs through `ego-browser`.
 
 ## Demo
 
@@ -29,11 +39,7 @@ https://github.com/user-attachments/assets/ffe7954b-58ee-411e-b35d-ec30c58a08bc
 
 ## Quick Start
 
-| Platform | Status | Install |
-|---|:---:|---|
-| macOS (Apple Silicon / Intel) | ✅ Stable | DMG from below or `npx skills add citrolabs/ego-lite` |
-| Linux (Chrome/Chromium) | ✅ Stable | `sh skills/ego-browser/scripts/install.sh` (auto-detects apt/dnf/pacman; `EGO_LINUX=1`) |
-| Windows | 🗓️ Roadmap | — |
+ego lite runs on macOS today, a Windows closed beta is coming soon, and Linux is on the [roadmap](https://lite.ego.app/roadmap).
 
 ### 1. Install
 
@@ -56,15 +62,6 @@ npx skills add citrolabs/ego-lite
 
 The first time your agent runs a browser task, it walks you through installing the ego lite app.
 
-**Linux:** the CLI is built from source, so this needs a full clone of the repo (not just the skill added via `npx`): `git clone https://github.com/citrolabs/ego-lite && cd ego-lite`. Then run `sh skills/ego-browser/scripts/install.sh` — it auto-detects `apt`/`dnf`/`pacman`/`zypper`, installs or finds Chrome/Chromium, builds the CLI, and creates `~/.local/bin/ego-browser`. Then:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-EGO_LINUX=1 ego-browser nodejs <<'EOF'
-console.log(await pageInfo())
-EOF
-```
-
 **1.3 Let your agent set it up**
 
 Paste this into your agent:
@@ -77,7 +74,7 @@ Read `skills/ego-browser/references/install.md` and follow the steps to install 
 
 On first launch, ego lite asks one question, whether to migrate your Chrome data. Say yes and your agent inherits your existing logins, cookies, extensions, and bookmarks.
 
-### 2. Run your first task
+### 2. Try your first task
 
 In your agent CLI, type `/ego-browser` followed by a space, then describe what you want in plain language:
 
@@ -85,18 +82,18 @@ In your agent CLI, type `/ego-browser` followed by a space, then describe what y
 ego-browser follow @ego_agent on x.com for me
 ```
 
-The agent picks up the `ego-browser` skill, opens the page in its own Space, reads a Snapshot, acts on the page, and reports back, all while your own tabs stay untouched.
+The agent picks up the `ego-browser` skill, opens the page in its own Space, reads a Snapshot (the page turned into structured text), acts on the page, and reports back, all while your own tabs stay untouched.
 
-Your browsing data stays on your device. ego lite only records whether you opted into Chrome migration during setup.
+Your browsing data, cookies, and everything else the browser holds stay on your device. ego lite keeps its data collection deliberately narrow: simple product signals, like whether you've set ego lite as your default browser.
 
-## Highlight of ego lite
+## Highlights of ego lite
 
 | Feature | What it does |
 |---|---|
-| **Code base, not CLI base, for faster runs with fewer tokens on complex tasks** | The capabilities ego lite exposes to the agent are wrapped as JavaScript functions the agent calls directly. The agent gets to do what it does best: write code, composing a multi-step task into a single output instead of getting stuck in a "call two commands, look at the result, call two more commands" loop. Compared to the conventional CLI approach, complex workflows finish up to 2.5× faster with higher task success rates and far fewer tool calls per task. |
+| **Code-based, not CLI-based: faster runs on fewer tokens for complex tasks** | The capabilities ego lite exposes to the agent are wrapped as JavaScript functions the agent calls directly. The agent gets to do what it does best: write code, composing a multi-step task into a single output instead of getting stuck in a "call two commands, look at the result, call two more commands" loop. Compared to the conventional CLI approach, complex workflows finish far faster, with higher task success rates, far fewer tool calls per task, and a much lower cost per task. |
 | **A dedicated Space for every agent** | ego lite gives each agent its own fully isolated Space. You browse up front, your agent works in the background, and they don't get in each other's way. You can see which Space has an agent running at any moment, and take it over or stop it whenever you want. |
 | **Your agents multitask in Spaces, parallel workspaces inside the same browser** | Each Space gets its own AI agent or its own task, all running at the same time. Claude Code enriching 10 leads in 10 parallel Spaces. Codex scraping 5 competitor sites in 5 more. They don't collide or steal your tabs. Your mouse stays where you left it. |
-| **The strongest page Snapshot on the market** | Thanks to kernel-level customization, ego lite produces the highest-quality page snapshots, the view text models rely on to "see" and act on a webpage. It reliably handles tough cases like deeply nested iframes, exactly where other approaches consistently break down. |
+| **The strongest page Snapshot on the market** | Thanks to customization inside the browser engine, ego lite produces the highest-quality page snapshots, the view text-only models rely on to "see" and act on a webpage. It reliably handles tough cases like deeply nested iframes, exactly where other approaches consistently break down. |
 | **Any agent can drive it through `ego-browser`** | `ego-browser` is the connection layer between any agent CLI (Claude Code, Codex, Cursor, or a custom one) and ego lite. It exposes the browser as a set of in-page JavaScript tools: snapshot, fill, click, wait, navigate, capture. The agent writes a JavaScript snippet calling those tools, and `ego-browser` runs it on the page in one pass. |
 | **Experience accumulation that makes your agent faster the more you use it** *(coming soon)* | Most of an agent's time on browser tasks goes to trial and error. ego lite's official Skill distills every successful action into reusable tools and workflows, so similar tasks down the line run up to 5x faster. |
 
@@ -122,7 +119,7 @@ Two other categories try to solve the same problem. Browser automation framework
 
 ## Benchmarks
 
-We benchmarked ego lite against Vercel's agent-browser on four complex browser automation tasks. ego lite finished each task up to 2.5× faster, with substantially fewer tokens. The harder the task, the bigger the gap. Check the comparison.
+We benchmarked ego lite against Vercel's agent-browser on four complex browser automation tasks. ego lite finished each task up to 2.5× faster, with substantially fewer tokens. The harder the task, the bigger the gap. See the comparison below.
 
 <div align="center">
 
@@ -139,6 +136,19 @@ Tutorials, the full tool reference, and integration guides live at [lite.ego.app
 - [Discord](https://discord.gg/5eGZVvHbTq), questions, setup help, and skill sharing
 - [GitHub Discussions](https://github.com/citrolabs/ego-lite/discussions), ideas and longer threads
 - [X/Twitter](https://x.com/ego_agent), updates and releases
+
+## Star History
+
+<a href="https://github.com/citrolabs/ego-lite/stargazers">
+<!-- star-history:start -->
+<!-- Generated daily by .github/workflows/star-history.yml and published to the
+     'star-history' branch, because main's ruleset will not take a bot commit. -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/citrolabs/ego-lite/star-history/star-history-dark.svg">
+  <img alt="Star history" src="https://raw.githubusercontent.com/citrolabs/ego-lite/star-history/star-history-light.svg">
+</picture>
+<!-- star-history:end -->
+</a>
 
 ## License
 

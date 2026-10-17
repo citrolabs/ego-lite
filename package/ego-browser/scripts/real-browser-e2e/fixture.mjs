@@ -1,6 +1,5 @@
+import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
-
-import { createDamaiRushRoutes } from "./damai-rush/fixture-routes.mjs";
 
 export async function closeFixtureServer(fixtureServer) {
   await new Promise((resolve) => {
@@ -16,10 +15,14 @@ export async function closeFixtureServer(fixtureServer) {
 }
 
 export async function startFixtureServer(taskName) {
-  const handleDamaiRushRoute = createDamaiRushRoutes();
-  const fixtureServer = createServer(async (req, res) => {
+  // Source: https://cdn.openai.com/papers/gpt-4-system-card.pdf
+  const pdfFixture = await readFile(
+    new URL("./fixtures/openai-gpt-4-system-card.pdf", import.meta.url),
+  );
+  let crossSiteBaseUrl = "";
+  const snapshotFrameRequests = new Map();
+  const fixtureServer = createServer((req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
-    if (await handleDamaiRushRoute(req, res, url)) return;
     if (url.pathname === "/healthz") {
       res.writeHead(200, {
         "content-type": "application/json",
@@ -51,6 +54,49 @@ export async function startFixtureServer(taskName) {
       res.end("server text fixture");
       return;
     }
+    if (url.pathname === "/api/download") {
+      const requestedSpace = url.searchParams.get("space");
+      const space =
+        requestedSpace === "first" || requestedSpace === "second"
+          ? requestedSpace
+          : undefined;
+      const body = space
+        ? `ego-browser ${space} TaskSpace download\n`
+        : "ego-browser download fixture\n";
+      const filename = space ? `ego-${space}-download.txt` : "ego-download.txt";
+      res.writeHead(200, {
+        "content-type": "text/plain",
+        "content-length": Buffer.byteLength(body),
+        "content-disposition": `attachment; filename="${filename}"`,
+        "cache-control": "no-store",
+      });
+      res.end(body);
+      return;
+    }
+    if (url.pathname === "/api/openai-gpt-4-system-card.pdf") {
+      res.writeHead(200, {
+        "content-type": "application/pdf",
+        "content-length": pdfFixture.length,
+        "content-disposition":
+          'inline; filename="openai-gpt-4-system-card.pdf"',
+        "cache-control": "no-store",
+      });
+      res.end(pdfFixture);
+      return;
+    }
+    if (url.pathname === "/api/image.png") {
+      const png = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        "base64",
+      );
+      res.writeHead(200, {
+        "content-type": "image/png",
+        "content-length": png.length,
+        "access-control-allow-origin": "*",
+      });
+      res.end(png);
+      return;
+    }
     if (url.pathname === "/api/header") {
       res.writeHead(200, {
         "content-type": "text/plain",
@@ -68,6 +114,14 @@ export async function startFixtureServer(taskName) {
       res.end();
       return;
     }
+    if (url.pathname === "/redirect/favicon.ico") {
+      res.writeHead(302, {
+        location: "/api/slow?ms=2000&case=favicon-redirect",
+        "cache-control": "no-store",
+      });
+      res.end();
+      return;
+    }
     if (url.pathname === "/api/echo") {
       let body = "";
       req.on("data", (chunk) => {
@@ -77,8 +131,32 @@ export async function startFixtureServer(taskName) {
         res.writeHead(200, {
           "content-type": "text/plain",
           "access-control-allow-origin": "*",
+          "cache-control": "no-store",
         });
         res.end(`echo:${req.method}:${body}`);
+      });
+      return;
+    }
+    if (url.pathname === "/api/request-info") {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        res.writeHead(201, {
+          "content-type": "application/json",
+          "x-fixture-response": "page-fetch",
+        });
+        res.end(
+          JSON.stringify({
+            method: req.method,
+            path: url.pathname,
+            cookie: req.headers.cookie || "",
+            origin: req.headers.origin || "",
+            requestHeader: req.headers["x-page-fetch"] || "",
+            body,
+          }),
+        );
       });
       return;
     }
@@ -96,6 +174,7 @@ export async function startFixtureServer(taskName) {
         res.writeHead(200, {
           "content-type": "text/plain",
           "access-control-allow-origin": "*",
+          "cache-control": "no-store",
         });
         res.end("slow fixture");
       }, delayMs);
@@ -110,35 +189,6 @@ export async function startFixtureServer(taskName) {
       res.end(`status ${code}`);
       return;
     }
-    if (url.pathname === "/regression/delayed-asset.svg") {
-      const delayMs = boundedDelay(url.searchParams.get("ms"), 1200);
-      setTimeout(() => {
-        res.writeHead(200, {
-          "content-type": "image/svg+xml",
-          "cache-control": "no-store",
-        });
-        res.end(
-          '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4" fill="#2457ff"/></svg>',
-        );
-      }, delayMs);
-      return;
-    }
-    if (url.pathname === "/regression/slow-load") {
-      const delayMs = boundedDelay(url.searchParams.get("ms"), 1200);
-      res.writeHead(200, {
-        "content-type": "text/html",
-        "cache-control": "no-store",
-      });
-      res.end(`<!doctype html>
-<html>
-  <head><meta charset="utf-8"><title>slow load regression</title></head>
-  <body>
-    <h1>Slow load regression</h1>
-    <img alt="delayed asset" src="/regression/delayed-asset.svg?ms=${delayMs}&nonce=${Date.now()}">
-  </body>
-</html>`);
-      return;
-    }
     if (url.pathname === "/api/bytes") {
       const n = Math.max(0, Number(url.searchParams.get("n") || 0));
       res.writeHead(200, {
@@ -146,14 +196,6 @@ export async function startFixtureServer(taskName) {
         "access-control-allow-origin": "*",
       });
       res.end("a".repeat(n));
-      return;
-    }
-    if (url.pathname === "/download/sample.txt") {
-      res.writeHead(200, {
-        "content-type": "text/plain",
-        "content-disposition": 'attachment; filename="sample-download.txt"',
-      });
-      res.end("download fixture");
       return;
     }
     if (req.method === "OPTIONS") {
@@ -165,9 +207,146 @@ export async function startFixtureServer(taskName) {
       res.end();
       return;
     }
+    if (url.pathname === "/snapshot-subtree-frame-state") {
+      const run = url.searchParams.get("run") || "";
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      });
+      res.end(
+        JSON.stringify({ requests: snapshotFrameRequests.get(run) || 0 }),
+      );
+      return;
+    }
+    if (url.pathname === "/snapshot-subtree-frame-content") {
+      const mode =
+        url.searchParams.get("mode") === "cross-origin"
+          ? "cross-origin"
+          : "same-origin";
+      const requestedFrame = url.searchParams.get("frame") || "";
+      const frameLabels = {
+        first: "First sibling iframe",
+        second: "Second sibling iframe",
+        "nested-outer": "Nested outer iframe",
+        "nested-inner": "Nested inner iframe",
+        replacement: "Replacement iframe",
+      };
+      const frameLabel =
+        frameLabels[requestedFrame] ||
+        (mode === "cross-origin" ? "Cross-origin OOPIF" : "Same-origin iframe");
+      const run = url.searchParams.get("run") || "";
+      if (run) {
+        snapshotFrameRequests.set(
+          run,
+          (snapshotFrameRequests.get(run) || 0) + 1,
+        );
+      }
+      const nestedFrame =
+        requestedFrame === "nested-outer"
+          ? `<iframe
+              id="nested-subtree-frame"
+              title="Nested subtree frame"
+              width="400"
+              height="200"
+              src="/snapshot-subtree-frame-content?mode=same-origin&frame=nested-inner"
+            ></iframe>`
+          : "";
+      res.writeHead(200, {
+        "content-type": "text/html",
+        "cache-control": "no-store",
+      });
+      res.end(`<!doctype html>
+        <html>
+          <head><title>${frameLabel} subtree fixture</title></head>
+          <body>
+            <main>
+              <h1>${frameLabel} subtree content</h1>
+              <button id="subtree-action" type="button" aria-label="Run ${frameLabel} subtree action">
+                Run frame action
+              </button>
+              <p id="subtree-status">${frameLabel} idle</p>
+              ${nestedFrame}
+            </main>
+            <script>
+              document.querySelector("#subtree-action").addEventListener("click", () => {
+                document.querySelector("#subtree-status").textContent =
+                  ${JSON.stringify(frameLabel)} + " clicked";
+              });
+            </script>
+          </body>
+        </html>`);
+      return;
+    }
+    if (url.pathname === "/snapshot-subtree-frame-host") {
+      const mode =
+        url.searchParams.get("mode") === "cross-origin"
+          ? "cross-origin"
+          : "same-origin";
+      const layout = ["siblings", "nested"].includes(
+        url.searchParams.get("layout"),
+      )
+        ? url.searchParams.get("layout")
+        : "single";
+      const run = url.searchParams.get("run") || "";
+      const lazy = url.searchParams.get("lazy") === "true";
+      const frameUrl = (frame) => {
+        const origin = mode === "cross-origin" ? crossSiteBaseUrl : "";
+        const params = new URLSearchParams({ mode });
+        if (frame) params.set("frame", frame);
+        if (run) params.set("run", run);
+        return `${origin}/snapshot-subtree-frame-content?${params}`;
+      };
+      const frameMarkup =
+        layout === "siblings"
+          ? `<iframe
+              id="snapshot-subtree-frame-first"
+              title="First sibling subtree frame"
+              src="${frameUrl("first")}"
+            ></iframe>
+            <iframe
+              id="snapshot-subtree-frame-second"
+              title="Second sibling subtree frame"
+              src="${frameUrl("second")}"
+            ></iframe>`
+          : `<iframe
+              id="snapshot-subtree-frame"
+              title="Deferred snapshot subtree frame"
+              width="${layout === "nested" ? 500 : 400}"
+              height="${layout === "nested" ? 450 : 300}"
+              ${lazy ? 'loading="lazy"' : ""}
+              src="${frameUrl(layout === "nested" ? "nested-outer" : "")}"
+            ></iframe>`;
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(`<!doctype html>
+        <html>
+          <head><title>Snapshot iframe host</title></head>
+          <body>
+            <main>
+              <h1>Snapshot iframe host</h1>
+              <p>Host sibling marker</p>
+              ${lazy ? '<div style="height: 12000px">Lazy frame spacer</div>' : ""}
+              ${frameMarkup}
+            </main>
+          </body>
+        </html>`);
+      return;
+    }
     if (url.pathname === "/frame.html") {
       res.writeHead(200, { "content-type": "text/html" });
-      res.end(pageHtml("frame"));
+      res.end(pageHtml("frame", { iframeUrl: null }));
+      return;
+    }
+    if (url.pathname === "/slow-frame") {
+      const delayMs = Number(url.searchParams.get("ms") || 800);
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(`<!doctype html>
+        <html>
+          <head><title>Slow OOPIF fixture</title></head>
+          <body>
+            <h1>Slow OOPIF</h1>
+            <img src="/api/slow?ms=${delayMs}" alt="slow OOPIF resource">
+          </body>
+        </html>`);
       return;
     }
     if (url.pathname === "/nav-target") {
@@ -175,23 +354,50 @@ export async function startFixtureServer(taskName) {
       res.end(pageHtml("nav-target"));
       return;
     }
-    if (url.pathname === "/regression/slow-document") {
-      const delayMs = boundedDelay(url.searchParams.get("ms"), 1200);
-      res.writeHead(200, {
-        "content-type": "text/html",
-        "cache-control": "no-store",
-      });
-      res.flushHeaders?.();
-      setTimeout(() => {
-        res.end(
-          "<!doctype html><html><head><title>slow document regression</title></head><body><h1>Ready</h1></body></html>",
-        );
-      }, delayMs);
-      return;
-    }
     if (url.pathname === "/secondary") {
       res.writeHead(200, { "content-type": "text/html" });
       res.end(pageHtml("secondary"));
+      return;
+    }
+    if (url.pathname === "/download-entry") {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(`<!doctype html>
+        <html>
+          <head><title>Download entry</title></head>
+          <body>
+            <a href="/api/openai-gpt-4-system-card.pdf" target="_blank">Preview report</a>
+          </body>
+        </html>`);
+      return;
+    }
+    if (url.pathname === "/same-origin-frame") {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(pageHtml("home", { iframeUrl: "/frame.html" }));
+      return;
+    }
+    if (url.pathname === "/oopif-network") {
+      const delayMs = Number(url.searchParams.get("ms") || 800);
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(
+        pageHtml("home", {
+          iframeUrl: `${crossSiteBaseUrl}/slow-frame?ms=${delayMs}`,
+        }),
+      );
+      return;
+    }
+    if (url.pathname === "/visual") {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(visualPageHtml());
+      return;
+    }
+    if (url.pathname === "/pointer-workbench") {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(pointerWorkbenchHtml());
+      return;
+    }
+    if (url.pathname === "/media-workbench") {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(mediaWorkbenchHtml());
       return;
     }
     if (url.pathname === "/slow-page") {
@@ -205,13 +411,57 @@ export async function startFixtureServer(taskName) {
       }, delayMs);
       return;
     }
+    if (url.pathname === "/streamed-page") {
+      const delayMs = Number(url.searchParams.get("ms") || 1000);
+      res.writeHead(200, { "content-type": "text/html" });
+      res.write(`<!doctype html><html><head><title>Streamed fixture</title></head>
+        <body><h1 id="commit-marker">document committed</h1>
+        <script>document.documentElement.dataset.committed = "true";</script>`);
+      setTimeout(() => {
+        res.end("</body></html>");
+      }, delayMs);
+      return;
+    }
+    if (url.pathname === "/domcontentloaded-page") {
+      const delayMs = Number(url.searchParams.get("ms") || 1500);
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(`<!doctype html>
+        <html>
+          <head><title>DOMContentLoaded fixture</title></head>
+          <body>
+            <h1 id="dcl-marker">parsed before slow image</h1>
+            <img src="/api/slow?ms=${delayMs}" alt="slow resource">
+            <script>
+              addEventListener("DOMContentLoaded", () => {
+                document.documentElement.dataset.domContentLoaded = "true";
+              });
+            </script>
+          </body>
+        </html>`);
+      return;
+    }
+    if (url.pathname === "/favicon-redirect-page") {
+      res.writeHead(200, {
+        "content-type": "text/html",
+        "cache-control": "no-store",
+      });
+      res.end(`<!doctype html>
+        <html>
+          <head>
+            <title>Favicon redirect fixture</title>
+            <link rel="icon" href="/redirect/favicon.ico">
+          </head>
+          <body><h1>Favicon redirect fixture</h1></body>
+        </html>`);
+      return;
+    }
     if (url.pathname === "/favicon.ico") {
       res.writeHead(204);
       res.end();
       return;
     }
     res.writeHead(200, { "content-type": "text/html" });
-    res.end(pageHtml("home"));
+    res.end(pageHtml("home", { iframeUrl: `${crossSiteBaseUrl}/frame.html` }));
   });
 
   await new Promise((resolve, reject) => {
@@ -219,18 +469,14 @@ export async function startFixtureServer(taskName) {
     fixtureServer.listen(0, "127.0.0.1", () => resolve());
   });
   const address = fixtureServer.address();
+  crossSiteBaseUrl = `http://localhost:${address.port}`;
   return {
     server: fixtureServer,
     baseUrl: `http://127.0.0.1:${address.port}`,
   };
 }
 
-function boundedDelay(raw, fallback) {
-  const value = Number(raw ?? fallback);
-  return Number.isFinite(value) ? Math.max(0, Math.min(value, 5000)) : fallback;
-}
-
-function pageHtml(kind) {
+function pageHtml(kind, { iframeUrl = "/frame.html" } = {}) {
   const title =
     kind === "nav-target"
       ? "ego-lite nav target"
@@ -254,317 +500,104 @@ function pageHtml(kind) {
     <meta charset="utf-8">
     <title>${title}</title>
     <style>
-      :root {
-        --bg: #f5f6f8;
-        --surface: #ffffff;
-        --text: #1a1a2e;
-        --text2: #6b7280;
-        --border: #e2e5ea;
-        --accent: #3b82f6;
-        --accent-bg: #eff6ff;
-        --green: #16a34a;
-        --green-bg: #f0fdf4;
-        --red: #dc2626;
-        --purple-bg: #f5f3ff;
-        --radius: 6px;
+      body { font-family: system-ui, sans-serif; margin: 24px; }
+      button, input { font: inherit; }
+      #hover-zone, #drag-source, #drag-target {
+        align-items: center;
+        border: 1px solid #777;
+        display: inline-flex;
+        height: 64px;
+        justify-content: center;
+        margin: 8px;
+        width: 160px;
       }
-      *, *::before, *::after { box-sizing: border-box; }
-      body {
-        font-family: system-ui, -apple-system, sans-serif;
-        background: var(--bg);
-        color: var(--text);
-        margin: 0;
-        padding: 10px 16px;
-        line-height: 1.35;
-        font-size: 13px;
-      }
-      main { max-width: 960px; }
-      h1 { font-size: 1.1rem; font-weight: 700; margin: 0 0 2px; letter-spacing: -0.02em; }
-      h2 { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text2); margin: 6px 0 2px; }
-      [data-testid="status"] { color: var(--text2); font-size: 0.8rem; margin: 0 0 6px; }
-
-      .card-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 2px; }
-      .card {
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        padding: 6px 10px;
-        margin-bottom: 4px;
-      }
-
-      /* Buttons */
-      button, .btn {
-        font: inherit; font-size: 0.8rem; font-weight: 500;
-        padding: 4px 10px; border-radius: 5px;
-        border: 1px solid var(--border); background: var(--surface);
-        color: var(--text); cursor: pointer;
-      }
-      button:hover, .btn:hover { background: #f0f1f3; }
-      .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-      .btn-primary:hover { background: #2563eb; }
-      #click-count {
-        display: inline-flex; align-items: center; justify-content: center;
-        min-width: 22px; height: 22px; padding: 0 6px;
-        background: var(--accent-bg); color: var(--accent);
-        border-radius: 11px; font-size: 0.8rem; font-weight: 600;
-        margin-left: 6px;
-      }
-      .duplicate-action { margin-right: 3px; }
-
-      /* Links */
-      a { color: var(--accent); text-decoration: none; font-weight: 500; font-size: 0.8rem; }
-      a:hover { text-decoration: underline; }
-
-      /* Form controls */
-      label { display: block; margin-bottom: 4px; font-size: 0.8rem; color: var(--text2); }
-      label span { display: block; margin-bottom: 1px; font-weight: 500; font-size: 0.75rem; }
-      input:not([type="checkbox"]):not([type="file"]), textarea, select {
-        font: inherit; font-size: 0.8rem;
-        padding: 3px 8px; border: 1px solid var(--border);
-        border-radius: 4px; width: 100%; max-width: 220px;
-        background: var(--surface); color: var(--text);
-      }
-      input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
-      textarea { resize: vertical; min-height: 28px; height: 28px; }
-      input[type="file"] { font-size: 0.75rem; }
-      input[type="checkbox"] { margin-right: 4px; vertical-align: middle; }
-      .form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-end; }
-      .form-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-
-      /* Interaction zones */
-      .zone {
-        display: inline-flex; align-items: center; justify-content: center;
-        padding: 6px 14px; border: 2px dashed var(--border);
-        border-radius: var(--radius); font-size: 0.8rem; color: var(--text2);
-        user-select: none;
-      }
-      #hover-zone { width: 100px; height: 36px; }
-      #hover-zone:hover { border-color: var(--accent); background: var(--accent-bg); }
-      #drag-source, #drag-target {
-        width: 100px; height: 36px; margin: 2px;
-      }
-      #drag-source { border-style: solid; cursor: grab; }
-      #drag-source:active { cursor: grabbing; }
-      #drag-target { background: var(--green-bg); border-color: var(--green); }
-      .drag-row { display: flex; align-items: center; gap: 6px; }
-      .drag-arrow { color: var(--text2); font-size: 1rem; }
-
-      /* Context menu zone */
-      #context-menu-zone {
-        background: var(--purple-bg);
-        border-color: #a78bfa; width: 100px; height: 36px;
-      }
-
-      /* Rich editor */
+      #drag-target { background: #eef7ee; }
       #rich-editor {
-        border: 1px solid var(--border); border-radius: 4px;
-        min-height: 28px; padding: 4px 8px; width: 100%; max-width: 220px;
-        font-size: 0.8rem;
+        border: 1px solid #777;
+        min-height: 48px;
+        padding: 8px;
+        width: 320px;
       }
-      #rich-editor:focus { outline: none; border-color: var(--accent); }
-
-      /* Dynamic DOM */
-      .dynamic-actions { display: flex; gap: 4px; }
-      #dynamic-container { min-height: 4px; margin-top: 4px; }
-      #dynamic-element {
-        display: inline-block; background: var(--green-bg);
-        border: 1px solid var(--green); border-radius: 4px;
-        padding: 2px 8px; font-size: 0.8rem; color: var(--green);
+      #context-menu-zone {
+        align-items: center;
+        background: #f7eef7;
+        border: 1px dashed #777;
+        display: inline-flex;
+        height: 48px;
+        justify-content: center;
+        margin: 8px;
+        width: 160px;
       }
-
-      /* Canvas */
-      #draw-canvas {
-        border: 1px solid var(--border); border-radius: var(--radius);
-        cursor: crosshair; display: block; background: #fff;
-      }
-
-      /* HTML5 DnD */
-      #dnd-source {
-        width: 80px; height: 34px;
-        background: var(--accent-bg); border: 2px solid var(--accent);
-        border-radius: var(--radius); display: inline-flex;
-        align-items: center; justify-content: center;
-        font-size: 0.8rem; font-weight: 500; color: var(--accent);
-        cursor: grab; margin: 2px;
-      }
-      #dnd-source:active { cursor: grabbing; }
-      #dnd-target {
-        width: 100px; height: 34px;
-        background: var(--green-bg); border: 2px dashed var(--green);
-        border-radius: var(--radius); display: inline-flex;
-        align-items: center; justify-content: center;
-        font-size: 0.8rem; font-weight: 500; color: var(--green);
-        margin: 2px;
-      }
-      #dnd-target.drag-over { background: #dcfce7; border-style: solid; }
-      .dnd-row { display: flex; align-items: center; gap: 8px; }
-
-      /* Pointer events area */
-      #pointer-area {
-        width: 100%; height: 70px;
-        border: 1px solid var(--border); border-radius: var(--radius);
-        background: #fafbfc; position: relative;
-        display: flex; align-items: center; justify-content: center;
-        font-size: 0.8rem; color: var(--text2);
-        touch-action: none;
-      }
-      #pointer-area .pointer-indicator {
-        position: absolute; width: 6px; height: 6px;
-        border-radius: 50%; background: var(--accent);
-        transform: translate(-50%, -50%); pointer-events: none;
-        opacity: 0;
-      }
-
-      /* Tab trap */
-      #tab-trap { display: flex; gap: 4px; }
+      #dynamic-container { min-height: 24px; margin: 8px 0; }
       .tab-stop {
-        border: 1px solid var(--border); border-radius: 4px;
-        display: inline-block; padding: 3px 10px;
-        font-size: 0.8rem; cursor: pointer;
+        border: 1px solid #999;
+        display: inline-block;
+        margin: 4px;
+        padding: 4px 12px;
       }
-      .tab-stop:focus { outline: none; border-color: var(--accent); background: var(--accent-bg); }
-
-      /* Scroll areas */
+      .tab-stop:focus { outline: 2px solid #44f; }
       #inner-scroll {
-        border: 1px solid var(--border); border-radius: var(--radius);
-        height: 80px; margin-top: 4px; overflow: auto; width: 220px;
+        border: 1px solid #777;
+        height: 120px;
+        margin-top: 12px;
+        overflow: auto;
+        width: 320px;
       }
-      #inner-scroll-content { height: 620px; padding-top: 520px; font-size: 0.8rem; color: var(--text2); }
+      #inner-scroll-content { height: 620px; padding-top: 520px; }
       #scroll-area { height: 1800px; padding-top: 16px; }
-      #bottom-marker { margin-top: 1450px; font-size: 0.8rem; color: var(--text2); }
-
-      /* Utility */
+      #bottom-marker { margin-top: 1450px; }
       #delayed { display: none; }
-      #never-visible { display: none; }
-      #file-name, #key-log { font-size: 0.75rem; color: var(--text2); margin: 2px 0; min-height: 1em; }
-      #controlled-state { font-size: 0.75rem; color: var(--text2); margin-left: 6px; }
-      #dnd-status, #pointer-log { font-size: 0.75rem; color: var(--text2); margin-top: 2px; }
-      iframe { display: none; }
     </style>
   </head>
   <body>
     <main>
       <h1>${heading}</h1>
       <p data-testid="status">ready</p>
-
-      <div class="card">
-        <button id="click-button" class="btn-primary" aria-label="Increment counter" title="Counter button">Click counter</button>
-        <span id="click-count">0</span>
-        <button class="duplicate-action" type="button">Duplicate action</button>
-        <button class="duplicate-action" type="button">Duplicate action</button>
-        <a id="nav-link" href="/nav-target" style="margin-left:8px">Go to nav target</a>
-        <a id="download-link" href="/download/sample.txt" download style="margin-left:8px">Download sample</a>
-        <div id="home-type-listbox" role="listbox" aria-label="Home type" style="display:inline-flex;gap:6px;margin-left:8px">
-          <button id="house-option-primary" type="button" role="option" aria-selected="false">House</button>
-          <button id="house-option-secondary" type="button" role="option" aria-selected="false">House</button>
-          <!-- Hidden responsive-variant dupe: visible to a naive DOM role scan, ignored by the AX tree. -->
-          <button id="house-option-hidden" type="button" role="option" aria-selected="false" style="display:none">House</button>
-        </div>
+      <button id="click-button" aria-label="Increment counter">Click counter</button>
+      <button class="duplicate-action" type="button">Duplicate action</button>
+      <button class="duplicate-action" type="button">Duplicate action</button>
+      <a id="nav-link" href="/nav-target">Go to nav target</a>
+      <span id="click-count">0</span>
+      <div id="hover-zone">Hover zone</div>
+      <div id="drag-source">Drag source</div>
+      <div id="drag-target">Drag target</div>
+      <label>Text input <input id="text-input" value="initial"></label>
+      <label>Append input <input id="append-input" value="base"></label>
+      <label>Text area <textarea id="text-area">seed</textarea></label>
+      <label for="file-input">File input</label>
+      <input id="file-input" type="file" multiple hidden>
+      <button id="dynamic-file-button" type="button">Choose files dynamically</button>
+      <div id="dynamic-file-container"></div>
+      <div id="file-name"></div>
+      <div id="key-log"></div>
+      <label>Dropdown <select id="dropdown">
+        <option value="alpha">Alpha</option>
+        <option value="beta">Beta</option>
+        <option value="gamma">Gamma</option>
+      </select></label>
+      <label><input type="checkbox" id="checkbox"> Toggle checkbox</label>
+      <div id="rich-editor" contenteditable="true">edit me</div>
+      <div id="context-menu-zone">Right-click here</div>
+      <button id="add-element" type="button">Add element</button>
+      <button id="remove-element" type="button">Remove element</button>
+      <div id="dynamic-container"></div>
+      <div id="tab-trap">
+        <span class="tab-stop" tabindex="0" data-tab="first">First</span>
+        <span class="tab-stop" tabindex="0" data-tab="second">Second</span>
+        <span class="tab-stop" tabindex="0" data-tab="third">Third</span>
       </div>
-
-      <div class="card-row">
-        <div>
-          <h2>Pointer &amp; Mouse</h2>
-          <div class="card">
-            <div style="display:flex;gap:6px;flex-wrap:wrap">
-              <div id="hover-zone" class="zone">Hover zone</div>
-              <div id="context-menu-zone" class="zone">Right-click here</div>
-            </div>
-            <div class="drag-row" style="margin-top:4px">
-              <div id="drag-source" class="zone">Drag source</div>
-              <span class="drag-arrow">&rarr;</span>
-              <div id="drag-target" class="zone">Drag target</div>
-            </div>
-          </div>
-        </div>
-        <div>
-          <h2>HTML5 Drag &amp; Drop</h2>
-          <div class="card">
-            <div class="dnd-row">
-              <div id="dnd-source" draggable="true">Drag me</div>
-              <span class="drag-arrow">&rarr;</span>
-              <div id="dnd-target">Drop here</div>
-            </div>
-            <div id="dnd-status">Awaiting drag</div>
-          </div>
-          <h2>Pointer Events</h2>
-          <div class="card">
-            <div id="pointer-area">
-              <span class="pointer-label">Move pointer here</span>
-              <div class="pointer-indicator"></div>
-            </div>
-            <div id="pointer-log">No events</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card-row">
-        <div>
-          <h2>Form Inputs</h2>
-          <div class="card">
-            <div class="form-cols">
-              <label><span>Text input</span><input id="text-input" placeholder="Type text" value="initial"></label>
-              <label><span>Append input</span><input id="append-input" value="base"></label>
-            </div>
-            <label><span>Text area</span><textarea id="text-area">seed</textarea></label>
-            <div class="form-row">
-              <label style="flex:1;max-width:160px"><span>Dropdown</span><select id="dropdown">
-                <option value="alpha">Alpha</option>
-                <option value="beta">Beta</option>
-                <option value="gamma">Gamma</option>
-              </select></label>
-              <label style="margin-bottom:0"><input type="checkbox" id="checkbox"> Toggle</label>
-            </div>
-            <label><span>File input</span><input id="file-input" type="file" multiple></label>
-            <div id="file-name"></div>
-            <div id="key-log"></div>
-          </div>
-        </div>
-        <div>
-          <h2>Rich Text &amp; Dynamic DOM</h2>
-          <div class="card">
-            <img id="alt-logo" alt="Ego fixture logo" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" style="width:1px;height:1px;opacity:0" />
-            <label><span>Content editable</span><div id="rich-editor" contenteditable="true">edit me</div></label>
-            <div class="dynamic-actions">
-              <button id="add-element" type="button">Add element</button>
-              <button id="remove-element" type="button">Remove element</button>
-            </div>
-            <div id="dynamic-container"></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="card-row">
-        <div>
-          <h2>Canvas Drawing</h2>
-          <div class="card">
-            <canvas id="draw-canvas" width="300" height="150"></canvas>
-          </div>
-        </div>
-        <div>
-          <h2>Advanced</h2>
-          <div class="card">
-            <div class="form-cols">
-              <label><span>Email</span><input id="email-input" type="email" value="old@example.com"></label>
-              <label><span>Number</span><input id="number-input" type="number" value="123"></label>
-            </div>
-            <label style="display:flex;align-items:center;gap:6px"><span style="margin:0">Controlled</span><input id="controlled-input" type="text" style="flex:1;max-width:160px"><span id="controlled-state"></span></label>
-            <div id="tab-trap">
-              <span class="tab-stop" tabindex="0" data-tab="first">First</span>
-              <span class="tab-stop" tabindex="0" data-tab="second">Second</span>
-              <span class="tab-stop" tabindex="0" data-tab="third">Third</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <div id="delayed">Delayed element</div>
-      <div id="never-visible">Never visible</div>
-      <iframe id="fixture-frame" src="/frame.html"></iframe>
+      <div id="never-visible" style="display:none">Never visible</div>
+      ${iframeUrl ? `<iframe id="fixture-frame" src="${iframeUrl}"></iframe>` : ""}
       <div id="inner-scroll"><div id="inner-scroll-content">Inner scroll marker</div></div>
       <section id="scroll-area"><div id="bottom-marker">Bottom marker</div></section>
-
-      ${kind === "frame" ? '<div id="iframe-marker" data-iframe="true" style="border:2px solid var(--accent);padding:4px 8px;margin-top:4px;border-radius:4px;font-size:0.8rem">iframe target</div>' : ""}
+      <label>Email input <input id="email-input" type="email" value="old@example.com"></label>
+      <label>Number input <input id="number-input" type="number" value="123"></label>
+      <label>Controlled input <input id="controlled-input" type="text"></label>
+      <span id="controlled-state"></span>
+      <shadow-fixture id="shadow-fixture"></shadow-fixture>
+      ${kind === "frame" ? '<div id="iframe-marker" data-iframe="true" style="border:2px solid #44f;padding:8px;margin-top:8px;">iframe target</div>' : ""}
+      ${kind === "frame" ? '<button id="iframe-action" type="button" aria-label="Run iframe action">Run iframe action</button><label>Iframe field <input id="iframe-field" aria-label="Iframe field"></label><span id="iframe-result">idle</span>' : ""}
     </main>
     <script>
       window.__fixtureState = {
@@ -583,31 +616,44 @@ function pageHtml(kind) {
         checkboxChecked: false,
         dropdownValue: "alpha",
         valueEvents: {},
-        canvasStrokes: 0,
-        canvasPoints: 0,
-        canvasDrawing: false,
-        canvasLastPoint: null,
-        /* HTML5 DnD */
-        dndDropped: false,
-        dndData: "",
-        /* Pointer Events API */
-        pointerEventTypes: [],
-        pointerDownCount: 0,
-        pointerMoveCount: 0,
-        lastPointerType: "",
-        lastPointerPressure: 0,
       };
-
-      /* ---- click / dblclick tracking ---- */
+      const iframeAction = document.querySelector("#iframe-action");
+      iframeAction?.addEventListener("click", (event) => {
+        document.querySelector("#iframe-result").textContent =
+          "clicked:" + String(event.isTrusted);
+      });
+      const shadowHost = document.querySelector("#shadow-fixture");
+      const shadowRoot = shadowHost.attachShadow({ mode: "open" });
+      const nestedHost = document.createElement("nested-shadow-fixture");
+      shadowRoot.append(nestedHost);
+      const nestedShadowRoot = nestedHost.attachShadow({ mode: "open" });
+      const shadowInput = document.createElement("input");
+      shadowInput.setAttribute("aria-label", "Shadow field");
+      shadowRoot.prepend(shadowInput);
+      const shadowButton = document.createElement("button");
+      shadowButton.id = "shadow-action";
+      shadowButton.textContent = "Shadow action";
+      shadowButton.addEventListener("click", () => {
+        shadowButton.dataset.clicked = "true";
+      });
+      nestedShadowRoot.append(shadowButton);
       const count = document.querySelector("#click-count");
       const clickButton = document.querySelector("#click-button");
       for (const type of ["mousemove", "mousedown", "mouseup", "click", "dblclick"]) {
-        document.addEventListener(type, (event) => {
-          window.__fixtureState.pointerEvents.push({
-            type, target: event.target.id || event.target.tagName,
-            detail: event.detail, x: event.clientX, y: event.clientY,
-          });
-        }, true);
+        document.addEventListener(
+          type,
+          (event) => {
+            window.__fixtureState.pointerEvents.push({
+              type,
+              target: event.target.id || event.target.tagName,
+              detail: event.detail,
+              x: event.clientX,
+              y: event.clientY,
+              trusted: event.isTrusted,
+            });
+          },
+          true,
+        );
       }
       clickButton.addEventListener("click", (event) => {
         window.__fixtureState.clicks += 1;
@@ -618,49 +664,51 @@ function pageHtml(kind) {
         window.__fixtureState.doubleClicks += 1;
         window.__fixtureState.lastDoubleClickDetail = event.detail;
       });
-
-      for (const option of document.querySelectorAll("#home-type-listbox [role=option]")) {
-        option.addEventListener("click", () => {
-          for (const peer of document.querySelectorAll("#home-type-listbox [role=option]")) {
-            peer.setAttribute("aria-selected", String(peer === option));
-          }
-        });
-      }
-
-      /* ---- hover zone ---- */
       for (const type of ["mousemove", "mouseover"]) {
         document.querySelector("#hover-zone").addEventListener(type, () => {
           window.__fixtureState.hovered = true;
         });
       }
-
-      /* ---- mouse-based drag (legacy) ---- */
       let dragging = false;
-      document.querySelector("#drag-source").addEventListener("mousedown", () => { dragging = true; });
+      document.querySelector("#drag-source").addEventListener("mousedown", () => {
+        dragging = true;
+      });
       document.querySelector("#drag-target").addEventListener("mouseup", () => {
         if (dragging) window.__fixtureState.dragged = true;
         dragging = false;
       });
-
-      /* ---- keyboard tracking ---- */
       document.querySelector("#text-input").addEventListener("keydown", (event) => {
         window.__fixtureState.keys.push(event.key);
-        window.__fixtureState.keyEvents.push({ type: event.type, key: event.key, value: event.target.value });
+        window.__fixtureState.keyEvents.push({
+          type: event.type,
+          key: event.key,
+          value: event.target.value,
+        });
         document.querySelector("#key-log").textContent = window.__fixtureState.keys.join(",");
       });
       for (const type of ["beforeinput", "input", "keyup"]) {
         document.querySelector("#text-input").addEventListener(type, (event) => {
-          window.__fixtureState.keyEvents.push({ type, key: event.key || event.inputType || "", value: event.target.value });
+          window.__fixtureState.keyEvents.push({
+            type,
+            key: event.key || event.inputType || "",
+            value: event.target.value,
+          });
         });
       }
-
-      /* ---- file input ---- */
       document.querySelector("#file-input").addEventListener("change", (event) => {
         document.querySelector("#file-name").textContent =
           Array.from(event.target.files).map((file) => file.name).join(",");
       });
+      document.querySelector("#dynamic-file-button").addEventListener("click", () => {
+        const input = document.createElement("input");
+        input.type = "file";
+        input.multiple = true;
+        input.dataset.dynamicUpload = "true";
+        document.querySelector("#dynamic-file-container").replaceChildren(input);
+        input.click();
+      });
 
-      /* ---- value inputs (email/number) ---- */
+      /* value inputs (email/number) — track input/change for fillInput regressions */
       for (const id of ["email-input", "number-input"]) {
         const valueInput = document.querySelector("#" + id);
         for (const type of ["input", "change"]) {
@@ -670,25 +718,39 @@ function pageHtml(kind) {
         }
       }
 
-      /* ---- react-style controlled input ---- */
+      /* react-style controlled input — every input event writes value back through
+         the native prototype setter, mirroring React/Vue controlled components.
+         Guards fillInput's persistence on inputs that fight back. */
       (function () {
         const el = document.querySelector("#controlled-input");
         const stateEl = document.querySelector("#controlled-state");
-        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+        const setter = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        ).set;
         let state = "";
-        function render() { if (el.value !== state) setter.call(el, state); stateEl.textContent = state; }
-        el.addEventListener("input", () => { state = el.value; render(); });
-        el.addEventListener("change", () => { stateEl.textContent = state + " (change)"; });
+        function render() {
+          if (el.value !== state) setter.call(el, state);
+          stateEl.textContent = state;
+        }
+        el.addEventListener("input", () => {
+          state = el.value;
+          render();
+        });
+        el.addEventListener("change", () => {
+          stateEl.textContent = state + " (change)";
+        });
         render();
       })();
 
-      /* ---- context menu ---- */
-      document.querySelector("#context-menu-zone").addEventListener("contextmenu", (event) => {
+      /* context menu zone — captures right-click */
+      const contextZone = document.querySelector("#context-menu-zone");
+      contextZone.addEventListener("contextmenu", (event) => {
         event.preventDefault();
         window.__fixtureState.rightClicked = true;
       });
 
-      /* ---- dynamic DOM ---- */
+      /* dynamic DOM — add/remove elements */
       document.querySelector("#add-element").addEventListener("click", () => {
         const container = document.querySelector("#dynamic-container");
         if (!document.querySelector("#dynamic-element")) {
@@ -696,114 +758,540 @@ function pageHtml(kind) {
           el.id = "dynamic-element";
           el.setAttribute("role", "status");
           el.textContent = "Dynamic!";
-          el.style.cssText = "";
+          el.style.cssText = "background:#efe;border:1px solid #7a7;padding:4px 8px;";
           container.appendChild(el);
           window.__fixtureState.dynamicElementExists = true;
         }
       });
       document.querySelector("#remove-element").addEventListener("click", () => {
         const el = document.querySelector("#dynamic-element");
-        if (el) { el.remove(); window.__fixtureState.dynamicElementExists = false; }
+        if (el) {
+          el.remove();
+          window.__fixtureState.dynamicElementExists = false;
+        }
       });
 
-      /* ---- checkbox / dropdown ---- */
+      /* checkbox */
       document.querySelector("#checkbox").addEventListener("change", (event) => {
         window.__fixtureState.checkboxChecked = event.target.checked;
       });
+
+      /* dropdown */
       document.querySelector("#dropdown").addEventListener("change", (event) => {
         window.__fixtureState.dropdownValue = event.target.value;
       });
 
-      /* ---- tab-trap focus tracking ---- */
+      /* tab-trap focus tracking */
       for (const stop of document.querySelectorAll(".tab-stop")) {
         stop.addEventListener("focus", () => {
           window.__fixtureState.tabOrder.push(stop.dataset.tab);
         });
       }
 
-      /* ---- delayed element ---- */
+      /* delayed element */
       setTimeout(() => {
         const delayed = document.querySelector("#delayed");
         delayed.style.display = "block";
       }, 350);
+    </script>
+  </body>
+</html>`;
+}
 
-      /* ---- canvas drawing ---- */
-      (function () {
-        const canvas = document.querySelector("#draw-canvas");
-        const ctx = canvas.getContext("2d");
-        ctx.strokeStyle = "#000"; ctx.lineWidth = 2; ctx.lineCap = "round";
-        canvas.addEventListener("mousedown", (e) => {
-          const rect = canvas.getBoundingClientRect();
-          const x = e.clientX - rect.left, y = e.clientY - rect.top;
-          ctx.beginPath(); ctx.moveTo(x, y);
-          window.__fixtureState.canvasDrawing = true;
-          window.__fixtureState.canvasStrokes++;
-          window.__fixtureState.canvasPoints++;
-          window.__fixtureState.canvasLastPoint = { x, y };
-        });
-        canvas.addEventListener("mousemove", (e) => {
-          if (!window.__fixtureState.canvasDrawing) return;
-          const rect = canvas.getBoundingClientRect();
-          const x = e.clientX - rect.left, y = e.clientY - rect.top;
-          ctx.lineTo(x, y); ctx.stroke();
-          ctx.beginPath(); ctx.moveTo(x, y);
-          window.__fixtureState.canvasPoints++;
-          window.__fixtureState.canvasLastPoint = { x, y };
-        });
-        canvas.addEventListener("mouseup", () => { window.__fixtureState.canvasDrawing = false; });
-      })();
+function visualPageHtml() {
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>ego-lite visual fixture</title>
+    <style>
+      html, body { height: 100%; margin: 0; overflow: hidden; }
+      body { background: #f4f6fa; }
+      canvas { left: 100px; position: fixed; top: 100px; }
+    </style>
+  </head>
+  <body>
+    <canvas id="visual-canvas" width="320" height="180"></canvas>
+    <script>
+      const canvas = document.querySelector("#visual-canvas");
+      const context = canvas.getContext("2d");
+      window.__visualClicks = 0;
 
-      /* ---- HTML5 Drag and Drop ---- */
-      (function () {
-        const source = document.querySelector("#dnd-source");
-        const target = document.querySelector("#dnd-target");
-        const status = document.querySelector("#dnd-status");
-        source.addEventListener("dragstart", (e) => {
-          e.dataTransfer.setData("text/plain", "dnd-payload");
-          e.dataTransfer.effectAllowed = "move";
-          status.textContent = "Dragging...";
-        });
-        target.addEventListener("dragover", (e) => {
-          e.preventDefault();
-          e.dataTransfer.dropEffect = "move";
-          target.classList.add("drag-over");
-        });
-        target.addEventListener("dragleave", () => { target.classList.remove("drag-over"); });
-        target.addEventListener("drop", (e) => {
-          e.preventDefault();
-          target.classList.remove("drag-over");
-          const data = e.dataTransfer.getData("text/plain");
-          window.__fixtureState.dndDropped = true;
-          window.__fixtureState.dndData = data;
-          status.textContent = "Dropped: " + data;
-          target.textContent = "Dropped!";
-        });
-        source.addEventListener("dragend", () => {
-          if (!window.__fixtureState.dndDropped) status.textContent = "Drag cancelled";
-        });
-      })();
+      function draw(active) {
+        context.fillStyle = "#172033";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.fillStyle = active ? "#2563eb" : "#dc2626";
+        context.fillRect(20, 20, 120, 60);
+        context.fillStyle = "#ffffff";
+        context.font = "20px sans-serif";
+        context.fillText(active ? "DONE" : "CLICK", 45, 58);
+      }
 
-      /* ---- Pointer Events API ---- */
-      (function () {
-        const area = document.querySelector("#pointer-area");
-        const indicator = area.querySelector(".pointer-indicator");
-        const log = document.querySelector("#pointer-log");
-        for (const type of ["pointerdown", "pointermove", "pointerup", "pointerenter", "pointerleave", "pointercancel"]) {
-          area.addEventListener(type, (e) => {
-            window.__fixtureState.pointerEventTypes.push(type);
-            if (type === "pointerdown") window.__fixtureState.pointerDownCount++;
-            if (type === "pointermove") {
-              window.__fixtureState.pointerMoveCount++;
-              const rect = area.getBoundingClientRect();
-              indicator.style.left = (e.clientX - rect.left) + "px";
-              indicator.style.top = (e.clientY - rect.top) + "px";
-              indicator.style.opacity = "1";
+      canvas.addEventListener("click", (event) => {
+        const rect = canvas.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const y = event.clientY - rect.top;
+        if (x >= 20 && x <= 140 && y >= 20 && y <= 80) {
+          window.__visualClicks += 1;
+          window.__visualTrusted = event.isTrusted;
+          draw(true);
+        }
+      });
+      draw(false);
+    </script>
+  </body>
+</html>`;
+}
+
+function pointerWorkbenchHtml() {
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>ego-lite pointer workbench</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { background: #f6f7fb; font-family: system-ui, sans-serif; margin: 0; }
+      h1 { font-size: 20px; margin: 12px 24px; }
+      #drag-area {
+        background: #fff;
+        border: 2px solid #cbd5e1;
+        height: 170px;
+        margin: 0 24px 16px;
+        position: relative;
+        width: 720px;
+      }
+      #drag-source, #drop-target {
+        align-items: center;
+        display: flex;
+        justify-content: center;
+        position: absolute;
+        user-select: none;
+      }
+      #drag-source {
+        background: #ef4444;
+        color: #fff;
+        height: 56px;
+        left: 32px;
+        top: 54px;
+        width: 72px;
+        z-index: 2;
+      }
+      #drag-source.dropped { background: #16a34a; }
+      #drop-target {
+        background: #dcfce7;
+        border: 3px dashed #16a34a;
+        height: 110px;
+        left: 540px;
+        top: 28px;
+        width: 140px;
+      }
+      #drawing-canvas {
+        background: #fff;
+        border: 2px solid #334155;
+        display: block;
+        height: 300px;
+        margin: 0 24px;
+        width: 720px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Pointer workbench</h1>
+    <div id="drag-area">
+      <div id="drag-source">A</div>
+      <div id="drop-target">B</div>
+    </div>
+    <canvas id="drawing-canvas" width="720" height="300"></canvas>
+    <script>
+      const dragArea = document.querySelector("#drag-area");
+      const dragSource = document.querySelector("#drag-source");
+      const dropTarget = document.querySelector("#drop-target");
+      const canvas = document.querySelector("#drawing-canvas");
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.strokeStyle = "#172033";
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      context.lineWidth = 6;
+
+      const state = {
+        drag: {
+          downTrusted: false,
+          landed: false,
+          moveCount: 0,
+          movesTrusted: true,
+          upTrusted: false,
+        },
+        drawing: {
+          allButtonsHeld: true,
+          allTrusted: true,
+          strokes: [],
+        },
+      };
+      window.__pointerWorkbench = state;
+
+      let drag;
+      dragSource.addEventListener("mousedown", (event) => {
+        if (event.button !== 0) return;
+        const rect = dragSource.getBoundingClientRect();
+        drag = {
+          offsetX: event.clientX - rect.left,
+          offsetY: event.clientY - rect.top,
+        };
+        state.drag.downTrusted = event.isTrusted;
+        event.preventDefault();
+      });
+      window.addEventListener("mousemove", (event) => {
+        if (!drag) return;
+        const areaRect = dragArea.getBoundingClientRect();
+        dragSource.style.left =
+          event.clientX - areaRect.left - drag.offsetX + "px";
+        dragSource.style.top =
+          event.clientY - areaRect.top - drag.offsetY + "px";
+        state.drag.moveCount += 1;
+        state.drag.movesTrusted &&= event.isTrusted;
+      });
+      window.addEventListener("mouseup", (event) => {
+        if (!drag) return;
+        const sourceRect = dragSource.getBoundingClientRect();
+        const targetRect = dropTarget.getBoundingClientRect();
+        const centerX = sourceRect.left + sourceRect.width / 2;
+        const centerY = sourceRect.top + sourceRect.height / 2;
+        state.drag.landed =
+          centerX >= targetRect.left &&
+          centerX <= targetRect.right &&
+          centerY >= targetRect.top &&
+          centerY <= targetRect.bottom;
+        state.drag.upTrusted = event.isTrusted;
+        if (state.drag.landed) dragSource.classList.add("dropped");
+        drag = null;
+      });
+
+      let activeStroke;
+      const canvasPoint = (event) => {
+        const rect = canvas.getBoundingClientRect();
+        return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      };
+      canvas.addEventListener("mousedown", (event) => {
+        if (event.button !== 0) return;
+        const point = canvasPoint(event);
+        activeStroke = {
+          points: [point],
+          downTrusted: event.isTrusted,
+          upTrusted: false,
+        };
+        state.drawing.strokes.push(activeStroke);
+        state.drawing.allTrusted &&= event.isTrusted;
+        context.beginPath();
+        context.moveTo(point.x, point.y);
+        event.preventDefault();
+      });
+      canvas.addEventListener("mousemove", (event) => {
+        if (!activeStroke) return;
+        const point = canvasPoint(event);
+        activeStroke.points.push(point);
+        state.drawing.allButtonsHeld &&= (event.buttons & 1) === 1;
+        state.drawing.allTrusted &&= event.isTrusted;
+        context.lineTo(point.x, point.y);
+        context.stroke();
+      });
+      window.addEventListener("mouseup", (event) => {
+        if (!activeStroke) return;
+        activeStroke.upTrusted = event.isTrusted;
+        state.drawing.allTrusted &&= event.isTrusted;
+        activeStroke = null;
+      });
+
+      state.read = () => {
+        const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+        let inkPixels = 0;
+        let minX = canvas.width;
+        let minY = canvas.height;
+        let maxX = -1;
+        let maxY = -1;
+        for (let y = 0; y < canvas.height; y += 1) {
+          for (let x = 0; x < canvas.width; x += 1) {
+            const offset = (y * canvas.width + x) * 4;
+            if (pixels[offset] > 80 || pixels[offset + 1] > 80 || pixels[offset + 2] > 80) {
+              continue;
             }
-            if (type === "pointerleave") indicator.style.opacity = "0";
-            window.__fixtureState.lastPointerType = e.pointerType;
-            window.__fixtureState.lastPointerPressure = e.pressure;
-            log.textContent = type + " (" + e.pointerType + ") p=" + e.pressure.toFixed(2);
+            inkPixels += 1;
+            minX = Math.min(minX, x);
+            minY = Math.min(minY, y);
+            maxX = Math.max(maxX, x);
+            maxY = Math.max(maxY, y);
+          }
+        }
+        return {
+          drag: { ...state.drag },
+          drawing: {
+            allButtonsHeld: state.drawing.allButtonsHeld,
+            allTrusted: state.drawing.allTrusted,
+            inkBounds: inkPixels > 0 ? { minX, minY, maxX, maxY } : null,
+            inkPixels,
+            strokes: state.drawing.strokes.map((stroke) => ({
+              downTrusted: stroke.downTrusted,
+              points: stroke.points,
+              upTrusted: stroke.upTrusted,
+            })),
+          },
+        };
+      };
+    </script>
+  </body>
+</html>`;
+}
+
+function mediaWorkbenchHtml() {
+  return `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>ego-lite media workbench</title>
+    <style>
+      * { box-sizing: border-box; }
+      body {
+        background: #eef2ff;
+        color: #172033;
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        padding: 24px;
+      }
+      main { display: grid; gap: 20px; grid-template-columns: 520px 300px; }
+      section {
+        background: #fff;
+        border: 1px solid #cbd5e1;
+        border-radius: 12px;
+        padding: 16px;
+      }
+      video {
+        background: #111827;
+        display: block;
+        height: 270px;
+        margin-bottom: 12px;
+        width: 480px;
+      }
+      button { margin: 4px 6px 4px 0; padding: 8px 12px; }
+      output { display: block; font-family: monospace; margin-top: 12px; }
+    </style>
+  </head>
+  <body data-media-ready="false">
+    <h1>Media workbench</h1>
+    <main>
+      <section>
+        <h2>Generated video</h2>
+        <video id="test-video" playsinline></video>
+        <button id="video-play">Play video</button>
+        <button id="video-pause">Pause video</button>
+        <button id="video-rate">Set video to 1.5×</button>
+        <button id="video-mute">Toggle video mute</button>
+      </section>
+      <section>
+        <h2>Generated audio</h2>
+        <audio id="test-audio"></audio>
+        <button id="audio-play">Play audio</button>
+        <button id="audio-pause">Pause audio</button>
+        <button id="audio-seek">Seek audio</button>
+        <button id="audio-volume">Set audio volume</button>
+        <output id="media-status">Preparing media…</output>
+      </section>
+    </main>
+    <script>
+      const video = document.querySelector("#test-video");
+      const audio = document.querySelector("#test-audio");
+      const status = document.querySelector("#media-status");
+      const state = {
+        errors: [],
+        ready: false,
+        trustedControls: true,
+        videoEvents: {},
+        audioEvents: {},
+      };
+
+      function observeMedia(element, events) {
+        for (const name of [
+          "play",
+          "playing",
+          "pause",
+          "timeupdate",
+          "seeking",
+          "seeked",
+          "ratechange",
+          "volumechange",
+          "ended",
+        ]) {
+          events[name] = 0;
+          element.addEventListener(name, () => {
+            events[name] += 1;
+            element.dataset.playing = String(!element.paused);
+            if (element.currentTime >= 0.15) {
+              element.dataset.progressed = "true";
+            }
           });
+        }
+      }
+
+      function bindControl(selector, action) {
+        document.querySelector(selector).addEventListener("click", async (event) => {
+          state.trustedControls &&= event.isTrusted;
+          try {
+            await action();
+          } catch (error) {
+            state.errors.push(String(error?.message || error));
+          }
+        });
+      }
+
+      function createWaveUrl() {
+        const duration = 3;
+        const sampleRate = 8000;
+        const sampleCount = duration * sampleRate;
+        const dataLength = sampleCount * 2;
+        const buffer = new ArrayBuffer(44 + dataLength);
+        const view = new DataView(buffer);
+        const writeText = (offset, text) => {
+          for (let index = 0; index < text.length; index += 1) {
+            view.setUint8(offset + index, text.charCodeAt(index));
+          }
+        };
+        writeText(0, "RIFF");
+        view.setUint32(4, 36 + dataLength, true);
+        writeText(8, "WAVE");
+        writeText(12, "fmt ");
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);
+        view.setUint16(22, 1, true);
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true);
+        view.setUint16(32, 2, true);
+        view.setUint16(34, 16, true);
+        writeText(36, "data");
+        view.setUint32(40, dataLength, true);
+        for (let index = 0; index < sampleCount; index += 1) {
+          const sample = Math.sin((index / sampleRate) * Math.PI * 2 * 440);
+          view.setInt16(44 + index * 2, sample * 5000, true);
+        }
+        return URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
+      }
+
+      async function createVideoUrl() {
+        const canvas = document.createElement("canvas");
+        canvas.width = 480;
+        canvas.height = 270;
+        const context = canvas.getContext("2d");
+        const stream = canvas.captureStream(20);
+        const mimeType = [
+          "video/webm;codecs=vp8",
+          "video/webm;codecs=vp9",
+          "video/webm",
+        ].find((candidate) => MediaRecorder.isTypeSupported(candidate));
+        const recorder = new MediaRecorder(
+          stream,
+          mimeType ? { mimeType } : undefined,
+        );
+        const chunks = [];
+        const stopped = new Promise((resolve, reject) => {
+          recorder.addEventListener("dataavailable", (event) => {
+            if (event.data.size > 0) chunks.push(event.data);
+          });
+          recorder.addEventListener("stop", resolve, { once: true });
+          recorder.addEventListener("error", () => reject(recorder.error), {
+            once: true,
+          });
+        });
+        recorder.start();
+        const startedAt = performance.now();
+        await new Promise((resolve) => {
+          const draw = (now) => {
+            const elapsed = (now - startedAt) / 1000;
+            const hue = Math.round((elapsed * 140) % 360);
+            context.fillStyle = "hsl(" + hue + " 70% 45%)";
+            context.fillRect(0, 0, canvas.width, canvas.height);
+            context.fillStyle = "#ffffff";
+            context.font = "bold 34px sans-serif";
+            context.fillText("FRAME " + elapsed.toFixed(1), 130, 145);
+            if (elapsed >= 2.5) {
+              resolve();
+              return;
+            }
+            requestAnimationFrame(draw);
+          };
+          requestAnimationFrame(draw);
+        });
+        recorder.stop();
+        await stopped;
+        for (const track of stream.getTracks()) track.stop();
+        return URL.createObjectURL(new Blob(chunks, { type: mimeType }));
+      }
+
+      function waitForMetadata(element) {
+        if (element.readyState >= HTMLMediaElement.HAVE_METADATA) {
+          return Promise.resolve();
+        }
+        return new Promise((resolve, reject) => {
+          element.addEventListener("loadedmetadata", resolve, { once: true });
+          element.addEventListener("error", () => reject(element.error), {
+            once: true,
+          });
+        });
+      }
+
+      observeMedia(video, state.videoEvents);
+      observeMedia(audio, state.audioEvents);
+      bindControl("#video-play", () => video.play());
+      bindControl("#video-pause", () => video.pause());
+      bindControl("#video-rate", () => {
+        video.playbackRate = 1.5;
+      });
+      bindControl("#video-mute", () => {
+        video.muted = !video.muted;
+      });
+      bindControl("#audio-play", () => audio.play());
+      bindControl("#audio-pause", () => audio.pause());
+      bindControl("#audio-seek", () => {
+        audio.currentTime = 1.2;
+      });
+      bindControl("#audio-volume", () => {
+        audio.volume = 0.25;
+      });
+
+      window.__mediaWorkbench = {
+        read() {
+          const describe = (element, events) => ({
+            currentTime: element.currentTime,
+            duration: Number.isFinite(element.duration) ? element.duration : null,
+            events: { ...events },
+            muted: element.muted,
+            paused: element.paused,
+            playbackRate: element.playbackRate,
+            progressed: element.dataset.progressed === "true",
+            readyState: element.readyState,
+            volume: element.volume,
+          });
+          return {
+            errors: [...state.errors],
+            ready: state.ready,
+            trustedControls: state.trustedControls,
+            video: describe(video, state.videoEvents),
+            audio: describe(audio, state.audioEvents),
+          };
+        },
+      };
+
+      (async () => {
+        try {
+          audio.src = createWaveUrl();
+          video.src = await createVideoUrl();
+          await Promise.all([waitForMetadata(video), waitForMetadata(audio)]);
+          state.ready = true;
+          document.body.dataset.mediaReady = "true";
+          status.textContent = "Media ready";
+        } catch (error) {
+          state.errors.push(String(error?.message || error));
+          document.body.dataset.mediaError = "true";
+          status.textContent = "Media setup failed";
         }
       })();
     </script>

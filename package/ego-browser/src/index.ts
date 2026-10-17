@@ -4,23 +4,30 @@ import { pathToFileURL } from "node:url";
 import * as helpers from "./helpers.js";
 import {
   clearPreferredTarget,
+  disposeBrowserRuntime,
   invalidateSession,
   setPreferredTarget,
 } from "./browser-runtime.js";
 import { formatCliLogValue } from "./format.js";
 import {
   bufferOutput,
+  createRoundConsole,
   installLifecycleFlush,
   resetSink,
-  setNoticeTrailer,
 } from "./output-sink.js";
 import { runMain } from "./run.js";
-import { emitUpdateNotice, type VersionSource } from "./update-notice.js";
+import { installStaleEgoBrowserGuard } from "./skill-migration.js";
+import { emitUpdateNotice } from "./update-notice.js";
+import { installPageContextGuard } from "./page-context-guard.js";
+import { disposeDownloadArtifacts } from "./driver/downloads.js";
 
 type HelperFunction = (...args: unknown[]) => unknown;
 type EgoRuntime = Record<string, unknown> & {
-  helpers?: Record<string, unknown>;
+  helpers?: Record<string, HelperFunction>;
   learnings?: Record<string, unknown>;
+  getBrowserVersion?: () => unknown | Promise<unknown>;
+  onCDPMessage?: (payload: string) => void;
+  onSendCDPMessageError?: (message: unknown, errorCode?: string) => void;
 };
 type InstallTarget = Record<string, unknown> & {
   ego?: EgoRuntime;
@@ -28,115 +35,19 @@ type InstallTarget = Record<string, unknown> & {
 type InstallEgoSdkOptions = {
   context?: Record<string, unknown>;
   ready?: unknown;
-  // Host-provided output sink, bound to console.log (the agent's output channel).
-  // When omitted, the buffered default is used and flushed on process teardown.
   cliLog?: HelperFunction;
 };
 
 export * from "./helpers.js";
 export { runMain } from "./run.js";
 
+/** Release native callbacks before the host discards an embedded Node context. */
+export async function disposeEgoSdk(target: InstallTarget = globalThis) {
+  disposeDownloadArtifacts();
+  disposeBrowserRuntime(target.ego);
+}
+
 const SYNC_HELPERS = new Set(["help"]);
-const SYNC_FACTORY_HELPERS = new Set([
-  "page.locator",
-  "page.getByRole",
-  "page.getByText",
-  "page.getByLabel",
-  "page.getByPlaceholder",
-  "page.getByAltText",
-  "page.getByTitle",
-  "page.getByTestId",
-  "page.locator.first",
-  "page.locator.nth",
-  "page.locator.last",
-  "page.locator.locator",
-  "page.locator.getByRole",
-  "page.locator.getByText",
-  "page.locator.getByLabel",
-  "page.locator.getByPlaceholder",
-  "page.locator.getByAltText",
-  "page.locator.getByTitle",
-  "page.locator.getByTestId",
-  "page.locator.filter",
-]);
-const SYNC_FACTORY_METHODS = new Set([
-  "locator",
-  "getByRole",
-  "getByText",
-  "getByLabel",
-  "getByPlaceholder",
-  "getByAltText",
-  "getByTitle",
-  "getByTestId",
-  "first",
-  "nth",
-  "last",
-  "filter",
-]);
-const LEGACY_GLOBAL_HELPERS = [
-  "click",
-  "dblclick",
-  "hover",
-  "drag",
-  "wheel",
-  "scrollIntoViewIfNeeded",
-  "press",
-  "insertText",
-  "focus",
-  "fill",
-  "pressSequentially",
-  "check",
-  "uncheck",
-  "setChecked",
-  "selectOption",
-  "dispatchEvent",
-  "textContent",
-  "innerText",
-  "inputValue",
-  "isChecked",
-  "getAttribute",
-  "count",
-  "allInnerTexts",
-  "allTextContents",
-  "evaluateAll",
-  "goto",
-  "pageInfo",
-  "listTabs",
-  "currentTab",
-  "switchTab",
-  "openOrReuseTab",
-  "closeTab",
-  "snapshot",
-  "snapshotRaw",
-  "screenshot",
-  "elementCenter",
-  "drainEvents",
-  "waitForTimeout",
-  "waitForLoadState",
-  "waitForSelector",
-  "waitForFunction",
-  "waitForURL",
-  "waitForRequest",
-  "waitForResponse",
-  "setInputFiles",
-  "evaluate",
-  "serverFetch",
-  "browserFetch",
-  "listTaskSpaces",
-  "switchTaskSpace",
-  "newTaskSpace",
-  "useOrCreateTaskSpace",
-  "claimTaskSpace",
-  "completeTaskSpace",
-  "handOffTaskSpace",
-  "takeOverTaskSpace",
-  "waitForAgentControl",
-  "siteSkills",
-  "siteSkillsForUrl",
-  "runSiteTool",
-  "runSiteBrowserTool",
-  "learnContext",
-];
 // Marks an ego runtime whose mutating methods have already been wrapped, so a
 // second installEgoSdk call cannot double-wrap createTab / task-space methods.
 const EGO_WRAPPED = Symbol.for("egoBrowser.sdkWrapped");
@@ -148,64 +59,80 @@ export function installEgoSdk(
   if (!target || typeof target !== "object") {
     return target;
   }
-  const context = options.context || helpers.helperContext();
-  for (const name of LEGACY_GLOBAL_HELPERS) {
-    if (Object.prototype.hasOwnProperty.call(target, name)) {
-      delete target[name];
-    }
-  }
+  if (target === globalThis) installPageContextGuard(target);
+  const usingDefaultCliLog = !options.cliLog;
+  const cliLogFn = options.cliLog || createCliLog();
+  const context =
+    options.context ||
+    helpers.helperContext({}, { printHelp: (text) => cliLogFn(text) });
   const readySignal = Promise.resolve(options.ready);
-  let readyError = null;
-  readySignal.catch((error) => {
-    readyError = error;
-  });
-  const installed: Record<string, unknown> = {};
+  // The host may reject readiness before a helper is called. Mark the promise
+  // as observed while preserving the same rejection for every helper await.
+  void readySignal.catch(() => {});
+  const installed: Record<string, HelperFunction> = {};
   for (const [name, value] of Object.entries(context)) {
+    if (typeof value !== "function") {
+      continue;
+    }
     const exposed = SYNC_HELPERS.has(name)
       ? value
-      : wrapReady(value, readySignal, () => readyError, [name]);
+      : async (...args: unknown[]) => {
+          await readySignal;
+          return value(...args);
+        };
     Object.defineProperty(target, name, {
       value: exposed,
       writable: true,
       configurable: true,
       enumerable: false,
     });
-    installed[name] = exposed;
+    installed[name] = exposed as HelperFunction;
   }
-  const usingDefaultLog = !options.cliLog;
-  // The agent's primary output channel is console.log. Route it through the host's
-  // sink (options.cliLog) when provided, otherwise the buffered default. There is no
-  // dedicated cliLog global anymore; console.error/warn are left untouched. Each
-  // heredoc runs in its own short-lived process, so overriding the global is per-run.
-  console.log = options.cliLog || createBufferedLog();
-  if (usingDefaultLog) {
+  // Non-function values are intentionally absent from the normal helper loop.
+  // Install the 1.3 migration guard explicitly so embedded SDK execution and
+  // the direct CLI produce the same actionable error.
+  installStaleEgoBrowserGuard(target);
+  Object.defineProperty(target, "cliLog", {
+    value: cliLogFn,
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
+  installed.cliLog = cliLogFn;
+  Object.defineProperty(target, "console", {
+    value: createRoundConsole(
+      usingDefaultCliLog
+        ? undefined
+        : (line) => cliLogFn(line.endsWith("\n") ? line.slice(0, -1) : line),
+    ),
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
+  if (usingDefaultCliLog) {
     // SDK path: the host runs each heredoc in a fresh short-lived process and never
     // calls execute(), so reset the per-run sink and flush it on process teardown.
     resetSink();
     installLifecycleFlush(process.stdout);
   }
   if (target.ego && typeof target.ego === "object") {
-    // Fire-and-forget update hint. Route the resolved line to the same channel the
-    // command's own output uses: the buffered-sink path registers it as a trailer the
-    // sink appends after that output (so it reads as a footer, not a prefix), while a
-    // host-provided cliLog gets the line directly. Never touches process.stdout blindly.
-    emitUpdateNotice(
-      target.ego as { getBrowserVersion?: VersionSource },
-      usingDefaultLog ? setNoticeTrailer : (line) => options.cliLog?.(line),
-    );
+    void emitUpdateNotice(target.ego, (line) => {
+      if (usingDefaultCliLog) bufferOutput(`${line}\n`);
+      else cliLogFn(line);
+    });
     target.ego.helpers = installed;
-    target.ego.learnings =
-      installed.site && typeof installed.site === "object"
-        ? (installed.site as Record<string, unknown>)
-        : {};
+    target.ego.learnings = {};
     if (!(target.ego as Record<symbol, unknown>)[EGO_WRAPPED]) {
+      const taskSelection: { spaceId?: unknown } = {};
       wrapCreateTab(target.ego);
-      wrapInvalidating(target.ego, [
-        "useTaskSpace",
-        "closeTaskSpace",
-        "createTaskSpace",
-        "claimTaskSpace",
-      ]);
+      wrapUseTaskSpace(target.ego, taskSelection);
+      wrapInvalidating(
+        target.ego,
+        ["closeTaskSpace", "createTaskSpace", "claimTaskSpace"],
+        () => {
+          taskSelection.spaceId = undefined;
+        },
+      );
       Object.defineProperty(target.ego, EGO_WRAPPED, {
         value: true,
         enumerable: false,
@@ -216,55 +143,20 @@ export function installEgoSdk(
   return target;
 }
 
-function wrapReady(
-  value: unknown,
-  readySignal: Promise<unknown>,
-  readyError: () => unknown,
-  path: string[] = [],
-): unknown {
-  if (typeof value === "function") {
-    if (isSyncFactoryHelper(path)) {
-      return (...args: unknown[]) =>
-        wrapReady(value(...args), readySignal, readyError, path);
-    }
-    return async (...args: unknown[]) => {
-      await readySignal;
-      const error = readyError();
-      if (error) {
-        throw error;
-      }
-      return value(...args);
-    };
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  const wrapped: Record<string, unknown> = {};
-  for (const [key, child] of Object.entries(value)) {
-    wrapped[key] = wrapReady(child, readySignal, readyError, [...path, key]);
-  }
-  return wrapped;
-}
-
-function isSyncFactoryHelper(path: string[]) {
-  if (SYNC_FACTORY_HELPERS.has(path.join("."))) {
-    return true;
-  }
-  return path[0] === "page" && SYNC_FACTORY_METHODS.has(path.at(-1) || "");
-}
-
 if (isDirectCli()) {
   try {
     process.exitCode = await runMain();
   } catch (error) {
     console.error(error?.stack || error?.message || String(error));
     process.exitCode = 1;
+  } finally {
+    disposeDownloadArtifacts();
   }
 } else {
   installEgoSdk();
 }
 
-function createBufferedLog() {
+function createCliLog() {
   return (...args: unknown[]) => {
     // Buffer instead of writing through: a hard stop later in the run must be able to
     // discard everything logged so far. The buffer is flushed on process teardown.
@@ -278,11 +170,16 @@ function isDirectCli() {
   );
 }
 
-function wrapInvalidating(ego: EgoRuntime, methodNames: string[]) {
+function wrapInvalidating(
+  ego: EgoRuntime,
+  methodNames: string[],
+  resetSelection: () => void = () => {},
+) {
   for (const name of methodNames) {
     const original = ego[name];
     if (typeof original !== "function") continue;
     const after = () => {
+      resetSelection();
       invalidateSession();
       clearPreferredTarget();
     };
@@ -300,6 +197,32 @@ function wrapInvalidating(ego: EgoRuntime, methodNames: string[]) {
   }
 }
 
+function wrapUseTaskSpace(ego: EgoRuntime, selection: { spaceId?: unknown }) {
+  // File chooser waits and other event subscriptions span multiple Page calls.
+  // Re-selecting the same space must preserve their CDP session; changing the
+  // space still invalidates every session because native routing is global.
+  const original = ego.useTaskSpace;
+  if (typeof original !== "function") return;
+  const after = (spaceId: unknown, value: unknown) => {
+    if (value && typeof value === "object" && Object.hasOwn(value, "error")) {
+      return value;
+    }
+    if (selection.spaceId !== spaceId) {
+      invalidateSession();
+      clearPreferredTarget();
+      selection.spaceId = spaceId;
+    }
+    return value;
+  };
+  ego.useTaskSpace = function (...args: unknown[]) {
+    const result = original.apply(this, args);
+    if (result && typeof result.then === "function") {
+      return result.then((value) => after(args[0], value));
+    }
+    return after(args[0], result);
+  };
+}
+
 function wrapCreateTab(ego: EgoRuntime) {
   const original = ego.createTab;
   if (typeof original !== "function") return;
@@ -307,13 +230,11 @@ function wrapCreateTab(ego: EgoRuntime) {
     const result = original.apply(this, args);
     if (result && typeof result.then === "function") {
       return result.then((value) => {
-        invalidateSession();
         const id = value?.targetId || value?.result?.targetId;
         if (id) setPreferredTarget(id);
         return value;
       });
     }
-    invalidateSession();
     return result;
   };
 }

@@ -3,19 +3,25 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { setOverrides, state } from "./state.js";
-import { assertNoEgoError, isEgoUserControlError } from "./ego-errors.js";
+import { buildEgoError, invokeEgo, probeAgentControl } from "./ego-errors.js";
 import { help as helpRuntime, formatHelp } from "./help-runtime.js";
-import { cdp, decodeUnserializableJsValue, evaluate } from "./cdp-eval.js";
+import { validatePublicApiOptions } from "./public-api-schema.js";
+import { createStaleEgoBrowserGuard } from "./skill-migration.js";
+import { bufferOutput } from "./output-sink.js";
+import { cdp, decodeUnserializableJsValue, js } from "./cdp-eval.js";
 import * as pointer from "./driver/pointer.js";
 import * as keyboard from "./driver/keyboard.js";
-import * as locator from "./driver/locator.js";
 import * as nav from "./driver/nav.js";
 import * as observe from "./driver/observe.js";
 import * as waits from "./driver/waits.js";
 import * as files from "./driver/files.js";
-import * as downloads from "./driver/downloads.js";
-import * as screencast from "./driver/screencast.js";
 import { browserFetch, serverFetch } from "./http.js";
+import {
+  captureTaskSpaceUserBoundary,
+  createTaskSpaceHandle,
+  initializeTaskSpaceHandle,
+  rollbackCreatedTaskSpace,
+} from "./page-model.js";
 import {
   loadBrowserToolSource,
   loadLearnedContext,
@@ -25,49 +31,22 @@ import {
 } from "./learning/index.js";
 
 export { NAME } from "./state.js";
-export { cdp, evaluate } from "./cdp-eval.js";
+export { cdp, js } from "./cdp-eval.js";
 export {
   click,
-  dblclick,
+  doubleClick,
   hover,
-  drag,
-  wheel,
-  scrollIntoViewIfNeeded,
+  dragMouse,
+  scroll,
+  scrollBy,
+  scrollToBottomUntil,
 } from "./driver/pointer.js";
 export {
-  press,
-  down,
-  up,
-  insertText,
-  focus,
-  fill,
-  pressSequentially,
-  check,
-  uncheck,
-  setChecked,
-  selectOption,
-  dispatchEvent,
+  pressKey,
+  typeText,
+  fillInput,
+  dispatchKey,
 } from "./driver/keyboard.js";
-export {
-  textContent,
-  innerText,
-  inputValue,
-  isChecked,
-  isVisible,
-  isHidden,
-  isEnabled,
-  isDisabled,
-  isEditable,
-  getAttribute,
-  blur,
-  boundingBox,
-  count,
-  allInnerTexts,
-  allTextContents,
-  innerHTML,
-  evaluateLocator,
-  evaluateAll,
-} from "./driver/locator.js";
 export {
   INTERNAL_URL_PREFIXES,
   pageInfo,
@@ -76,33 +55,32 @@ export {
   switchTab,
   openOrReuseTab,
   closeTab,
-  goto,
+  gotoUrl,
+  gotoAndWait,
   ensureRealTab,
   iframeTarget,
 } from "./driver/nav.js";
 export {
   snapshot,
   snapshotRaw,
-  screenshot,
+  snapshotText,
+  captureScreenshot,
   elementCenter,
   drainEvents,
 } from "./driver/observe.js";
 export {
-  waitForTimeout,
-  waitForLoadState,
-  waitForSelector,
-  waitForFunction,
-  waitForURL,
-  waitForRequest,
-  waitForResponse,
+  wait,
+  waitForLoad,
+  waitForElement,
+  waitForNetworkIdle,
 } from "./driver/waits.js";
-export { setInputFiles } from "./driver/files.js";
-export { startScreencast, stopScreencast } from "./driver/screencast.js";
+export { uploadFile } from "./driver/files.js";
 export { browserFetch, serverFetch } from "./http.js";
 
 /**
- * List all task spaces.
- * @returns {Promise<Array<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>>}
+ * List Agent-owned and user-owned spaces exposed by Ego Lite.
+ * Use the numeric id as the stable locator; display names may be duplicated.
+ * @returns {Promise<Array<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,profileId?:string,profileName?:string,recentTabTitles?:string[]}>>}
  */
 export async function listTaskSpaces() {
   const ego = globalThis.ego;
@@ -110,8 +88,35 @@ export async function listTaskSpaces() {
     throw new Error("listTaskSpaces requires ego.listTaskSpaces");
   }
   return normalizeTaskSpaces(
-    assertNoEgoError(await ego.listTaskSpaces(), "listTaskSpaces"),
+    await invokeEgo("listTaskSpaces", () => ego.listTaskSpaces()),
   );
+}
+
+/**
+ * List browser profiles that may be selected when creating a task space.
+ * Profile ids are stable locators; display names are not guaranteed unique.
+ * @returns {Promise<Array<{id:string,name:string,isDefault:boolean}>>}
+ */
+export async function profiles() {
+  const ego = globalThis.ego;
+  if (!ego || typeof ego.listProfiles !== "function") {
+    throw new Error("profiles requires ego.listProfiles");
+  }
+  const result = await invokeEgo("profiles", () => ego.listProfiles());
+  if (
+    !Array.isArray(result?.profiles) ||
+    !result.profiles.every(
+      (profile) =>
+        profile &&
+        typeof profile.id === "string" &&
+        profile.id.length > 0 &&
+        typeof profile.name === "string" &&
+        typeof profile.isDefault === "boolean",
+    )
+  ) {
+    throw new Error("profiles expected entries with id, name, and isDefault");
+  }
+  return result.profiles;
 }
 
 /*
@@ -122,6 +127,8 @@ export async function listTaskSpaces() {
  * bridge when real commands run, not here. The rows below describe what each helper
  * does when the target space is user-owned:
  *
+ *   taskSpace / useOrCreateTaskSpace    -> by name: throws EGO_TASK_SPACE_NAME_IN_USE;
+ *                                          by id: selects it unclaimed (user-control error surfaces)
  *   switchTaskSpace                     -> throws (agent-owned only)
  *   claimTaskSpace                      -> claims it (ownership transfers to the agent), then selects it
  *   handOffTaskSpace                    -> skipped, resolves { done: false, skipped: "user-owned" }
@@ -129,7 +136,7 @@ export async function listTaskSpaces() {
  *   completeTaskSpace { keep: false }   -> claims it, then closes it
  *   takeOverTaskSpace / waitForAgentControl -> no ownership check (operates as-is)
  *
- * Keep this table in sync with the one in skills/ego-browser/SKILL.md.
+ * Keep this table in sync with the one in skill-body/SKILL.md.
  */
 
 /**
@@ -154,7 +161,7 @@ export async function switchTaskSpace(nameOrId) {
   if (!ego || typeof ego.useTaskSpace !== "function") {
     throw new Error("switchTaskSpace requires ego.useTaskSpace");
   }
-  const space = await findTaskSpace(nameOrId);
+  const space = await findTaskSpace(nameOrId, "switchTaskSpace");
   if (!isAgentOwned(space.ownership)) {
     throw new Error(
       `switchTaskSpace requires an agent-owned task space, got ownership ${JSON.stringify(space.ownership)}`,
@@ -166,48 +173,125 @@ export async function switchTaskSpace(nameOrId) {
 /**
  * Create an agent-owned task space and select it for the current Node invocation.
  * @param {string} name Task space name.
+ * @param {string} [profileId] Profile id returned by profiles().
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
-export async function newTaskSpace(name) {
+export async function newTaskSpace(name, profileId?: string) {
+  assertTaskSpaceName("newTaskSpace", name);
+  return (await createTaskSpaceResolution(name, profileId)).descriptor;
+}
+
+async function createTaskSpaceResolution(
+  name,
+  profileId?: string,
+  options: { select?: boolean } = {},
+) {
   const ego = globalThis.ego;
   if (!ego || typeof ego.createTaskSpace !== "function") {
     throw new Error("newTaskSpace requires ego.createTaskSpace");
   }
+  // Do not pass an explicit undefined: older native bindings reject extra
+  // arguments, while newer builds accept profileId as the second argument.
   const created = normalizeTaskSpace(
-    assertNoEgoError(await ego.createTaskSpace(name), "newTaskSpace"),
+    await invokeEgo("newTaskSpace", () =>
+      profileId === undefined
+        ? ego.createTaskSpace(name)
+        : ego.createTaskSpace(name, profileId),
+    ),
   );
   if (!created) {
     throw new Error("newTaskSpace returned an invalid task space");
   }
   taskSpaceNumericId(created, "newTaskSpace");
-  return selectTaskSpace(ego, created, "newTaskSpace");
+  // The native create response currently omits ownership on some Ego Lite
+  // builds. Creation through this Agent API is itself authoritative.
+  const createdByAgent = {
+    ...created,
+    ownership: created.ownership || "agent",
+  };
+  const descriptor =
+    options.select === false
+      ? createdByAgent
+      : await selectTaskSpace(ego, createdByAgent, "newTaskSpace");
+  return {
+    descriptor,
+    created: true,
+  };
 }
 
 /**
- * Use an existing agent-owned task space, or create it when missing. User-owned
- * spaces are selected but not claimed (the EGO_TASK_SPACE_USER_IN_CONTROL error
- * surfaces) — call claimTaskSpace(nameOrId) to take ownership.
+ * Use an existing agent-owned task space, or create it when missing. A name held
+ * by a user-owned space fails with EGO_TASK_SPACE_NAME_IN_USE; a user-owned space
+ * passed by numeric id is selected but not claimed (the
+ * EGO_TASK_SPACE_USER_IN_CONTROL error surfaces). Call claimTaskSpace(id) to take
+ * ownership once the user asks.
  * @param {string|number} nameOrId Task space name or numeric id.
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
 export async function useOrCreateTaskSpace(nameOrId) {
+  assertTaskSpaceLocator("useOrCreateTaskSpace", nameOrId);
+  return (await resolveTaskSpace(nameOrId)).descriptor;
+}
+
+async function resolveTaskSpace(
+  nameOrId,
+  options: { select?: boolean; op?: string } = {},
+) {
+  const op = options.op ?? "useOrCreateTaskSpace";
   const spaces = await listTaskSpaces();
   const existing = findMatchingTaskSpace(spaces, nameOrId);
   if (!existing) {
     if (typeof nameOrId === "number") {
       throw new Error(`task space not found: ${nameOrId}`);
     }
-    return newTaskSpace(nameOrId);
+    return createTaskSpaceResolution(nameOrId, undefined, {
+      select: options.select,
+    });
   }
   if (isAgentOwned(existing.ownership)) {
-    return selectTaskSpace(globalThis.ego, existing, "useOrCreateTaskSpace");
+    return {
+      descriptor:
+        options.select === false
+          ? existing
+          : await selectTaskSpace(
+              globalThis.ego,
+              existing,
+              "useOrCreateTaskSpace",
+            ),
+      created: false,
+    };
   }
   if (existing.ownership === "user") {
-    // Don't claim user-owned spaces here. Select it as-is; the user stays in
-    // control, so EGO_TASK_SPACE_USER_IN_CONTROL surfaces (as ego-browser's owned
-    // guidance, not the raw native text). Call claimTaskSpace(nameOrId) to take
-    // ownership.
-    return selectTaskSpace(globalThis.ego, existing, "useOrCreateTaskSpace");
+    // A name match on a user-owned space is a name collision, not the agent's
+    // task: the user is not "in control" of something the agent started. Report
+    // it the way native createTaskSpace reports a duplicate name.
+    if (typeof nameOrId === "string" && existing.name === nameOrId) {
+      throw buildEgoError(
+        {
+          error: [
+            `A task space named ${JSON.stringify(nameOrId)} already exists and belongs to the user (id ${existing.id}).`,
+            `Do not take it over on your own. Ask the user whether to work in it; only if they agree, call claimTaskSpace(${existing.id}).`,
+            "Otherwise use a different task space name.",
+          ].join("\n"),
+          error_code: "EGO_TASK_SPACE_NAME_IN_USE",
+        },
+        op,
+      );
+    }
+    // Explicitly targeted by id: don't claim it here. Select it as-is; the user
+    // stays in control, so EGO_TASK_SPACE_USER_IN_CONTROL surfaces (as
+    // ego-browser's owned guidance, not the raw native text).
+    return {
+      descriptor:
+        options.select === false
+          ? existing
+          : await selectTaskSpace(
+              globalThis.ego,
+              existing,
+              "useOrCreateTaskSpace",
+            ),
+      created: false,
+    };
   }
   throw new Error(
     `useOrCreateTaskSpace cannot use task space ${JSON.stringify(nameOrId)} with ownership ${JSON.stringify(existing.ownership)}`,
@@ -215,15 +299,72 @@ export async function useOrCreateTaskSpace(nameOrId) {
 }
 
 /**
+ * Return the v2 object handle for an existing task space, or create the space
+ * when a string name does not exist.
+ * @param {string|number} nameOrId Task space name or numeric id.
+ * @param {{profileId?:string}} [options] Creation options for a new named space.
+ * @returns {Promise<import('./page-model.js').TaskSpace>}
+ */
+export async function taskSpace(
+  nameOrId,
+  options: { profileId?: string } = {},
+) {
+  assertTaskSpaceLocator("taskSpace", nameOrId);
+  validatePublicApiOptions("taskSpace", options);
+  const { profileId } = options;
+  if (profileId === undefined) {
+    return initializeResolvedTaskSpace(
+      await resolveTaskSpace(nameOrId, { select: false, op: "taskSpace" }),
+    );
+  }
+  if (typeof nameOrId !== "string") {
+    throw new TypeError(
+      "taskSpace profileId can only be used with a new task-space name",
+    );
+  }
+  const existing = findMatchingTaskSpace(await listTaskSpaces(), nameOrId);
+  if (existing) {
+    throw new Error(
+      `taskSpace profileId only applies when creating a new task space; ${JSON.stringify(nameOrId)} already exists`,
+    );
+  }
+  return initializeResolvedTaskSpace(
+    await createTaskSpaceResolution(nameOrId, profileId, { select: false }),
+  );
+}
+
+async function initializeResolvedTaskSpace(resolution) {
+  const task = createTaskSpaceHandle(resolution.descriptor);
+  if (!resolution.created) {
+    await initializeTaskSpaceHandle(task);
+    return task;
+  }
+
+  try {
+    await initializeTaskSpaceHandle(task, { created: true });
+    return task;
+  } catch (error) {
+    // A fresh space must not survive without its canonical p1 ledger entry.
+    // Preserve the initialization error if native rollback is unavailable.
+    await rollbackCreatedTaskSpace(task).catch(() => {});
+    throw error;
+  }
+}
+
+/**
  * Claim a user-owned task space (ownership transfers to the agent) and select it
  * for the current Node invocation. Resolves the space by id/name, claims it via
  * ego.claimTaskSpace, then selects it.
  * @param {string|number} nameOrId Task space id or name.
- * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
+ * @returns {Promise<import('./page-model.js').TaskSpace>}
  */
 export async function claimTaskSpace(nameOrId) {
-  const space = await findTaskSpace(nameOrId);
-  return claimResolvedTaskSpace(space, "claimTaskSpace");
+  const space = await findTaskSpace(nameOrId, "claimTaskSpace");
+  const claimed = await claimResolvedTaskSpace(space, "claimTaskSpace");
+  const task = createTaskSpaceHandle({ ...claimed, ownership: "agent" });
+  await captureTaskSpaceUserBoundary(task);
+  await initializeTaskSpaceHandle(task);
+  return task;
 }
 
 async function claimResolvedTaskSpace(space, op = "claimTaskSpace") {
@@ -233,7 +374,7 @@ async function claimResolvedTaskSpace(space, op = "claimTaskSpace") {
   }
   const id = taskSpaceNumericId(space, op);
   const claimed = normalizeTaskSpace(
-    assertNoEgoError(await ego.claimTaskSpace(id, space.name), op),
+    await invokeEgo(op, () => ego.claimTaskSpace(id, space.name)),
   );
   if (!claimed) {
     throw new Error(`${op} returned an invalid task space`);
@@ -246,7 +387,7 @@ async function selectTaskSpace(ego, space, op: string) {
   if (!ego || typeof ego.useTaskSpace !== "function") {
     throw new Error(`${op} requires ego.useTaskSpace`);
   }
-  assertNoEgoError(await ego.useTaskSpace(taskSpaceNumericId(space, op)), op);
+  await invokeEgo(op, () => ego.useTaskSpace(taskSpaceNumericId(space, op)));
   return space;
 }
 
@@ -256,7 +397,7 @@ async function selectTaskSpaceIfProvided(
   op = "taskSpace",
 ) {
   if (nameOrId === undefined) return;
-  const match = await findTaskSpace(nameOrId);
+  const match = await findTaskSpace(nameOrId, op);
   await selectTaskSpace(ego, match, op);
 }
 
@@ -301,7 +442,7 @@ export async function completeTaskSpace(
     if (typeof ego.completeTaskSpace !== "function") {
       throw new Error("completeTaskSpace requires ego.completeTaskSpace");
     }
-    assertNoEgoError(await ego.completeTaskSpace(), "completeTaskSpace");
+    await invokeEgo("completeTaskSpace", () => ego.completeTaskSpace());
   } else {
     if (match.ownership === "user") {
       await claimResolvedTaskSpace(match, "completeTaskSpace");
@@ -311,7 +452,7 @@ export async function completeTaskSpace(
     if (typeof ego.closeTaskSpace !== "function") {
       throw new Error("completeTaskSpace requires ego.closeTaskSpace");
     }
-    assertNoEgoError(await ego.closeTaskSpace(), "completeTaskSpace");
+    await invokeEgo("completeTaskSpace", () => ego.closeTaskSpace());
   }
   return { done: true };
 }
@@ -329,28 +470,43 @@ export async function handOffTaskSpace(nameOrId?: string | number) {
     throw new Error("handOffTaskSpace requires ego.handOffTaskSpace");
   }
   if (nameOrId !== undefined) {
-    const match = await findTaskSpace(nameOrId);
+    const match = await findTaskSpace(nameOrId, "handOffTaskSpace");
     if (match.ownership === "user") {
       return { done: false, skipped: "user-owned" as const };
     }
     await selectTaskSpace(ego, match, "handOffTaskSpace");
   }
-  assertNoEgoError(await ego.handOffTaskSpace(), "handOffTaskSpace");
+  await invokeEgo("handOffTaskSpace", () => ego.handOffTaskSpace());
   return { done: true };
 }
 
 /**
  * Take over a task space, showing the agent overlay to indicate work has resumed.
  * @param {string|number} [nameOrId] Task space id or name. If provided, switches to that space first.
- * @returns {Promise<void>}
+ * @returns {Promise<import('./page-model.js').TaskSpace|void>} A TaskSpace when a name or id is provided; otherwise preserves the selected-space form's void result.
  */
 export async function takeOverTaskSpace(nameOrId?: string | number) {
   const ego = globalThis.ego;
   if (!ego || typeof ego.takeOverTaskSpace !== "function") {
     throw new Error("takeOverTaskSpace requires ego.takeOverTaskSpace");
   }
-  await selectTaskSpaceIfProvided(ego, nameOrId, "takeOverTaskSpace");
-  assertNoEgoError(await ego.takeOverTaskSpace(), "takeOverTaskSpace");
+  let descriptor;
+  if (nameOrId !== undefined) {
+    descriptor = await findTaskSpace(nameOrId, "takeOverTaskSpace");
+    await selectTaskSpace(ego, descriptor, "takeOverTaskSpace");
+  }
+  await invokeEgo("takeOverTaskSpace", () => ego.takeOverTaskSpace());
+  if (descriptor) {
+    const task = createTaskSpaceHandle({ ...descriptor, ownership: "agent" });
+    // Repeatedly ensuring control over an already agent-controlled space is a
+    // no-op, not a user interaction boundary. Only delegated spaces can have
+    // gained tabs through user activity since the Agent last controlled them.
+    if (descriptor.ownership === "agentDelegatedToUser") {
+      await captureTaskSpaceUserBoundary(task);
+    }
+    await initializeTaskSpaceHandle(task);
+    return task;
+  }
 }
 
 /**
@@ -361,16 +517,10 @@ export async function takeOverTaskSpace(nameOrId?: string | number) {
  * (task not found, internal errors) propagate so the caller fails fast instead
  * of busy-looping until timeout.
  */
-async function probeAgentControl() {
+async function probeCurrentAgentControl() {
   const ego = globalThis.ego;
   if (!ego || typeof ego.snapshot !== "function") return false;
-  try {
-    await ego.snapshot({ maxResultLength: 1 });
-    return true;
-  } catch (err) {
-    if (isEgoUserControlError(err)) return false;
-    throw err;
-  }
+  return probeAgentControl(() => ego.snapshot({ maxResultLength: 1 }));
 }
 
 /**
@@ -400,11 +550,11 @@ export async function waitForAgentControl(
   const timeout = typeof options.timeout === "number" ? options.timeout : 600;
   const deadline = Date.now() + timeout * 1000;
   while (true) {
-    if (await probeAgentControl()) return;
+    if (await probeCurrentAgentControl()) return;
     if (Date.now() >= deadline) {
       throw new Error(`waitForAgentControl timed out after ${timeout}s`);
     }
-    await waits.waitForTimeout(interval * 1000);
+    await waits.wait(interval);
   }
 }
 
@@ -437,11 +587,36 @@ function taskSpaceNumericId(space, op: string) {
   return space.id;
 }
 
-async function findTaskSpace(nameOrId) {
+async function findTaskSpace(nameOrId, op: string) {
+  assertTaskSpaceLocator(op, nameOrId);
   const spaces = await listTaskSpaces();
   const match = findMatchingTaskSpace(spaces, nameOrId);
   if (!match) throw new Error(`task space not found: ${nameOrId}`);
   return match;
+}
+
+// Reject bad locators before any native call: an unmatched string name falls
+// through to creating a space, so undefined must never reach that branch.
+function assertTaskSpaceLocator(op: string, nameOrId: unknown) {
+  if (typeof nameOrId === "number" && Number.isSafeInteger(nameOrId)) return;
+  if (typeof nameOrId === "string" && nameOrId.trim() !== "") return;
+  throw new TypeError(
+    `${op} expects a task-space name (non-empty string) or numeric id, got ${describeLocator(nameOrId)}. ` +
+      `listTaskSpaces() entries expose the numeric id as "id"; pass entry.id.`,
+  );
+}
+
+function assertTaskSpaceName(op: string, name: unknown) {
+  if (typeof name === "string" && name.trim() !== "") return;
+  throw new TypeError(
+    `${op} expects a non-empty task-space name, got ${describeLocator(name)}`,
+  );
+}
+
+function describeLocator(value: unknown) {
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "number" || value == null) return String(value);
+  return typeof value;
 }
 
 function findMatchingTaskSpace(spaces, nameOrId) {
@@ -501,7 +676,7 @@ export async function runSiteBrowserTool(siteId, toolName, args: any = {}) {
   const source = await loadBrowserToolSource(siteId, toolName, {
     agentWorkspace: state.agentWorkspace(),
   });
-  return evaluate(wrapBrowserTool(source, args));
+  return js(wrapBrowserTool(source, args));
 }
 
 /**
@@ -517,334 +692,59 @@ export async function learnContext(url = undefined) {
   });
 }
 
-function createLocator(selector) {
-  return {
-    selector,
-    first: () => createLocator(nthSelector(selector, 0)),
-    last: () => createLocator(`internal:last;${selector}`),
-    nth: (index) => {
-      const value = Number(index);
-      if (!Number.isInteger(value) || value < 0) {
-        throw new Error("locator.nth requires a non-negative integer");
-      }
-      return createLocator(nthSelector(selector, value));
-    },
-    locator: (child) =>
-      createLocator(scopedSelector(selector, locatorSelector(child))),
-    getByRole: (role, options: any = {}) =>
-      createLocator(scopedSelector(selector, roleSelector(role, options))),
-    getByText: (text, options: any = {}) =>
-      createLocator(
-        scopedSelector(selector, textSelector("text", text, options)),
-      ),
-    getByLabel: (text, options: any = {}) =>
-      createLocator(
-        scopedSelector(selector, textSelector("label", text, options)),
-      ),
-    getByPlaceholder: (text, options: any = {}) =>
-      createLocator(
-        scopedSelector(selector, textSelector("placeholder", text, options)),
-      ),
-    getByAltText: (text, options: any = {}) =>
-      createLocator(
-        scopedSelector(selector, textSelector("alt", text, options)),
-      ),
-    getByTitle: (text, options: any = {}) =>
-      createLocator(
-        scopedSelector(selector, textSelector("title", text, options)),
-      ),
-    getByTestId: (testId) =>
-      createLocator(scopedSelector(selector, testIdSelector(testId))),
-    filter: (options: any = {}) =>
-      createLocator(filterSelector(selector, options)),
-    click: (options = {}) => pointer.click(selector, options),
-    dblclick: (options = {}) => pointer.dblclick(selector, options),
-    hover: (options = {}) => pointer.hover(selector, options),
-    dragTo: (target, options = {}) =>
-      pointer.drag([selector, target?.selector || target], options),
-    scrollIntoViewIfNeeded: () => pointer.scrollIntoViewIfNeeded(selector),
-    focus: () => keyboard.focus(selector),
-    fill: (value, options = {}) => keyboard.fill(selector, value, options),
-    clear: (options = {}) => keyboard.fill(selector, "", options),
-    press: (key, options = {}) =>
-      keyboard.pressOnSelector(selector, key, options),
-    pressSequentially: (text, options = {}) =>
-      keyboard.pressSequentially(selector, text, options),
-    check: () => keyboard.check(selector),
-    uncheck: () => keyboard.uncheck(selector),
-    setChecked: (checked) => keyboard.setChecked(selector, checked),
-    selectOption: (values) => keyboard.selectOption(selector, values),
-    setInputFiles: (filesValue) => files.setInputFiles(selector, filesValue),
-    dispatchEvent: (type, eventInit = {}) =>
-      keyboard.dispatchEvent(selector, type, eventInit),
-    blur: () => locator.blur(selector),
-    textContent: () => locator.textContent(selector),
-    innerText: () => locator.innerText(selector),
-    innerHTML: () => locator.innerHTML(selector),
-    inputValue: () => locator.inputValue(selector),
-    isChecked: () => locator.isChecked(selector),
-    isVisible: () => locator.isVisible(selector),
-    isHidden: () => locator.isHidden(selector),
-    isEnabled: () => locator.isEnabled(selector),
-    isDisabled: () => locator.isDisabled(selector),
-    isEditable: () => locator.isEditable(selector),
-    getAttribute: (name) => locator.getAttribute(selector, name),
-    boundingBox: () => locator.boundingBox(selector),
-    screenshot: async (options = {}) => {
-      const box = await locator.boundingBox(selector);
-      if (!box) {
-        throw new Error(
-          `locator.screenshot target has no bounding box: ${selector}`,
-        );
-      }
-      return observe.screenshot({ ...options, clip: box });
-    },
-    count: () => locator.count(selector),
-    allInnerTexts: () => locator.allInnerTexts(selector),
-    allTextContents: () => locator.allTextContents(selector),
-    evaluate: (pageFunction, arg = undefined) =>
-      locator.evaluateLocator(selector, pageFunction, arg),
-    evaluateAll: (pageFunction, arg = undefined) =>
-      locator.evaluateAll(selector, pageFunction, arg),
-    waitFor: (options = {}) => waits.waitForSelector(selector, options),
-  };
-}
-
-function nthSelector(selector, index) {
-  return `internal:nth=${index};${selector}`;
-}
-
-function internalSelector(kind, data) {
-  return `internal:${kind}:${encodeURIComponent(JSON.stringify(data))}`;
-}
-
-function scopedSelector(base, child) {
-  return internalSelector("scope", { base, child });
-}
-
-function locatorSelector(value) {
-  if (
-    value &&
-    typeof value === "object" &&
-    typeof value.selector === "string"
-  ) {
-    return value.selector;
-  }
-  return String(value);
-}
-
-function textSelector(prefix, text, options: any = {}) {
-  const value = `${options.exact ? "exact:" : ""}${JSON.stringify(String(text))}`;
-  return `loc=${prefix}:${value}`;
-}
-
-function roleSelector(role, options: any = {}) {
-  const name =
-    options && Object.prototype.hasOwnProperty.call(options, "name")
-      ? `[name=${JSON.stringify(roleNameMatcher(options.name))}]`
-      : "";
-  return `loc=role:${role}${name}`;
-}
-
-function testIdSelector(testId) {
-  return textSelector("testid", testId, { exact: true });
-}
-
-function filterSelector(base, options: any = {}) {
-  const data: any = { base };
-  if (Object.prototype.hasOwnProperty.call(options, "hasText")) {
-    data.hasText = textMatcher(options.hasText);
-  }
-  if (Object.prototype.hasOwnProperty.call(options, "hasNotText")) {
-    data.hasNotText = textMatcher(options.hasNotText);
-  }
-  if (options.has !== undefined) {
-    data.has = locatorSelector(options.has);
-  }
-  if (options.hasNot !== undefined) {
-    data.hasNot = locatorSelector(options.hasNot);
-  }
-  return internalSelector("filter", data);
-}
-
-function textMatcher(value) {
-  if (value instanceof RegExp) {
-    return { regex: value.source, flags: value.flags };
-  }
-  return { text: String(value), exact: false };
-}
-
-function roleNameMatcher(value) {
-  if (value instanceof RegExp) {
-    return { regex: value.source, flags: value.flags };
-  }
-  return value;
-}
-
-function createPageFacade() {
-  return {
-    setDefaultTimeout: (timeout) => {
-      const value = Number(timeout);
-      if (!Number.isFinite(value) || value < 0) {
-        throw new Error(
-          "page.setDefaultTimeout requires a non-negative number",
-        );
-      }
-      state.defaultTimeout = value;
-    },
-    goto: nav.goto,
-    reload: async (options: any = {}) => {
-      await cdp("Page.reload", { ignoreCache: Boolean(options.ignoreCache) });
-      if (options.waitUntil === "commit") {
-        return false;
-      }
-      return waits.waitForLoadState(options.waitUntil || "load", {
-        timeout: options.timeout,
-      });
-    },
-    info: nav.pageInfo,
-    url: async () => (await nav.pageInfo()).url,
-    title: async () => (await nav.pageInfo()).title,
-    locator: createLocator,
-    getByRole: (role, options: any = {}) => {
-      return createLocator(roleSelector(role, options));
-    },
-    getByText: (text, options: any = {}) =>
-      createLocator(textSelector("text", text, options)),
-    getByLabel: (text, options: any = {}) =>
-      createLocator(textSelector("label", text, options)),
-    getByPlaceholder: (text, options: any = {}) =>
-      createLocator(textSelector("placeholder", text, options)),
-    getByAltText: (text, options: any = {}) =>
-      createLocator(textSelector("alt", text, options)),
-    getByTitle: (text, options: any = {}) =>
-      createLocator(textSelector("title", text, options)),
-    getByTestId: (testId) => createLocator(testIdSelector(testId)),
-    waitForTimeout: waits.waitForTimeout,
-    waitForLoadState: waits.waitForLoadState,
-    waitForSelector: waits.waitForSelector,
-    waitForFunction: waits.waitForFunction,
-    waitForURL: waits.waitForURL,
-    waitForRequest: waits.waitForRequest,
-    waitForResponse: waits.waitForResponse,
-    waitForEvent: downloads.waitForEvent,
-    evaluate,
-    screenshot: observe.screenshot,
-    snapshot: observe.snapshot,
-    snapshotRaw: observe.snapshotRaw,
-    elementCenter: observe.elementCenter,
-    drainEvents: observe.drainEvents,
-    screencast: {
-      start: screencast.startScreencast,
-      stop: screencast.stopScreencast,
-    },
-    keyboard: {
-      press: keyboard.press,
-      down: keyboard.down,
-      up: keyboard.up,
-      insertText: keyboard.insertText,
-      type: keyboard.typeText,
-    },
-    mouse: {
-      click: (x, y, options = {}) => {
-        const [target, effectiveOptions] = mousePointArgs(x, y, options);
-        return pointer.click(target, effectiveOptions);
-      },
-      dblclick: (x, y, options = {}) => {
-        const [target, effectiveOptions] = mousePointArgs(x, y, options);
-        return pointer.dblclick(target, effectiveOptions);
-      },
-      move: (x, y) => pointer.hover([x, y]),
-      down: pointer.down,
-      up: pointer.up,
-      wheel: pointer.wheel,
-      drag: pointer.drag,
-    },
-  };
-}
-
-function mousePointArgs(x, y, options) {
-  if (Array.isArray(x) || (x && typeof x === "object")) {
-    return [x, y || {}];
-  }
-  return [[x, y], options || {}];
-}
-
-function createBrowserFacade() {
-  return {
-    listTabs: nav.listTabs,
-    currentTab: nav.currentTab,
-    switchTab: nav.switchTab,
-    openOrReuseTab: nav.openOrReuseTab,
-    closeTab: nav.closeTab,
-    ensureRealTab: nav.ensureRealTab,
-    iframeTarget: nav.iframeTarget,
-  };
-}
-
-function createTaskSpacesFacade() {
-  return {
-    list: listTaskSpaces,
-    switch: switchTaskSpace,
-    new: newTaskSpace,
-    useOrCreate: useOrCreateTaskSpace,
-    claim: claimTaskSpace,
-    complete: completeTaskSpace,
-    handOff: handOffTaskSpace,
-    takeOver: takeOverTaskSpace,
-    waitForAgentControl,
-  };
-}
-
-function createSiteFacade() {
-  return {
-    skills: siteSkills,
-    skillsForUrl: siteSkillsForUrl,
-    runTool: runSiteTool,
-    runBrowserTool: runSiteBrowserTool,
-    learnContext,
-  };
-}
-
-const FACADE_HELP: Record<string, string> = {
-  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.getByText(text), page.getByLabel(text), page.getByPlaceholder(text), page.getByTestId(testId), page.setDefaultTimeout(ms), page.waitForEvent("download"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). waitForURL predicates receive URL objects and waitUntil defaults to load.',
-  locator:
-    "page.locator(selector): returns a strict, auto-waiting locator facade with locator(), getByRole(), getByText(), filter(), first(), nth(index), last(), click(), hover(), dragTo(target), scrollIntoViewIfNeeded(), fill(value), clear(), press(key), check(), selectOption(value), textContent(), innerText(), innerHTML(), isVisible(), isEnabled(), getAttribute(name), screenshot(), count(), evaluate(fn, arg), evaluateAll(fn, arg), and waitFor(options). Narrow multiple matches; use first()/nth() only for confirmed legitimate duplicates.",
-  browser:
-    "browser: tab facade. Use browser.listTabs(), browser.currentTab(), browser.switchTab(target), browser.openOrReuseTab(url, options), and browser.closeTab(target). Treat targetId as short-lived: obtain and validate it in the current script; switchTab/closeTab refresh the tab list before acting.",
-  taskSpaces:
-    "taskSpaces: task-space facade. Use taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), and taskSpaces.waitForAgentControl(nameOrId, options).",
-  site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",
-  fetch:
-    "fetch: network facade. Use fetch.server(url, options) for Node-side fetch and fetch.browser(url, options) for browser-origin fetch.",
-};
-
-export function helperContext(extra: any = {}) {
+export function helperContext(
+  extra: any = {},
+  {
+    printHelp = (text: string) => bufferOutput(`${text}\n`),
+  }: { printHelp?: (text: string) => void } = {},
+) {
+  const { newTab: _newTab, ...publicNav } = nav;
   const all = {
-    page: createPageFacade(),
-    browser: createBrowserFacade(),
-    taskSpaces: createTaskSpacesFacade(),
-    site: createSiteFacade(),
-    fetch: {
-      server: serverFetch,
-      browser: browserFetch,
-    },
+    ...pointer,
+    ...keyboard,
+    ...publicNav,
+    ...observe,
+    ...waits,
+    ...files,
     cdp,
+    js,
+    serverFetch,
+    browserFetch,
+    siteSkills,
+    siteSkillsForUrl,
+    runSiteTool,
+    runSiteBrowserTool,
+    learnContext,
+    profiles,
+    listTaskSpaces,
+    switchTaskSpace,
+    newTaskSpace,
+    taskSpace,
+    useOrCreateTaskSpace,
+    claimTaskSpace,
+    completeTaskSpace,
+    handOffTaskSpace,
+    takeOverTaskSpace,
+    waitForAgentControl,
     ...extra,
   };
   return {
     ...all,
+    // The formal 1.3 Skill starts through egoBrowser.*. Keep a narrow guard so
+    // stale conversations get a recovery instruction instead of a ReferenceError.
+    egoBrowser: createStaleEgoBrowserGuard(),
+    // help() prints its text so `ego-browser nodejs -e 'help()'` shows it, and
+    // still returns the text for scripts that already log or inspect it.
     help: (...names: string[]) => {
-      if (names.length === 1 && FACADE_HELP[names[0]]) {
-        return FACADE_HELP[names[0]];
-      }
-      if (names.length === 0) {
-        return Object.values(FACADE_HELP).join("\n\n");
-      }
       const result = helpRuntime(all, ...names);
-      if (typeof result === "string") return result;
-      if (Array.isArray(result)) return result.map(formatHelp).join("\n\n");
-      return formatHelp(result);
+      const text =
+        typeof result === "string"
+          ? result
+          : Array.isArray(result)
+            ? result.map(formatHelp).join("\n\n")
+            : formatHelp(result);
+      printHelp(text);
+      return text;
     },
   };
 }

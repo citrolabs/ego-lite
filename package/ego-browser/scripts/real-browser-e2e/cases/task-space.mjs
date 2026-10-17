@@ -1,106 +1,178 @@
 export function taskSpaceCase() {
   return `
-    const task = await taskSpaces.useOrCreate(taskName);
-    assertEqual(task.name, taskName, "taskSpaces.useOrCreate selects named task");
+    const task = await useOrCreateTaskSpace(taskName);
+    assertEqual(task.name, taskName, "useOrCreateTaskSpace selects named task");
 
-    const reusedTask = await taskSpaces.useOrCreate(taskName);
-    assertEqual(reusedTask.id, task.id, "taskSpaces.useOrCreate reuses an existing named task");
+    const reusedTask = await useOrCreateTaskSpace(taskName);
+    assertEqual(reusedTask.id, task.id, "useOrCreateTaskSpace reuses an existing named task");
 
-    const spaces = await taskSpaces.list();
-    assert(spaces.some((space) => space.name === taskName), "taskSpaces.list includes e2e task");
+    const spaces = await listTaskSpaces();
+    assert(spaces.some((space) => space.name === taskName), "listTaskSpaces includes e2e task");
     const listed = spaces.find((space) => space.name === taskName);
-    assertEqual(typeof listed.id, "number", "taskSpaces.list returns numeric ids");
-    assertEqual(listed.taskId !== undefined, true, "taskSpaces.list returns taskId");
-    assertEqual(typeof listed.ownership, "string", "taskSpaces.list returns ownership");
+    assertEqual(typeof listed.id, "number", "listTaskSpaces returns numeric ids");
+    assertEqual(listed.taskId !== undefined, true, "listTaskSpaces returns taskId");
+    assertEqual(typeof listed.ownership, "string", "listTaskSpaces returns ownership");
 
-    const switched = await taskSpaces.switch(task.id);
-    assertEqual(switched.id, task.id, "taskSpaces.switch selects by numeric id");
-    const switchedByName = await taskSpaces.switch(taskName);
-    assertEqual(switchedByName.id, task.id, "taskSpaces.switch selects by name");
-    const switchedByNumericString = await taskSpaces.switch(String(task.id));
-    assertEqual(switchedByNumericString.id, task.id, "taskSpaces.switch selects by numeric string id");
+    const switched = await switchTaskSpace(task.id);
+    assertEqual(switched.id, task.id, "switchTaskSpace selects by numeric id");
+    const switchedByName = await switchTaskSpace(taskName);
+    assertEqual(switchedByName.id, task.id, "switchTaskSpace selects by name");
+    const switchedByNumericString = await switchTaskSpace(String(task.id));
+    assertEqual(switchedByNumericString.id, task.id, "switchTaskSpace selects by numeric string id");
 
-    await taskSpaces.waitForAgentControl(taskName, { interval: 0.1, timeout: 3 });
-    await taskSpaces.takeOver(taskName);
-    await taskSpaces.waitForAgentControl(taskName, { interval: 0.1, timeout: 3 });
+    await waitForAgentControl(taskName, { interval: 0.1, timeout: 3 });
+    await takeOverTaskSpace();
+    await waitForAgentControl(taskName, { interval: 0.1, timeout: 3 });
 
-    const scratch = await taskSpaces.new(taskName + " scratch");
-    assertEqual(scratch.name, taskName + " scratch", "taskSpaces.new creates a scratch space");
-    const scratchByName = await taskSpaces.switch(scratch.name);
-    assertEqual(scratchByName.id, scratch.id, "taskSpaces.new output can be selected by name");
-    const closed = await taskSpaces.complete(scratch.id, { keep: false });
-    assertEqual(closed.done, true, "taskSpaces.complete closes scratch task");
+    const scratch = await newTaskSpace(taskName + " scratch");
+    assertEqual(scratch.name, taskName + " scratch", "newTaskSpace creates a scratch space");
+    const scratchByName = await switchTaskSpace(scratch.name);
+    assertEqual(scratchByName.id, scratch.id, "newTaskSpace output can be selected by name");
+    const closed = await completeTaskSpace(scratch.id, { keep: false });
+    assertEqual(closed.done, true, "completeTaskSpace closes scratch task");
 
     await assertRejects(
-      () => taskSpaces.complete(scratch.id, { keep: false }),
+      () => completeTaskSpace(scratch.id, { keep: false }),
       "task space not found",
-      "taskSpaces.complete reports already-closed task space"
+      "completeTaskSpace reports already-closed task space"
     );
 
-    await taskSpaces.switch(taskName);
+    await switchTaskSpace(taskName);
     await assertRejects(
-      () => taskSpaces.switch(taskName + " missing"),
+      () => switchTaskSpace(taskName + " missing"),
       "task space not found",
-      "taskSpaces.switch reports missing task space"
+      "switchTaskSpace reports missing task space"
     );
     await assertRejects(
-      () => taskSpaces.useOrCreate(99999999),
+      () => useOrCreateTaskSpace(99999999),
       "task space not found",
-      "taskSpaces.useOrCreate rejects missing numeric id"
+      "useOrCreateTaskSpace rejects missing numeric id"
     );
     await assertRejects(
-      () => taskSpaces.complete(taskName, {}),
+      () => completeTaskSpace(taskName, {}),
       "requires { keep: boolean }",
-      "taskSpaces.complete validates keep option"
+      "completeTaskSpace validates keep option"
     );
     await assertRejects(
-      () => taskSpaces.complete("", { keep: false }),
+      () => completeTaskSpace("", { keep: false }),
       "requires a task space name or id",
-      "taskSpaces.complete validates empty task id"
+      "completeTaskSpace validates empty task id"
     );
     await assertRejects(
-      () => taskSpaces.waitForAgentControl("", { timeout: 0.1 }),
+      () => waitForAgentControl("", { timeout: 0.1 }),
       "requires a task space name or id",
-      "taskSpaces.waitForAgentControl validates task space id"
+      "waitForAgentControl validates task space id"
     );
     await assertRejects(
-      () => taskSpaces.takeOver(taskName + " missing"),
+      () => takeOverTaskSpace(taskName + " missing"),
       "task space not found",
-      "taskSpaces.takeOver reports missing task space"
+      "takeOverTaskSpace reports missing task space"
     );
     await assertRejects(
-      () => taskSpaces.claim(taskName + " missing"),
+      () => claimTaskSpace(taskName + " missing"),
       "task space not found",
-      "taskSpaces.claim reports missing task space"
+      "claimTaskSpace reports missing task space"
     );
     await assertRejects(
-      () => taskSpaces.handOff(taskName + " missing"),
+      () => handOffTaskSpace(taskName + " missing"),
       "task space not found",
-      "taskSpaces.handOff reports missing task space"
+      "handOffTaskSpace reports missing task space"
     );
 
-    // taskSpaces.handOff -> taskSpaces.takeOver cycle: verify ownership transitions via taskSpaces.list
-    await taskSpaces.handOff();
-    const afterHandoff = await taskSpaces.list();
-    const handedOff = afterHandoff.find((s) => s.name === taskName);
-    assert(handedOff.ownership !== "agent", "taskSpaces.handOff transfers ownership away from agent");
+    await handOffTaskSpace();
+    await takeOverTaskSpace();
+    await waitForAgentControl(taskName, { interval: 0.1, timeout: 5 });
+    const v2Task = await taskSpace(taskName + " v2 lifecycle");
+    await v2Task.page("p1").goto(baseUrl + "/secondary?v2-lifecycle=handoff");
+    await v2Task.handOff();
+    const resumedTask = await takeOverTaskSpace(v2Task.spaceId);
+    await resumedTask.waitForControl({ interval: 100, timeout: 5_000 });
+    const boundaryPage = resumedTask.userPage();
+    assert(Boolean(boundaryPage), "takeover captures the tab active at the user boundary");
+    const handedOffSpaceId = resumedTask.spaceId;
+    const keepAllReceipt = await resumedTask.finish({ keep: "all" });
+    assertEqual(keepAllReceipt.spaceId, handedOffSpaceId, "task.finish receipt identifies its space");
+    assertEqual(keepAllReceipt.closedSpace, false, "keep all reports that the space remains open");
+    assert(
+      keepAllReceipt.keptManagedLabels.includes(boundaryPage.label),
+      "keep all receipt lists the retained managed Page"
+    );
+    assertEqual(keepAllReceipt.closedManagedLabels.length, 0, "keep all receipt reports no managed Page closures");
+    assert(
+      (await listTaskSpaces()).some((space) => space.id === handedOffSpaceId),
+      "task.finish keeps the handed-off browser space"
+    );
+    await completeTaskSpace(handedOffSpaceId, { keep: false });
 
-    await taskSpaces.takeOver();
-    const afterTakeover = await taskSpaces.list();
-    const taken = afterTakeover.find((s) => s.name === taskName);
-    assertEqual(taken.ownership, "agent", "taskSpaces.takeOver restores agent ownership");
+    const closeTask = await taskSpace(taskName + " v2 close through finish");
+    const closeSpaceId = closeTask.spaceId;
+    const closeReceipt = await closeTask.finish({ keep: [] });
+    assertEqual(closeReceipt.spaceId, closeSpaceId, "close receipt identifies its space");
+    assertEqual(closeReceipt.closedSpace, true, "empty keep reports that the whole space closed");
+    assertEqual(closeReceipt.keptManagedLabels.length, 0, "closed-space receipt reports no retained managed Pages");
+    assert(closeReceipt.closedManagedLabels.length > 0, "closed-space receipt lists the managed Pages it closed");
+    assertEqual(closeReceipt.preservedUnmanagedCount, 0, "closed-space receipt reports no protected unmanaged tabs");
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (!(await listTaskSpaces()).some((space) => space.id === closeSpaceId)) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert(
+      !(await listTaskSpaces()).some((space) => space.id === closeSpaceId),
+      "task.finish with no retained Pages removes the v2 task space"
+    );
 
-    await taskSpaces.waitForAgentControl(taskName, { interval: 0.1, timeout: 5 });
+    const finishTask = await taskSpace(taskName + " v2 finish");
+    await finishTask.page("p1").goto(baseUrl + "/secondary?v2-lifecycle=discard");
+    const retainedPage = await finishTask.newPage();
+    await retainedPage.goto(baseUrl + "/secondary?v2-lifecycle=retain");
+    const finishSpaceId = finishTask.spaceId;
+    const namedReceipt = await finishTask.finish({ keep: [retainedPage.label] });
+    assertEqual(namedReceipt.closedSpace, false, "named retention reports that the space remains open");
+    assertEqual(
+      JSON.stringify(namedReceipt.keptManagedLabels),
+      JSON.stringify([retainedPage.label]),
+      "named retention receipt lists the retained Page"
+    );
+    assert(
+      namedReceipt.closedManagedLabels.includes("p1"),
+      "named retention receipt lists the discarded Agent Page"
+    );
+    assertEqual(namedReceipt.preservedUnmanagedCount, 0, "named retention reports no unmanaged tabs");
+    assert(
+      (await listTaskSpaces()).some((space) => space.id === finishSpaceId),
+      "task.finish keeps the browser space when one Page is retained"
+    );
+    const reclaimedFinishedTask = await claimTaskSpace(finishSpaceId);
+    const retainedTabs = await reclaimedFinishedTask.tabs();
+    assert(
+      retainedTabs.some((tab) => tab.url.includes("v2-lifecycle=retain")),
+      "task.finish keeps the named Page"
+    );
+    assert(
+      !retainedTabs.some((tab) => tab.url.includes("v2-lifecycle=discard")),
+      "task.finish closes unlisted Agent Pages"
+    );
+    await completeTaskSpace(finishSpaceId, { keep: false });
+  `;
+}
 
-    // Repeat with explicit name parameter
-    await taskSpaces.handOff(taskName);
-    const afterHandoff2 = await taskSpaces.list();
-    assert(afterHandoff2.find((s) => s.name === taskName).ownership !== "agent", "taskSpaces.handOff(name) transfers ownership away from agent");
+export function crossSpaceV2Case() {
+  return `
+    const firstTask = await taskSpace(taskName + " gate first");
+    const firstPage = firstTask.page("p1");
+    await firstPage.goto(baseUrl + "/?space=first");
+    const secondTask = await taskSpace(taskName + " gate second");
+    const secondPage = secondTask.page("p1");
+    await secondPage.goto(baseUrl + "/secondary?space=second");
 
-    await taskSpaces.takeOver(taskName);
-    const afterTakeover2 = await taskSpaces.list();
-    assertEqual(afterTakeover2.find((s) => s.name === taskName).ownership, "agent", "taskSpaces.takeOver(name) restores agent ownership");
+    const [firstInfo, secondInfo] = await Promise.all([
+      firstPage.info(),
+      secondPage.info(),
+    ]);
+    assertIncludes(firstInfo.url, "space=first", "cross-space gate keeps the first request in its space");
+    assertIncludes(secondInfo.url, "space=second", "cross-space gate keeps the second request in its space");
 
-    await taskSpaces.waitForAgentControl(taskName, { interval: 0.1, timeout: 5 });
+    await firstTask.finish({ keep: [] });
+    await secondTask.finish({ keep: [] });
   `;
 }

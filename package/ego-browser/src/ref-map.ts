@@ -1,8 +1,10 @@
 export class RefMap {
   map: Map<string, any>;
+  readonly allowFallback: boolean;
 
-  constructor() {
+  constructor({ allowFallback = true } = {}) {
     this.map = new Map();
+    this.allowFallback = allowFallback;
   }
 
   add(refId, backendNodeId, role, name, nth = undefined) {
@@ -16,23 +18,20 @@ export class RefMap {
     name,
     nth = undefined,
     frameId = undefined,
+    frameProvenance = undefined,
   ) {
     this.map.set(refId, {
       backendNodeId,
       role,
       name,
       nth,
-      selector: undefined,
       frameId,
+      ...(frameProvenance ? { frameProvenance } : {}),
     });
   }
 
   get(refId) {
     return this.map.get(refId);
-  }
-
-  remove(refId) {
-    this.map.delete(refId);
   }
 
   clear() {

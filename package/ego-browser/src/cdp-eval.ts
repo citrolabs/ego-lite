@@ -1,6 +1,9 @@
-import { send, state } from "./state.js";
+import { parse } from "acorn";
 
-class TimeoutError extends Error {}
+import { browserCdp } from "./browser-runtime.js";
+import { state } from "./state.js";
+
+let hasWarnedAboutFunctionJs = false;
 
 /**
  * Send a raw Chrome DevTools Protocol command.
@@ -12,7 +15,7 @@ class TimeoutError extends Error {}
 export async function cdp(method, params: any = {}, sessionId = undefined) {
   const result = state.cdpOverride
     ? await state.cdpOverride(method, params, sessionId)
-    : (await send({ method, params, session_id: sessionId })).result || {};
+    : (await browserCdp(method, params, sessionId)).result || {};
   if (
     !sessionId &&
     (method === "Network.enable" || method === "Network.disable")
@@ -26,42 +29,44 @@ export async function cdp(method, params: any = {}, sessionId = undefined) {
 }
 
 /**
- * Evaluate JavaScript in the current page, Playwright-style.
- * @param {string | Function} pageFunction JavaScript expression string or function called with arg.
- *   String expressions with top-level return statements are auto-wrapped in an IIFE for compatibility.
- * @param {unknown} [arg] Optional serializable argument passed to function pageFunctions.
- *   For legacy string expressions, a string second argument is treated as a target id to evaluate in.
+ * Evaluate JavaScript in the current page or a target tab.
+ * @param {string | Function} expression JavaScript source string or a function whose body should be evaluated.
+ *   Passing a function is accepted as a convenience but emits a one-time warning to stderr so callers can
+ *   switch to the canonical string form. Top-level return statements in strings are auto-wrapped in an IIFE.
+ * @param {string} [targetId] Optional target id to attach and evaluate in.
  * @returns {Promise<any>} Runtime.evaluate return-by-value result.
  */
-export async function evaluate(pageFunction, arg = undefined) {
-  let expression;
-  let sessionId;
-  if (typeof pageFunction === "function") {
-    expression = `(${pageFunction.toString()})(${serializedArg(arg)})`;
-  } else if (typeof pageFunction === "string") {
-    if (arg !== undefined && typeof arg !== "string") {
-      throw new TypeError(
-        "page.evaluate string form only accepts a legacy target id as its second argument; pass a function pageFunction to use args",
+export async function js(expression, targetId = undefined) {
+  if (typeof expression === "function") {
+    const source = expression.toString();
+    if (!hasWarnedAboutFunctionJs) {
+      hasWarnedAboutFunctionJs = true;
+      process.stderr.write(
+        `[ego-browser] js() received a function and auto-wrapped it (${jsSnippet(source, 80)}).\n` +
+          `  js() is a thin wrapper over CDP Runtime.evaluate; it takes a string expression,\n` +
+          `  not a Puppeteer/Playwright-style callable. Auto-wrap does NOT capture closure\n` +
+          `  variables and has NO args channel.\n` +
+          `  Prefer:\n` +
+          `    js(\`<expression>\`)  // pure expression or explicit IIFE\n`,
       );
     }
-    expression = pageFunction;
-    if (arg !== undefined) {
-      sessionId = (
-        await cdp("Target.attachToTarget", {
-          targetId: arg,
-          flatten: true,
-        })
-      ).sessionId;
-    }
-  } else {
+    expression = `(${source})()`;
+  } else if (typeof expression !== "string") {
     throw new TypeError(
-      `page.evaluate expects a string expression or function pageFunction, got ${pageFunction === null ? "null" : typeof pageFunction}`,
+      `js() expects a string expression or function, got ${expression === null ? "null" : typeof expression}`,
     );
   }
-  if (hasReturnStatement(expression) && !expression.trim().startsWith("(")) {
-    expression = `(function(){${expression}})()`;
+  const sessionId = targetId
+    ? (await cdp("Target.attachToTarget", { targetId, flatten: true }))
+        .sessionId
+    : undefined;
+  let finalExpression = expression;
+  if (hasReturnStatement(expression)) {
+    // Newlines keep a trailing line comment from swallowing the closing
+    // brace; async keeps top-level await valid inside the wrapper.
+    finalExpression = `(async function(){\n${expression}\n})()`;
   }
-  return runtimeEvaluate(expression, sessionId, true);
+  return runtimeEvaluate(finalExpression, sessionId, true);
 }
 
 async function runtimeEvaluate(
@@ -81,10 +86,7 @@ async function runtimeEvaluate(
     );
     return runtimeValue(response, expression);
   } catch (error) {
-    if (
-      error instanceof TimeoutError ||
-      /timed out/i.test(error?.message || "")
-    ) {
+    if (/timed out/i.test(error?.message || "")) {
       throw new Error(
         `Runtime.evaluate timed out; expression: ${jsSnippet(expression)}`,
       );
@@ -154,71 +156,38 @@ function jsSnippet(expression, limit = 160) {
   return snippet.length > limit ? `${snippet.slice(0, limit - 3)}...` : snippet;
 }
 
+/**
+ * Whether the source has a `return` outside any nested function, meaning it
+ * must be wrapped in a function before Runtime.evaluate accepts it.
+ */
 export function hasReturnStatement(expression) {
-  let i = 0;
-  let stateName = "code";
-  let quote = "";
-  while (i < expression.length) {
-    const ch = expression[i];
-    const next = expression[i + 1] || "";
-    if (stateName === "code") {
-      if (ch === "'" || ch === '"' || ch === "`") {
-        stateName = "string";
-        quote = ch;
-        i += 1;
-        continue;
-      }
-      if (ch === "/" && next === "/") {
-        stateName = "line_comment";
-        i += 2;
-        continue;
-      }
-      if (ch === "/" && next === "*") {
-        stateName = "block_comment";
-        i += 2;
-        continue;
-      }
-      if (expression.startsWith("return", i)) {
-        const before = i > 0 ? expression[i - 1] : "";
-        const after = expression[i + 6] || "";
-        if (!/[A-Za-z0-9_]/.test(before) && !/[A-Za-z0-9_]/.test(after)) {
-          return true;
-        }
-      }
-      i += 1;
-      continue;
-    }
-    if (stateName === "line_comment") {
-      if (ch === "\n") {
-        stateName = "code";
-      }
-      i += 1;
-      continue;
-    }
-    if (stateName === "block_comment") {
-      if (ch === "*" && next === "/") {
-        stateName = "code";
-        i += 2;
-        continue;
-      }
-      i += 1;
-      continue;
-    }
-    if (stateName === "string") {
-      if (ch === "\\") {
-        i += 2;
-        continue;
-      }
-      if (ch === quote) {
-        stateName = "code";
-        quote = "";
-      }
-      i += 1;
-    }
+  try {
+    return containsOuterReturn(
+      parse(expression, {
+        ecmaVersion: "latest",
+        allowReturnOutsideFunction: true,
+        allowAwaitOutsideFunction: true,
+      }),
+    );
+  } catch {
+    // Leave invalid or unsupported syntax untouched for the browser to report.
+    return false;
   }
-  return false;
 }
 
-function serializedArg(arg) {
-  return arg === undefined ? "" : JSON.stringify(arg);
+function containsOuterReturn(node) {
+  if (!node || typeof node !== "object") return false;
+  if (node.type === "ReturnStatement") return true;
+  if (
+    node.type === "FunctionDeclaration" ||
+    node.type === "FunctionExpression" ||
+    node.type === "ArrowFunctionExpression"
+  ) {
+    return false;
+  }
+  return Object.values(node).some((child) =>
+    Array.isArray(child)
+      ? child.some(containsOuterReturn)
+      : containsOuterReturn(child),
+  );
 }

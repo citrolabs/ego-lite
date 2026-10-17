@@ -2,25 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { setOverrides } from "../../dist/src/state.js";
-import {
-  click,
-  down,
-  hover,
-  up,
-  wheel,
-} from "../../dist/src/driver/pointer.js";
-
-function visibleAndFocused(value) {
-  return (method, params) => {
-    if (
-      method === "Runtime.evaluate" &&
-      params.expression.includes("visibilityState")
-    ) {
-      return { result: { value } };
-    }
-    return {};
-  };
-}
+import { click, scroll } from "../../dist/src/driver/pointer.js";
 
 test("click resolves selector offsets without the public elementEval helper", async () => {
   const calls = [];
@@ -49,11 +31,8 @@ test("click resolves selector offsets without the public elementEval helper", as
   }
 
   const callFunction = calls.find(
-    (call) =>
-      call.method === "Runtime.callFunctionOn" &&
-      call.params.functionDeclaration.includes("getBoundingClientRect"),
+    (call) => call.method === "Runtime.callFunctionOn",
   );
-  assert.ok(callFunction, "resolves the selector-relative bounding rect");
   assert.equal(callFunction.params.objectId, "object-1");
   assert.match(
     callFunction.params.functionDeclaration,
@@ -87,186 +66,103 @@ test("click resolves selector offsets without the public elementEval helper", as
   );
 });
 
-test("click scrolls a selector into view before resolving its click point", async () => {
+test("scroll defaults to scrolling down (positive deltaY, DOM wheel convention)", async () => {
+  // Regression: the default used to be deltaY -300, which scrolls UP — CDP
+  // negates wheel deltas internally, so the DOM convention (positive = down)
+  // applies end to end. SKILL.md documents scroll({ dy: 900 }) as a downward
+  // scroll, matching scrollBy / scrollToBottomUntil.
   const calls = [];
   const restore = setOverrides({
-    cdpOverride(method, params) {
-      calls.push({ method, params });
-      if (
-        method === "Runtime.evaluate" &&
-        params.objectGroup === "ego-browser"
-      ) {
-        return { result: { objectId: "object-1" } };
-      }
-      if (method === "Runtime.evaluate") {
-        return { result: { value: { x: 100, y: 200 } } };
-      }
-      if (method === "Runtime.callFunctionOn") {
-        return {
-          result: {
-            value: params.functionDeclaration.includes("checkVisibility")
-              ? true
-              : null,
-          },
-        };
-      }
+    cdpOverride(method, params, sessionId, timeoutMs) {
+      calls.push({ method, params, sessionId, timeoutMs });
       return {};
     },
   });
   try {
-    await click("#target");
+    await scroll();
   } finally {
     restore();
   }
-
-  const scrollIndex = calls.findIndex(
-    (call) =>
-      call.method === "Runtime.callFunctionOn" &&
-      call.params.functionDeclaration.includes("scrollIntoView"),
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "Input.dispatchMouseEvent");
+  assert.equal(calls[0].params.deltaY, 300);
+  assert.equal(calls[0].params.deltaX, 0);
+  assert.equal(
+    calls[0].timeoutMs,
+    15_000,
+    "wheel dispatch uses the normal CDP timeout instead of a fragile one-second deadline",
   );
-  const dispatchIndex = calls.findIndex(
-    (call) => call.method === "Input.dispatchMouseEvent",
-  );
-  assert.ok(scrollIndex >= 0, "scrolls the target into the viewport");
-  assert.ok(scrollIndex < dispatchIndex, "scrolls before mouse dispatch");
 });
 
-test("wheel defaults to scrolling down (positive deltaY) via CDP when visible and focused", async () => {
-  // CDP negates wheel deltas internally, so the DOM convention (positive = down)
-  // applies end to end — matching Playwright's mouse.wheel(deltaX, deltaY).
-  const calls = [];
-  const probe = visibleAndFocused(true);
-  const restore = setOverrides({
-    cdpOverride(method, params) {
-      calls.push({ method, params });
-      return probe(method, params);
-    },
-  });
-  try {
-    await wheel();
-  } finally {
-    restore();
-  }
-  const dispatch = calls.find((c) => c.method === "Input.dispatchMouseEvent");
-  assert.ok(dispatch, "dispatches a CDP wheel event");
-  assert.deepEqual(dispatch.params, {
-    type: "mouseWheel",
-    x: 0,
-    y: 0,
-    deltaX: 0,
-    deltaY: 300,
-  });
-});
-
-test("down and up use the current mouse position", async () => {
+test("scroll falls back to DOM scrolling only when wheel dispatch is unsupported", async () => {
   const calls = [];
   const restore = setOverrides({
     cdpOverride(method, params, sessionId) {
       calls.push({ method, params, sessionId });
+      if (method === "Input.dispatchMouseEvent") {
+        throw new Error("'Input.dispatchMouseEvent' wasn't found");
+      }
+      if (method === "Runtime.evaluate") {
+        return { result: { value: { x: 0, y: 450 } } };
+      }
       return {};
     },
   });
   try {
-    await hover([23, 45]);
-    await down();
-    await up();
+    const result = await scroll({ x: 50, y: 60, dx: 10, dy: 450 });
+    assert.deepEqual(result, { x: 0, y: 450 });
   } finally {
     restore();
   }
 
-  const mouseEvents = calls.filter(
-    (call) => call.method === "Input.dispatchMouseEvent",
-  );
-  assert.deepEqual(
-    mouseEvents.map((call) => ({
-      type: call.params.type,
-      x: call.params.x,
-      y: call.params.y,
-      button: call.params.button,
-      buttons: call.params.buttons,
-    })),
-    [
-      { type: "mouseMoved", x: 23, y: 45, button: undefined, buttons: 0 },
-      { type: "mousePressed", x: 23, y: 45, button: "left", buttons: 1 },
-      { type: "mouseReleased", x: 23, y: 45, button: "left", buttons: 0 },
-    ],
-  );
-});
-
-test("wheel forwards deltaX/deltaY and the viewport point to CDP", async () => {
-  const calls = [];
-  const probe = visibleAndFocused(true);
-  const restore = setOverrides({
-    cdpOverride(method, params) {
-      calls.push({ method, params });
-      return probe(method, params);
-    },
-  });
-  try {
-    await wheel(10, 450, { x: 50, y: 60 });
-  } finally {
-    restore();
-  }
-  const dispatch = calls.find((c) => c.method === "Input.dispatchMouseEvent");
-  assert.deepEqual(dispatch.params, {
+  assert.equal(calls[0].method, "Input.dispatchMouseEvent");
+  assert.deepEqual(calls[0].params, {
     type: "mouseWheel",
     x: 50,
     y: 60,
     deltaX: 10,
     deltaY: 450,
   });
+  assert.equal(calls[1].method, "Runtime.evaluate");
+  assert.match(calls[1].params.expression, /window\.scrollBy/);
 });
 
-test("wheel dispatches a synthetic WheelEvent when the page is not visible/focused", async () => {
+test("scroll propagates wheel dispatch timeouts instead of silently degrading", async () => {
+  // Regression: any error (including timeouts and "user is controlling") used
+  // to silently fall back to window.scrollBy, which is not equivalent to a
+  // real wheel event and masked the original failure.
   const calls = [];
-  const probe = visibleAndFocused(false);
   const restore = setOverrides({
-    cdpOverride(method, params) {
-      calls.push({ method, params });
-      return probe(method, params);
+    cdpOverride(method) {
+      calls.push(method);
+      if (method === "Input.dispatchMouseEvent") {
+        throw new Error("CDP request timed out: Input.dispatchMouseEvent");
+      }
+      return {};
     },
   });
   try {
-    await wheel(0, 350, { x: 5, y: 7 });
+    await assert.rejects(() => scroll({ dy: 450 }), /timed out/);
   } finally {
     restore();
   }
-  assert.ok(
-    !calls.some((c) => c.method === "Input.dispatchMouseEvent"),
-    "no CDP wheel dispatch on a backgrounded/unfocused tab",
-  );
-  const synthetic = calls.find(
-    (c) =>
-      c.method === "Runtime.evaluate" &&
-      c.params.expression.includes("WheelEvent"),
-  );
-  assert.ok(synthetic, "dispatches a synthetic WheelEvent in the page");
-  assert.match(synthetic.params.expression, /elementFromPoint\(5, 7\)/);
-  assert.match(synthetic.params.expression, /deltaY: 350/);
+  assert.deepEqual(calls, ["Input.dispatchMouseEvent"]);
 });
 
-test("wheel propagates user-control errors from the CDP dispatch", async () => {
-  const probe = visibleAndFocused(true);
+test("scroll propagates user-control errors from wheel dispatch", async () => {
   const restore = setOverrides({
-    cdpOverride(method, params) {
+    cdpOverride(method) {
       if (method === "Input.dispatchMouseEvent") {
         throw new Error("user is controlling this task space");
       }
-      return probe(method, params);
+      return {};
     },
   });
   try {
-    await assert.rejects(() => wheel(), /user is controlling/);
+    await assert.rejects(() => scroll(), /user is controlling/);
   } finally {
     restore();
   }
-});
-
-test("wheel rejects non-numeric deltas before dispatching", async () => {
-  // Regression: only the x/y viewport point was validated; a bad deltaX/deltaY
-  // flowed straight to CDP (string) or became a null no-op on the synthetic path.
-  await assert.rejects(() => wheel("bad"), /invalid mouse offset/);
-  await assert.rejects(() => wheel(0, "bad"), /invalid mouse offset/);
 });
 
 test("click triggers probe fallback when CDP click is not trusted", async () => {
@@ -288,14 +184,8 @@ test("click triggers probe fallback when CDP click is not trusted", async () => 
           // finishClickProbe — simulate CDP click was NOT seen
           return { result: { value: { seen: false, fallback: true } } };
         }
-        if (params.objectGroup === "ego-browser") {
-          return { result: { objectId: "object-1" } };
-        }
         // Element resolution (buildSelectorCenterJs) — return center point
         return { result: { value: { x: 100, y: 200 } } };
-      }
-      if (method === "Runtime.callFunctionOn") {
-        return { result: { value: true } };
       }
       // Input.dispatchMouseEvent calls proceed normally
       return {};
@@ -348,14 +238,8 @@ test("click absorbs CDP timeout when probe fallback succeeds", async () => {
           // Fallback succeeded
           return { result: { value: { seen: false, fallback: true } } };
         }
-        if (params.objectGroup === "ego-browser") {
-          return { result: { objectId: "object-1" } };
-        }
         // Element resolution (buildSelectorCenterJs) — return center point
         return { result: { value: { x: 100, y: 200 } } };
-      }
-      if (method === "Runtime.callFunctionOn") {
-        return { result: { value: true } };
       }
       if (method === "Input.dispatchMouseEvent") {
         // Simulate CDP timeout — the browser couldn't dispatch the event

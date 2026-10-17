@@ -1,27 +1,47 @@
-export function pointerClickCase() {
+export function pointerCase() {
   return `
-    await taskSpaces.useOrCreate(taskName);
+    await useOrCreateTaskSpace(taskName);
     await resetHome();
-    console.log(JSON.stringify({ pointerStep: "click ready" }));
+    cliLog(JSON.stringify({ pointerStep: "ready" }));
 
-    assertEqual(await page.evaluate(() => window.__fixtureState.clicks), 0, "click fixture starts at zero");
-    await page.locator("#click-button").click({ label: "click helper e2e" });
+    assertEqual(await js("return window.__fixtureState.clicks"), 0, "click fixture starts at zero");
+    cliLog(JSON.stringify({ pointerStep: "click css" }));
+    await click("#click-button", { label: "click helper e2e" });
     await waitForJsValue(
       "window.__fixtureState.clicks",
       1,
       "click css fires a page click",
       "window.__fixtureState.pointerEvents"
     );
-    await page.locator("#click-button").click({ x: 12, y: 12 });
+    cliLog(JSON.stringify({ pointerStep: "click selector offset" }));
+    await click({ selector: "#click-button", x: 12, y: 12 });
     await waitForJsValue("window.__fixtureState.clicks", 2, "click selector offset fires a page click");
-    await page.locator("loc=css:#click-button").click();
+    cliLog(JSON.stringify({ pointerStep: "click locators" }));
+    await click("loc=css:#click-button");
     await waitForJsValue("window.__fixtureState.clicks", 3, "click loc css fires a page click");
-    await page.locator("loc=role:button[name='Increment counter']").click();
+    await click("loc=role:button[name='Increment counter']");
     await waitForJsValue("window.__fixtureState.clicks", 4, "click role locator fires a page click");
-    await page.locator("xpath=//*[@id='click-button']").click();
+    await click("xpath=//*[@id='click-button']");
     await waitForJsValue("window.__fixtureState.clicks", 5, "click xpath fires a page click");
-    const buttonCenter = await page.elementCenter("#click-button");
-    const hitElement = await page.evaluate(
+    const buttonCenter = await elementCenter("#click-button");
+    await click([buttonCenter.x, buttonCenter.y]);
+    await waitForJsValue("window.__fixtureState.clicks", 6, "click tuple coordinates fires a page click");
+    await click({ x: buttonCenter.x, y: buttonCenter.y });
+    await waitForJsValue("window.__fixtureState.clicks", 7, "click object coordinates fires a page click");
+    await click("#click-button", { clicks: 2 });
+    await waitForJsValue("window.__fixtureState.clicks", 8, "click count option fires a page click");
+    await waitForJsValue("window.__fixtureState.lastClickDetail", 2, "click count option sets DOM click detail");
+    const doubleClicksBefore = await js("return window.__fixtureState.doubleClicks");
+    await doubleClick("#click-button");
+    await waitForJsValue("window.__fixtureState.clicks", 9, "doubleClick fires a page click");
+    await waitForJsValue("window.__fixtureState.lastClickDetail", 2, "doubleClick sets DOM click detail");
+    await waitForJsCondition(
+      "window.__fixtureState.doubleClicks > " + JSON.stringify(doubleClicksBefore),
+      "doubleClick fires a DOM dblclick"
+    );
+    cliLog(JSON.stringify({ pointerStep: "hover" }));
+    await wait(0.1);
+    const hitElement = await js(
       "return document.elementFromPoint(" +
         JSON.stringify(buttonCenter.x) +
         "," +
@@ -33,64 +53,29 @@ export function pointerClickCase() {
         ")?.className || ''"
     );
     assertEqual(hitElement, "click-button", "pointer coordinates resolve to the intended button");
-    await page.mouse.click([buttonCenter.x, buttonCenter.y]);
-    await waitForJsValue("window.__fixtureState.clicks", 6, "click tuple coordinates fires a page click");
-    await page.mouse.click({ x: buttonCenter.x, y: buttonCenter.y });
-    await waitForJsValue("window.__fixtureState.clicks", 7, "click object coordinates fires a page click");
-    await page.locator("#click-button").click({ clickCount: 2 });
-    await waitForJsValue("window.__fixtureState.clicks", 8, "click count option fires a page click");
-    await waitForJsValue("window.__fixtureState.lastClickDetail", 2, "click count option sets DOM click detail");
-    const doubleClicksBefore = await page.evaluate(() => window.__fixtureState.doubleClicks);
-    await page.locator("#click-button").dblclick();
-    await waitForJsValue("window.__fixtureState.clicks", 9, "dblclick fires a page click");
-    await waitForJsValue("window.__fixtureState.lastClickDetail", 2, "dblclick sets DOM click detail");
-    await waitForJsCondition(
-      "window.__fixtureState.doubleClicks > " + JSON.stringify(doubleClicksBefore),
-      "dblclick fires a DOM dblclick"
-    );
-  `;
-}
 
-export function pointerHoverDragCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    await resetHome();
-    console.log(JSON.stringify({ pointerStep: "hover drag ready" }));
-
-    await page.evaluate(() => { window.__fixtureState.hovered = false; });
-    await page.locator("#hover-zone").hover();
+    await js("window.__fixtureState.hovered = false; return true;");
+    await hover("#hover-zone");
     await waitForJsValue("window.__fixtureState.hovered", true, "hover css fires mouseover");
-    await page.evaluate(() => { window.__fixtureState.hovered = false; });
-    await page.locator("#hover-zone").hover();
+    await js("window.__fixtureState.hovered = false; return true;");
+    await hover({ selector: "#hover-zone" });
     await waitForJsValue("window.__fixtureState.hovered", true, "hover selector object fires mouseover");
 
-    await page.evaluate(() => { window.__fixtureState.dragged = false; });
-    await page.mouse.drag(["#drag-source", "#drag-target"], { delay: 10 });
-    await waitForJsValue("window.__fixtureState.dragged", true, "drag fires drag source and target events");
-  `;
-}
+    cliLog(JSON.stringify({ pointerStep: "drag" }));
+    await js("window.__fixtureState.dragged = false; return true;");
+    await dragMouse(["#drag-source", "#drag-target"], { delayMs: 10 });
+    await waitForJsValue("window.__fixtureState.dragged", true, "dragMouse fires drag source and target events");
 
-export function scrollHelpersCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    await resetHome();
-    console.log(JSON.stringify({ pointerStep: "scroll ready" }));
-
-    // page.mouse.wheel() routes through CDP while the tab is visible AND focused; otherwise it
-    // falls back to a synthetic WheelEvent plus window.scrollBy, which moves the page
-    // but not nested scroll containers. So the page-scroll assertion runs on both
-    // paths; the nested-container assertion stays gated on the CDP path (and logs a
-    // visible skip otherwise, rather than silently passing).
-    const wheelUsesCdp = await page.evaluate(() => document.visibilityState === 'visible' && document.hasFocus());
-
-    await page.evaluate(() => {
-      const inner = document.querySelector('#inner-scroll');
-      inner.scrollTop = 0;
-      inner.scrollIntoView({ block: 'center', inline: 'nearest' });
-    });
-    await page.waitForTimeout(100);
-    const innerCenter = await page.elementCenter("#inner-scroll");
-    const innerHit = await page.evaluate(
+    cliLog(JSON.stringify({ pointerStep: "nested scroll" }));
+    await js(
+      "const inner = document.querySelector('#inner-scroll');" +
+        "inner.scrollTop = 0;" +
+        "inner.scrollIntoView({ block: 'center', inline: 'nearest' });" +
+        "return true;"
+    );
+    await wait(0.1);
+    const innerCenter = await elementCenter("#inner-scroll");
+    const innerHit = await js(
       "const el = document.elementFromPoint(" +
         JSON.stringify(innerCenter.x) +
         "," +
@@ -99,114 +84,136 @@ export function scrollHelpersCase() {
         "return el?.closest?.('#inner-scroll')?.id || el?.id || '';"
     );
     assertEqual(innerHit, "inner-scroll", "nested scroll container is under the wheel target");
-    const innerWheelDispatched = await allowWheelDispatch(
-      "wheel nested container",
-      () => page.mouse.wheel(0, 350, { x: innerCenter.x, y: innerCenter.y })
+    await scroll(innerCenter.x, innerCenter.y, { dy: 350 });
+    await waitForJsCondition(
+      "document.querySelector('#inner-scroll').scrollTop > 0",
+      "scroll targets nested scroll containers"
     );
-    if (wheelUsesCdp && innerWheelDispatched) {
-      await waitForJsCondition(
-        "document.querySelector('#inner-scroll').scrollTop > 0",
-        "wheel targets nested scroll containers"
-      );
-    } else {
-      console.log(JSON.stringify({ scrollSkip: { assertion: "wheel targets nested scroll containers", reason: "synthetic path scrolls the window, not nested containers", wheelUsesCdp, innerWheelDispatched } }));
-    }
 
+    cliLog(JSON.stringify({ pointerStep: "page wheel" }));
     await resetHome();
-    const wheelPoint = await page.evaluate(
+    const wheelPoint = await js(
       "const rect = document.querySelector('#scroll-area').getBoundingClientRect();" +
         "return { x: Math.min(Math.max(rect.left + 20, 10), innerWidth - 10), y: Math.min(Math.max(rect.top + 20, 10), innerHeight - 10) };"
     );
-    const beforeWheel = await page.info();
-    const wheelDispatched = await allowWheelDispatch("wheel page", () =>
-      page.mouse.wheel(0, 300, { x: wheelPoint.x, y: wheelPoint.y })
-    );
-    if (wheelDispatched) {
-      // Asserted on both paths: CDP wheel and the synthetic WheelEvent + window.scrollBy
-      // fallback both move the page, so a backgrounded/unfocused tab is covered too.
-      await waitForJsCondition(
-        "scrollY > " + JSON.stringify(beforeWheel.sy),
-        "wheel moves the page down"
-      );
-      const afterWheel = await page.info();
-      assert(afterWheel.sy > beforeWheel.sy, "wheel moves the page down");
-    }
-
-    // scrollIntoViewIfNeeded scrolls through the DOM, so it reveals an element
-    // regardless of tab focus.
-    await resetHome();
-    const markerBefore = await page.evaluate(
-      "return document.querySelector('#bottom-marker').getBoundingClientRect().top >= innerHeight;"
-    );
-    assert(markerBefore, "bottom marker starts below the viewport");
-    await page.locator("#bottom-marker").scrollIntoViewIfNeeded();
+    const beforeWheel = await pageInfo();
+    await scroll(wheelPoint.x, wheelPoint.y, { dy: 300 });
     await waitForJsCondition(
-      "document.querySelector('#bottom-marker').getBoundingClientRect().top < innerHeight",
-      "scrollIntoViewIfNeeded reveals an off-screen element"
+      "scrollY > " + JSON.stringify(beforeWheel.sy),
+      "scroll wheel moves the page down"
     );
-  `;
-}
+    const afterWheel = await pageInfo();
+    assert(afterWheel.sy > beforeWheel.sy, "scroll wheel moves the page down");
 
-export function pointerValidationCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
     await resetHome();
+    const objectWheelPoint = await js(
+      "const rect = document.querySelector('#scroll-area').getBoundingClientRect();" +
+        "return { x: Math.min(Math.max(rect.left + 30, 10), innerWidth - 10), y: Math.min(Math.max(rect.top + 30, 10), innerHeight - 10) };"
+    );
+    const beforeObjectWheel = await pageInfo();
+    await scroll({ x: objectWheelPoint.x, y: objectWheelPoint.y, dy: 120 });
+    await waitForJsCondition(
+      "scrollY > " + JSON.stringify(beforeObjectWheel.sy),
+      "scroll object options move the page down"
+    );
+    const afterObjectWheel = await pageInfo();
+    assert(afterObjectWheel.sy > beforeObjectWheel.sy, "scroll object options move the page down");
+
+    cliLog(JSON.stringify({ pointerStep: "dom scroll helpers" }));
+    await resetHome();
+    const beforeBy = await pageInfo();
+    const by = await scrollBy({ dy: 450 });
+    assert(by.y > beforeBy.sy, "scrollBy moves the page down and returns scroll position");
+    const byNumber = await scrollBy(120);
+    assert(byNumber.y > by.y, "scrollBy accepts numeric amount");
+    const byTop = await scrollBy({ top: -60 });
+    assert(byTop.y < byNumber.y && byTop.y >= 0, "scrollBy accepts top option");
+
+    const bottom = await scrollToBottomUntil(
+      "document.querySelector('#bottom-marker').getBoundingClientRect().top < innerHeight",
+      { step: 700, maxSteps: 8, wait: 0.05 }
+    );
+    assert(bottom.done || bottom.reason === "bottom", "scrollToBottomUntil terminates");
+
+    await resetHome();
+    const maxStep = await scrollToBottomUntil("false", {
+      step: 100,
+      maxSteps: 0,
+      wait: 0,
+    });
+    assertEqual(maxStep.reason, "maxSteps", "scrollToBottomUntil reports maxSteps");
+
+    const nullCondition = await scrollToBottomUntil(null, {
+      step: 100,
+      maxSteps: 0,
+      wait: 0,
+    });
+    assertEqual(nullCondition.reason, "maxSteps", "scrollToBottomUntil accepts null condition");
+
+    const functionCondition = await scrollToBottomUntil(
+      (state) => state.y > 100,
+      { step: 200, maxSteps: 5, wait: 0 }
+    );
+    assertEqual(functionCondition.reason, "condition", "scrollToBottomUntil accepts function condition");
+
+    const immediateCondition = await scrollToBottomUntil("true", {
+      step: 100,
+      maxSteps: 3,
+      wait: 0,
+    });
+    assertEqual(immediateCondition.reason, "condition", "scrollToBottomUntil accepts immediate string condition");
 
     await assertRejects(
-      () => page.mouse.drag(["#drag-source"]),
+      () => dragMouse(["#drag-source"]),
       "at least two points",
-      "drag validates minimum path length"
+      "dragMouse validates minimum path length"
     );
     await assertRejects(
-      () => page.mouse.click({ x: "bad", y: 1 }),
+      () => click({ x: "bad", y: 1 }),
       "invalid mouse target",
       "click validates coordinate targets"
     );
     await assertRejects(
-      () => page.locator("#click-button").click({ button: "sideways" }),
+      () => click("#click-button", { button: "sideways" }),
       "unsupported mouse button",
       "click validates mouse buttons"
     );
     await assertRejects(
-      () => page.mouse.drag(["#drag-source", "#drag-target"], { button: "sideways" }),
+      () => dragMouse(["#drag-source", "#drag-target"], { button: "sideways" }),
       "unsupported mouse button",
-      "drag validates mouse buttons"
+      "dragMouse validates mouse buttons"
     );
     await assertRejects(
-      () => page.mouse.wheel(0, 0, { x: "bad" }),
+      () => scrollBy({ dy: "bad" }),
       "invalid mouse offset",
-      "wheel validates numeric viewport coordinates"
+      "scrollBy validates numeric offsets"
     );
     await assertRejects(
-      () => page.mouse.wheel(0, "bad"),
-      "invalid mouse offset",
-      "wheel validates numeric scroll deltas"
+      () => scrollToBottomUntil(42, { maxSteps: 0 }),
+      "function or string",
+      "scrollToBottomUntil validates condition type"
     );
-  `;
-}
 
-export function pointerInteractionRegressionCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    await resetHome();
-    console.log(JSON.stringify({ pointerStep: "interaction regression ready" }));
-
-    const rightClickBefore = await page.evaluate(() => window.__fixtureState.pointerEvents.length);
-    await page.locator("#context-menu-zone").click({ button: "right" });
-    const rightClickAfter = await page.evaluate(() => window.__fixtureState.pointerEvents.length);
+    /* right-click — CDP dispatches mousedown with button=right; contextmenu synthesis is browser-dependent */
+    cliLog(JSON.stringify({ pointerStep: "right click" }));
+    const rightClickBefore = await js("return window.__fixtureState.pointerEvents.length");
+    await click("#context-menu-zone", { button: "right" });
+    const rightClickAfter = await js("return window.__fixtureState.pointerEvents.length");
     assert(rightClickAfter > rightClickBefore, "click with button:right dispatches mouse events on the target");
-    const rightMouseDown = await page.evaluate(
+    const rightMouseDown = await js(
       "return window.__fixtureState.pointerEvents.some(function(e) { return e.type === 'mousedown' && e.target === 'context-menu-zone'; })"
     );
     assert(rightMouseDown, "right-click produces a mousedown event on the context-menu-zone");
 
+    /* rapid clicks — probe cleanup between actions */
+    cliLog(JSON.stringify({ pointerStep: "rapid clicks" }));
     await resetHome();
-    const clicksBefore = await page.evaluate(() => window.__fixtureState.clicks);
-    await page.locator("#click-button").click();
-    await page.locator("#click-button").click();
-    await page.locator("#click-button").click();
-    await page.locator("#click-button").click();
-    await page.locator("#click-button").click();
+    const clicksBefore = await js("return window.__fixtureState.clicks");
+    await click("#click-button");
+    await click("#click-button");
+    await click("#click-button");
+    await click("#click-button");
+    await click("#click-button");
     await waitForJsValue(
       "window.__fixtureState.clicks",
       clicksBefore + 5,
@@ -214,13 +221,12 @@ export function pointerInteractionRegressionCase() {
       "window.__fixtureState.pointerEvents"
     );
 
-    await page.evaluate(() => {
-      document.querySelector('#checkbox').checked = false;
-      window.__fixtureState.checkboxChecked = false;
-    });
-    await page.locator("#checkbox").click();
+    /* checkbox toggle */
+    cliLog(JSON.stringify({ pointerStep: "checkbox" }));
+    await js("document.querySelector('#checkbox').checked = false; window.__fixtureState.checkboxChecked = false; return true;");
+    await click("#checkbox");
     await waitForJsValue("window.__fixtureState.checkboxChecked", true, "first click checks the checkbox");
-    await page.locator("#checkbox").click();
+    await click("#checkbox");
     await waitForJsValue("window.__fixtureState.checkboxChecked", false, "second click unchecks the checkbox");
   `;
 }

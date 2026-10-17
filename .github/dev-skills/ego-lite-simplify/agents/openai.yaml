@@ -1,0 +1,4 @@
+interface:
+  display_name: "Simplify ego-lite"
+  short_description: "Find and remove unnecessary ego-lite complexity"
+  default_prompt: "Use $ego-lite-simplify to find evidence-backed ways to reduce this repository’s code and maintenance surface."

@@ -1,73 +1,208 @@
 import { environmentCase } from "./environment.mjs";
 import { helperSurfaceCase } from "./helper-surface.mjs";
-import { taskSpaceCase } from "./task-space.mjs";
+import { crossSpaceV2Case, taskSpaceCase } from "./task-space.mjs";
+import { profileSelectionCase } from "./profile-selection.mjs";
 import { navigationCase } from "./navigation.mjs";
 import { observationCase } from "./observation.mjs";
-import {
-  pointerClickCase,
-  pointerHoverDragCase,
-  pointerInteractionRegressionCase,
-  pointerValidationCase,
-  scrollHelpersCase,
-} from "./pointer.mjs";
+import { pointerCase } from "./pointer.mjs";
 import { keyboardCase } from "./keyboard.mjs";
 import { keyboardRegressionCase } from "./keyboard-regression.mjs";
-import { macosInputRegressionCase } from "./macos-input-regression.mjs";
+import { pageKeyboardInterfaceCase } from "./page-keyboard.mjs";
+import { pageClickHitTargetCase } from "./page-click-hit-target.mjs";
+import { pageActionMotionCase } from "./page-action-motion.mjs";
+import { pageDragAndDrawCase } from "./page-drag-and-draw.mjs";
+import { pageJavaScriptDialogHandlingCase } from "./page-dialogs.mjs";
+import { pageMediaPlaybackCase } from "./page-media-playback.mjs";
+import { pageScrolledScreenshotCase } from "./page-screenshot.mjs";
+import { pageSnapshotLocatorCase } from "./page-snapshot-locators.mjs";
 import {
-  cdpJsHelpCase,
-  fetchHelpersCase,
-  waitHelpersCase,
-} from "./runtime.mjs";
+  pageSnapshotIframeViewportCase,
+  pageSnapshotLazyIframeCase,
+  pageSnapshotNestedIframeCase,
+  pageSnapshotReplacedIframeCase,
+  pageSnapshotSiblingIframeCase,
+  pageSnapshotSubtreeCase,
+} from "./page-snapshot-subtree.mjs";
+import { pageShadowDomCase } from "./page-shadow-dom.mjs";
+import {
+  pageRefIdentityCase,
+  pageRefPrepareRoundCase,
+  pageRefResumeRoundCase,
+} from "./page-ref-identity.mjs";
+import {
+  pageRefDialogWorkflowCase,
+  pageRefFailedActionPrepareCase,
+  pageRefFailedActionResumeCase,
+  pageRefUploadPrepareCase,
+  pageRefUploadResumeCase,
+} from "./page-ref-workflows.mjs";
+import { pageTextLocatorCase } from "./page-text-locators.mjs";
+import { pageSelectorCompatibilityCase } from "./page-selector-compatibility.mjs";
+import { pagePopupWaiterCase } from "./page-popup-waiter.mjs";
+import {
+  concurrentTaskSpaceDownloadCase,
+  pageDownloadCase,
+  pageDownloadPrepareRoundCase,
+  pagePdfViewerDownloadCase,
+  pageDownloadResumeRoundCase,
+} from "./page-download.mjs";
+import { pageOopifActionCase, pageOopifRestoreCase } from "./page-oopif.mjs";
+import { pageLoadStatesCase } from "./page-load-states.mjs";
+import { pageDedicatedWorkerCase } from "./page-workers.mjs";
+import { pageApiAlignmentCase } from "./page-api-alignment.mjs";
+import { pageActionabilityCase } from "./page-actionability.mjs";
+import { pageEvaluateTimeoutCase } from "./page-evaluate-timeout.mjs";
+import {
+  pageDelayedPopupResumeCase,
+  pageDelayedPopupScheduleCase,
+} from "./page-delayed-popup.mjs";
+import { runtimeCase } from "./runtime.mjs";
 import { runtimeRegressionCase } from "./runtime-regression.mjs";
-import { adversarialCases } from "./adversarial.mjs";
-import { workflowCases } from "./workflows.mjs";
-import { interactionsCases } from "./interactions.mjs";
-import { canvasCases } from "./canvas.mjs";
-import { downloadCases } from "./downloads.mjs";
-import { playwrightUrlWaitCases } from "./playwright-url-waits.mjs";
-import { playwrightPageUrlCases } from "./playwright-page-url.mjs";
-import { playwrightPageInfoCases } from "./playwright-page-info.mjs";
-import { playwrightLocatorCases } from "./playwright-locators.mjs";
-import { playwrightTargetCases } from "./playwright-targets.mjs";
-import { playwrightPermissionCases } from "./playwright-permissions.mjs";
-import { damaiRushCase } from "./damai-rush.mjs";
-import { videoRecordingCase } from "./video-recording.mjs";
+import { eventIsolationCase } from "./event-isolation.mjs";
+import {
+  pageAdoptionCase,
+  pageActionsAndPopupCase,
+  pageBasicOperationsCase,
+  pageComplexEvaluateCase,
+  pageFetchCase,
+  pageBudgetCase,
+  pageLabelCloseCase,
+  pageLabelCreateCase,
+  pageLabelHardStopCase,
+  pageLabelHardStopRestoreCase,
+  pageLabelRestoreCase,
+} from "./page-labels.mjs";
+import {
+  portableKeyboardWorkflowCase,
+  pureCdpWorkflowCase,
+  snapshotWorkflowCase,
+  v1V2ActionParityCase,
+  visualWorkflowCase,
+} from "./workflow-chains.mjs";
 
 export const e2eCases = [
   { name: "environment initialization", body: environmentCase },
   { name: "helper surface", body: helperSurfaceCase },
   { name: "task spaces and control", body: taskSpaceCase },
+  { name: "TaskSpace profile selection", body: profileSelectionCase },
+  { name: "v2 cross-space routing", body: crossSpaceV2Case },
   { name: "navigation helpers", body: navigationCase },
   { name: "observation helpers", body: observationCase },
-  { name: "pointer click helpers", body: pointerClickCase },
-  { name: "pointer hover drag helpers", body: pointerHoverDragCase },
-  { name: "scroll helpers", body: scrollHelpersCase },
-  { name: "pointer validation", body: pointerValidationCase },
-  {
-    name: "pointer interaction regression",
-    body: pointerInteractionRegressionCase,
-  },
+  { name: "pointer and scroll helpers", body: pointerCase },
   { name: "keyboard and file helpers", body: keyboardCase },
   { name: "keyboard regression", body: keyboardRegressionCase },
-  {
-    name: "macOS bare Meta input isolation",
-    body: macosInputRegressionCase,
-  },
-  { name: "wait helpers", body: waitHelpersCase },
-  { name: "fetch helpers", body: fetchHelpersCase },
-  { name: "cdp js help", body: cdpJsHelpCase },
+  { name: "wait, fetch, cdp, js, help", body: runtimeCase },
   { name: "runtime regression", body: runtimeRegressionCase },
-  { name: "screencast recording", body: videoRecordingCase },
-  { name: "concert ticket rush", body: damaiRushCase },
-  ...adversarialCases,
-  ...workflowCases,
-  ...downloadCases,
-  ...interactionsCases,
-  ...canvasCases,
-  ...playwrightUrlWaitCases,
-  ...playwrightPageUrlCases,
-  ...playwrightPageInfoCases,
-  ...playwrightLocatorCases,
-  ...playwrightTargetCases,
-  ...playwrightPermissionCases,
+  { name: "target-scoped event isolation", body: eventIsolationCase },
+  { name: "page labels: create", body: pageLabelCreateCase },
+  { name: "page labels: restore and reuse", body: pageLabelRestoreCase },
+  { name: "page labels: close and do not reuse", body: pageLabelCloseCase },
+  {
+    name: "page labels: persist before hard stop",
+    body: pageLabelHardStopCase,
+    expectedTermination: true,
+    markerName: "hard-stop-page.json",
+  },
+  {
+    name: "page labels: restore after hard stop",
+    body: pageLabelHardStopRestoreCase,
+  },
+  { name: "page inventory and budget", body: pageBudgetCase },
+  { name: "page adoption and release", body: pageAdoptionCase },
+  { name: "page basic operations", body: pageBasicOperationsCase },
+  { name: "page complex evaluate", body: pageComplexEvaluateCase },
+  { name: "page fetch", body: pageFetchCase },
+  { name: "page actions and popup adoption", body: pageActionsAndPopupCase },
+  { name: "Page click hit target", body: pageClickHitTargetCase },
+  { name: "Page action motion tolerance", body: pageActionMotionCase },
+  { name: "Page drag and canvas drawing", body: pageDragAndDrawCase },
+  {
+    name: "Page JavaScript dialog handling",
+    body: pageJavaScriptDialogHandlingCase,
+  },
+  { name: "Page media playback", body: pageMediaPlaybackCase },
+  { name: "Page scrolled screenshot", body: pageScrolledScreenshotCase },
+  { name: "Page snapshot locator quality", body: pageSnapshotLocatorCase },
+  {
+    name: "Page snapshot iframe viewport",
+    body: pageSnapshotIframeViewportCase,
+  },
+  { name: "Page snapshot subtree", body: pageSnapshotSubtreeCase },
+  {
+    name: "Page ref identity across partial snapshots",
+    body: pageRefIdentityCase,
+  },
+  { name: "Page refs across rounds: prepare", body: pageRefPrepareRoundCase },
+  { name: "Page refs across rounds: resume", body: pageRefResumeRoundCase },
+  { name: "Page refs in dialog workflows", body: pageRefDialogWorkflowCase },
+  {
+    name: "Page refs after failed actions: prepare",
+    body: pageRefFailedActionPrepareCase,
+  },
+  {
+    name: "Page refs after failed actions: resume",
+    body: pageRefFailedActionResumeCase,
+  },
+  { name: "Page refs after upload: prepare", body: pageRefUploadPrepareCase },
+  { name: "Page refs after upload: resume", body: pageRefUploadResumeCase },
+  { name: "Page snapshot lazy iframe", body: pageSnapshotLazyIframeCase },
+  {
+    name: "Page snapshot sibling iframes",
+    body: pageSnapshotSiblingIframeCase,
+  },
+  { name: "Page snapshot nested iframes", body: pageSnapshotNestedIframeCase },
+  {
+    name: "Page snapshot replaced iframe",
+    body: pageSnapshotReplacedIframeCase,
+  },
+  { name: "Page open Shadow DOM locators", body: pageShadowDomCase },
+  { name: "Page text locators", body: pageTextLocatorCase },
+  {
+    name: "Page Playwright selector compatibility",
+    body: pageSelectorCompatibilityCase,
+  },
+  { name: "Page popup waiter and URL diagnostic", body: pagePopupWaiterCase },
+  { name: "Page download lifecycle", body: pageDownloadCase },
+  {
+    name: "Concurrent TaskSpace downloads",
+    body: concurrentTaskSpaceDownloadCase,
+  },
+  {
+    name: "Page Chromium PDF viewer download",
+    body: pagePdfViewerDownloadCase,
+  },
+  {
+    name: "Page download across rounds: prepare",
+    body: pageDownloadPrepareRoundCase,
+  },
+  {
+    name: "Page download across rounds: resume",
+    body: pageDownloadResumeRoundCase,
+  },
+  { name: "Page OOPIF actions", body: pageOopifActionCase },
+  { name: "Page OOPIF restore and close", body: pageOopifRestoreCase },
+  { name: "Page load states", body: pageLoadStatesCase },
+  { name: "Page dedicated Worker startup", body: pageDedicatedWorkerCase },
+  { name: "Page API alignment", body: pageApiAlignmentCase },
+  { name: "Page actionability", body: pageActionabilityCase },
+  {
+    name: "Page evaluate timeout recovery",
+    body: pageEvaluateTimeoutCase,
+    timeoutMs: 60_000,
+  },
+  {
+    name: "Page delayed popup: schedule",
+    body: pageDelayedPopupScheduleCase,
+  },
+  {
+    name: "Page delayed popup: resume",
+    body: pageDelayedPopupResumeCase,
+    forbiddenOutput: "[ego-browser:pages]",
+  },
+  { name: "v1 and v2 action parity", body: v1V2ActionParityCase },
+  { name: "portable keyboard workflow", body: portableKeyboardWorkflowCase },
+  { name: "Page keyboard interface", body: pageKeyboardInterfaceCase },
+  { name: "pure CDP workflow", body: pureCdpWorkflowCase },
+  { name: "snapshot workflow", body: snapshotWorkflowCase },
+  { name: "visual workflow", body: visualWorkflowCase },
 ];
