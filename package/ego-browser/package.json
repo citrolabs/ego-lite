@@ -33,7 +33,6 @@
     "typescript": "^5.8.3"
   },
   "dependencies": {
-    "acorn": "^8.16.0",
-    "ws": "^8.21.3"
+    "acorn": "^8.16.0"
   }
 }

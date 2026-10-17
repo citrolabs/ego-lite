@@ -1,106 +1,105 @@
-/**
- * Linux bridge — connects to Chrome via DevTools HTTP + WebSocket.
- * Uses raw node:http for /json so it never collides with the agent
- * helper facade that overwrites globalThis.fetch.
- */
-import { request as httpRequest } from "node:http";
+import type { Readable, Writable } from "node:stream";
 
-export interface LinuxBridgeTarget {
-  send(message: string): void;
-  close(): void;
-}
+export type CdpCall = (
+  method: string,
+  params?: Record<string, unknown>,
+  sessionId?: string,
+  timeoutMs?: number,
+) => Promise<any>;
 
-export interface LinuxBridgeOptions {
-  port?: number;
-  timeoutMs?: number;
-  /** Called with each raw CDP message received on the WebSocket. */
-  onMessage?: (data: string) => void;
-  /** Called once when the WebSocket closes or errors after connecting. */
-  onClose?: () => void;
-}
+/** Browser-level CDP over pipes owned by the launcher; no listening TCP port. */
+export class LinuxBridge {
+  private nextId = 0;
+  private pending = new Map<
+    number,
+    {
+      resolve: (value: any) => void;
+      reject: (error: Error) => void;
+      timer: NodeJS.Timeout;
+    }
+  >();
+  private buffer = "";
+  private closed = false;
+  onEvent: (event: any) => void = () => {};
 
-async function fetchJson<T>(url: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const req = httpRequest(url, (res) => {
-      let data = "";
-      res.on("data", (c: Buffer) => (data += c.toString()));
-      res.on("end", () => {
+  constructor(
+    private input: Writable,
+    output: Readable,
+    private timeoutMs = 15_000,
+  ) {
+    output.setEncoding("utf8");
+    output.on("data", (chunk: string) => {
+      this.buffer += chunk;
+      let end: number;
+      while ((end = this.buffer.indexOf("\0")) >= 0) {
+        const line = this.buffer.slice(0, end);
+        this.buffer = this.buffer.slice(end + 1);
+        if (!line) continue;
+        let message: any;
         try {
-          resolve(JSON.parse(data) as T);
-        } catch (e) {
-          reject(e);
+          message = JSON.parse(line);
+        } catch {
+          this.close(new Error("Invalid CDP response"));
+          return;
         }
-      });
+        if (message.id) {
+          const request = this.pending.get(message.id);
+          if (!request) continue;
+          this.pending.delete(message.id);
+          clearTimeout(request.timer);
+          if (message.error)
+            request.reject(
+              Object.assign(new Error(message.error.message), {
+                code: message.error.code,
+              }),
+            );
+          else request.resolve(message.result ?? {});
+        } else this.onEvent(message);
+      }
+      if (this.buffer.length > 32 * 1024 * 1024)
+        this.close(new Error("CDP response too large"));
     });
-    req.on("error", reject);
-    req.end();
-  });
-}
-
-export async function connectLinuxBridge(
-  options: LinuxBridgeOptions = {},
-): Promise<LinuxBridgeTarget> {
-  const port = options.port ?? 9222;
-  const timeoutMs = options.timeoutMs ?? 5000;
-
-  const targets = await fetchJson<Array<{ webSocketDebuggerUrl: string }>>(
-    `http://127.0.0.1:${port}/json`,
-  );
-
-  const page = targets.find((t) => t.webSocketDebuggerUrl);
-  if (!page) {
-    throw new Error(
-      `No page target found on port ${port}. Is Chrome running with --remote-debugging-port=${port}?`,
-    );
+    output.on("end", () => this.close());
+    output.on("error", (error) => this.close(error));
+    input.on("error", (error) => this.close(error));
   }
 
-  const ws = await connectWithTimeout(page.webSocketDebuggerUrl, timeoutMs);
-
-  ws.on("message", (data) => {
-    options.onMessage?.(data.toString());
-  });
-  ws.on("close", () => options.onClose?.());
-  ws.on("error", () => options.onClose?.());
-
-  const send = (message: string): void => {
-    if (ws.readyState !== 1) {
-      throw new Error("WebSocket is not open");
-    }
-    ws.send(message);
-  };
-
-  const close = (): void => {
-    ws.close();
-  };
-
-  return { send, close };
-}
-
-async function connectWithTimeout(
-  url: string,
-  timeoutMs: number,
-): Promise<import("ws").WebSocket> {
-  const { WebSocket } = await import("ws");
-
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url);
-    const timer = setTimeout(() => {
-      ws.close();
-      reject(
-        new Error(
-          `WebSocket connection to ${url} timed out after ${timeoutMs}ms`,
-        ),
+  call: CdpCall = (
+    method,
+    params = {},
+    sessionId,
+    timeoutMs = this.timeoutMs,
+  ) => {
+    if (this.closed) return Promise.reject(new Error("Chrome pipe is closed"));
+    const id = ++this.nextId;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`CDP ${method} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      this.input.write(
+        JSON.stringify({
+          id,
+          method,
+          params,
+          ...(sessionId ? { sessionId } : {}),
+        }) + "\0",
+        (error) => {
+          if (error) this.close(error);
+        },
       );
-    }, timeoutMs);
-
-    ws.on("open", () => {
-      clearTimeout(timer);
-      resolve(ws);
     });
+  };
 
-    ws.on("error", (err: Error) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-  });
+  close(error = new Error("Chrome pipe closed")) {
+    if (this.closed) return;
+    this.closed = true;
+    for (const request of this.pending.values()) {
+      clearTimeout(request.timer);
+      request.reject(error);
+    }
+    this.pending.clear();
+    this.input.destroy();
+  }
 }

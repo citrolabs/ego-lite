@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { stopLinuxHost } from "./linux/index.js";
 import {
   stdin as processStdin,
   stdout as processStdout,
@@ -67,7 +69,22 @@ export async function runMain(options: RunMainOptions = {}) {
     write(stdout, HELP);
     return 0;
   }
-  if (argv.length > 0) {
+  if (argv.length === 1 && argv[0] === "skill") {
+    write(
+      stdout,
+      await readFile(
+        new URL("./ego-browser/SKILL.md", import.meta.url),
+        "utf8",
+      ),
+    );
+    return 0;
+  }
+  if (argv.length === 1 && argv[0] === "stop") {
+    await stopLinuxHost();
+    write(stdout, "Linux host stopped.\n");
+    return 0;
+  }
+  if (argv.length > 0 && !(argv.length === 1 && argv[0] === "nodejs")) {
     write(stderr, USAGE);
     return 2;
   }

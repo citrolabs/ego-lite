@@ -3,6 +3,16 @@ version: "2.1.0"
 date: "2026-10-08"
 ---
 
+On the experimental Linux host, Chrome runs separately with its sandbox enabled;
+personal browser logins are not inherited. `EGO_LINUX=1` enables the host after
+`.env` loading; `EGO_CHROME_BIN` selects Chrome/Chromium and
+`EGO_LINUX_HEADLESS=1` opts into headless mode. Tasks persist between CLI rounds
+until host shutdown, restart, build/configuration change, or 30 minutes idle.
+Each task has isolated cookies/storage. Handoff and `finish()` that keeps tabs require a display;
+headless mode reports an error. `ego-browser stop` discards the host's contexts.
+Linux snapshots currently cover the main document, and native permission-prompt
+handoff is unavailable. See the entry Skill's `references/install.md` for details.
+
 # ego-browser
 
 Call `help()` or `help("page.click")` to print signatures and uncommon options

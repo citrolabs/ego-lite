@@ -1,121 +1,121 @@
-/**
- * Linux Task Spaces — per-BrowserContext isolation via CDP
- * `Target.createBrowserContext` / `disposeBrowserContext`.
- *
- * Each Task Space maps to a BrowserContext + its tabs (Targets).
- * Ownership semantics mirror helpers.ts: agent vs user.
- */
+import type { CdpCall } from "./bridge.js";
 
-type TaskSpace = {
-  taskId: string;
+export function egoError(
+  error_code: string,
+  message: string,
+): Error & { error_code: string } {
+  return Object.assign(new Error(message), { error_code });
+}
+export function invalid(message: string): never {
+  throw Object.assign(new TypeError(message), {
+    error_code: "EGO_INVALID_ARGUMENT",
+  });
+}
+export type TaskSpace = {
   id: number;
+  taskId: string;
   name: string;
   ownership: "agent" | "user" | "agentDelegatedToUser";
-  browserContextId?: string;
-  createdBy?: string;
+  createdBy: string;
+  browserContextId: string;
+  profileId: string;
+  profileName: string;
 };
 
-/** Resolved (not thrown) error shape consumed by helpers.ts' assertNoEgoError. */
-type EgoError = { error: string; error_code: string };
-
-let nextId = 1;
-const spaces = new Map<number, TaskSpace>();
-let activeId: number | null = null;
-
+/** Owned by the host process, so CLI rounds share both contexts and ownership. */
 export class LinuxTaskSpaces {
-  constructor(
-    private getBridge: () => Promise<{ send: (m: string) => void }>,
-  ) {}
+  private nextId = Date.now() * 1000;
+  private spaces = new Map<number, TaskSpace>();
+  constructor(private cdp: CdpCall) {}
 
-  async listTaskSpaces(): Promise<{ taskSpaces: TaskSpace[] }> {
-    return { taskSpaces: [...spaces.values()] };
+  listProfiles() {
+    return {
+      profiles: [
+        { id: "Default", name: "Isolated Linux sessions", isDefault: true },
+      ],
+    };
   }
-
-  async createTaskSpace(name: string): Promise<TaskSpace> {
-    const id = nextId++;
-    const taskId = name;
-    // Try to create a real BrowserContext; on failure fall back to in-memory.
-    // Note: true per-BrowserContext cookie isolation via Target.createBrowserContext
-    // is deferred — all task spaces currently share the daemon's default profile
-    // (same as macOS's current helper behavior where spaces are in-memory).
-    // Callers needing strict isolation should await a future CDP-backed impl.
-    try {
-      const bridge = await this.getBridge();
-      void bridge;
-      // Real CDP would be: Target.createBrowserContext -> browserContextId
-      // Deferred until snapshot-ax wiring completes full CDP roundtrip
-    } catch {}
+  async listTaskSpaces() {
+    return { taskSpaces: [...this.spaces.values()].map((s) => ({ ...s })) };
+  }
+  require(id: number | null, agent = true): TaskSpace {
+    if (id == null)
+      throw egoError("EGO_TASK_SPACE_NOT_SELECTED", "Task space not selected");
+    const space = this.spaces.get(id);
+    if (!space)
+      throw egoError("EGO_TASK_SPACE_NOT_FOUND", `Task space not found: ${id}`);
+    if (agent && space.ownership !== "agent")
+      throw egoError("EGO_TASK_SPACE_USER_IN_CONTROL", "manual_takeover");
+    return space;
+  }
+  async createTaskSpace(name: string, profileId?: string) {
+    if (
+      typeof name !== "string" ||
+      !name.trim() ||
+      (profileId !== undefined && typeof profileId !== "string")
+    )
+      invalid("Expected a non-empty name and optional profile id");
+    if (profileId && !["default", "Default"].includes(profileId))
+      throw egoError(
+        "EGO_PROFILE_NOT_FOUND",
+        `Profile not found: ${profileId}`,
+      );
+    const { browserContextId } = await this.cdp("Target.createBrowserContext", {
+      disposeOnDetach: false,
+    });
+    if (!browserContextId)
+      throw egoError(
+        "EGO_BROWSER_UNAVAILABLE",
+        "Browser did not create an isolated context",
+      );
     const space: TaskSpace = {
-      taskId,
-      id,
+      id: ++this.nextId,
+      taskId: name,
       name,
       ownership: "agent",
       createdBy: "agent",
+      browserContextId,
+      profileId: "Default",
+      profileName: "Isolated Linux sessions",
     };
-    spaces.set(id, space);
-    activeId = id;
-    return space;
+    this.spaces.set(space.id, space);
+    return { ...space };
   }
-
-  async useTaskSpace(id: number): Promise<void | EgoError> {
-    const s = spaces.get(id);
-    if (!s)
-      return {
-        error: `task space not found: ${id}`,
-        error_code: "EGO_TASK_SPACE_NOT_FOUND",
-      };
-    if (s.ownership === "user") {
-      return {
-        error: "user control",
-        error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
-      };
+  async closeTaskSpace(id: number) {
+    const space = this.require(id);
+    await this.cdp("Target.disposeBrowserContext", {
+      browserContextId: space.browserContextId,
+    });
+    this.spaces.delete(id);
+    return `${id} task space closed.`;
+  }
+  async completeTaskSpace(id: number) {
+    const space = this.require(id);
+    space.ownership = "user";
+    return `${id} task space completed.`;
+  }
+  claimTaskSpace(id: number, name?: string) {
+    const space = this.require(id, false);
+    if (name !== undefined) {
+      if (typeof name !== "string" || !name.trim())
+        invalid("Expected a non-empty name");
+      space.name = space.taskId = name;
     }
-    activeId = id;
+    space.ownership = "agent";
+    return { ...space };
   }
-
-  async closeTaskSpace(): Promise<void | EgoError> {
-    if (activeId == null)
-      return {
-        error: "no active task space",
-        error_code: "EGO_TASK_SPACE_NOT_SELECTED",
-      };
-    const s = spaces.get(activeId);
-    if (s?.browserContextId) {
-      try {
-        const bridge = await this.getBridge();
-        void bridge;
-        // CDP: Target.disposeBrowserContext { browserContextId }
-      } catch {}
-    }
-    if (activeId != null) spaces.delete(activeId);
-    activeId = spaces.size ? [...spaces.keys()][0] : null;
+  handOffTaskSpace(id: number) {
+    this.require(id).ownership = "agentDelegatedToUser";
+    return `${id} handed off to user.`;
   }
-
-  async claimTaskSpace(id: number, _name?: string): Promise<TaskSpace | EgoError> {
-    const s = spaces.get(id);
-    if (!s)
-      return {
-        error: `task space not found: ${id}`,
-        error_code: "EGO_TASK_SPACE_NOT_FOUND",
-      };
-    s.ownership = "agent";
-    activeId = id;
-    return s;
-  }
-
-  async handOffTaskSpace(): Promise<void> {
-    if (activeId == null) return;
-    const s = spaces.get(activeId);
-    if (s) s.ownership = "agentDelegatedToUser";
-  }
-
-  async takeOverTaskSpace(): Promise<void> {
-    if (activeId == null) return;
-    const s = spaces.get(activeId);
-    if (s) s.ownership = "agent";
-  }
-
-  async completeTaskSpace(): Promise<void> {
-    await this.closeTaskSpace();
+  takeOverTaskSpace(id: number) {
+    const space = this.require(id, false);
+    if (space.ownership === "user")
+      throw egoError(
+        "EGO_TASK_SPACE_USER_IN_CONTROL",
+        "Completed tasks must be explicitly claimed before reuse",
+      );
+    space.ownership = "agent";
+    return `${id} taken over by agent.`;
   }
 }

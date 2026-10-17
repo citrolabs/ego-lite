@@ -78,11 +78,7 @@ try {
 
   const rollupConfig = {
     input: join(root, "src/index.ts"),
-    external: [
-      ...builtinModules,
-      ...builtinModules.map((m) => `node:${m}`),
-      "ws",
-    ],
+    external: [...builtinModules, ...builtinModules.map((m) => `node:${m}`)],
     plugins: [
       resolve(),
       typescript({
@@ -98,6 +94,14 @@ try {
   const bundle = await rollup(rollupConfig);
   await bundle.write({ file: bundledCli, format: "esm", sourcemap: false });
   await bundle.close();
+
+  await build({
+    ...common,
+    entryPoints: ["src/linux/host.ts"],
+    outfile: "dist/out/host.js",
+    bundle: true,
+    absWorkingDir: root,
+  });
 
   await mkdir(bundledGuideDir, { recursive: true });
   await writeFile(

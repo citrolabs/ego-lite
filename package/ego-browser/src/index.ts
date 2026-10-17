@@ -21,6 +21,9 @@ import { emitUpdateNotice } from "./update-notice.js";
 import { installPageContextGuard } from "./page-context-guard.js";
 import { disposeDownloadArtifacts } from "./driver/downloads.js";
 
+import { loadEnv } from "./env.js";
+import { installEgoLinux, closeLinuxClient } from "./linux/index.js";
+
 type HelperFunction = (...args: unknown[]) => unknown;
 type EgoRuntime = Record<string, unknown> & {
   helpers?: Record<string, HelperFunction>;
@@ -44,6 +47,7 @@ export { runMain } from "./run.js";
 /** Release native callbacks before the host discards an embedded Node context. */
 export async function disposeEgoSdk(target: InstallTarget = globalThis) {
   disposeDownloadArtifacts();
+  await closeLinuxClient();
   disposeBrowserRuntime(target.ego);
 }
 
@@ -143,6 +147,9 @@ export function installEgoSdk(
   return target;
 }
 
+loadEnv();
+await installEgoLinux();
+
 if (isDirectCli()) {
   try {
     process.exitCode = await runMain();
@@ -151,6 +158,7 @@ if (isDirectCli()) {
     process.exitCode = 1;
   } finally {
     disposeDownloadArtifacts();
+    await closeLinuxClient();
   }
 } else {
   installEgoSdk();

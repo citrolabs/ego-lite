@@ -1,96 +1,45 @@
-import { describe, it, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
-import { WebSocketServer } from "ws";
-import { connectLinuxBridge } from "../../dist/src/linux/bridge.js";
+import { test } from "node:test";
+import { PassThrough } from "node:stream";
+import { LinuxBridge } from "../../dist/src/linux/bridge.js";
 
-describe("linux bridge", () => {
-  let httpServer = null;
-  let wss = null;
-  let connections = [];
-  let PORT = 19223 + Math.floor(Math.random() * 8000);
-
-  afterEach(async () => {
-    for (const c of connections) c.close();
-    connections.length = 0;
-    if (wss) {
-      await new Promise((resolve) => wss.close(() => resolve()));
-      wss = null;
-    }
-    if (httpServer) {
-      await new Promise((resolve) => httpServer.close(() => resolve()));
-      httpServer = null;
-    }
-    await new Promise((r) => setTimeout(r, 50));
-  });
-
-  beforeEach(() => {
-    PORT = 19223 + Math.floor(Math.random() * 8000);
-  });
-
-  it("connects to a DevTools-like WebSocket target", async () => {
-    httpServer = createServer((_req, res) => {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify([
-          {
-            webSocketDebuggerUrl: `ws://127.0.0.1:${PORT + 1}/devtools/page/1`,
-          },
-        ]),
-      );
-    });
-
-    await new Promise((resolve) => httpServer.listen(PORT, resolve));
-
-    let received = "";
-    wss = new WebSocketServer({ port: PORT + 1, host: "127.0.0.1" });
-    wss.on("connection", (ws) => {
-      connections.push(ws);
-      ws.on("message", (data) => {
-        received += data.toString();
-      });
-    });
-
-    const bridge = await connectLinuxBridge({ port: PORT });
-    bridge.send("hello");
-
-    await new Promise((r) => setTimeout(r, 100));
-
-    assert.ok(received.includes("hello"));
-    bridge.close();
-  });
-
-  it("throws when no page target is available", async () => {
-    httpServer = createServer((_req, res) => {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end("[]");
-    });
-
-    await new Promise((resolve) => httpServer.listen(PORT, resolve));
-
-    await assert.rejects(
-      () => connectLinuxBridge({ port: PORT, timeoutMs: 500 }),
-      /No page target found/,
-    );
-  });
-
-  it("throws when ws connection times out", async () => {
-    httpServer = createServer((_req, res) => {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(
-        JSON.stringify([
-          {
-            webSocketDebuggerUrl: `ws://127.0.0.1:${PORT + 99}/devtools/page/1`,
-          },
-        ]),
-      );
-    });
-
-    await new Promise((resolve) => httpServer.listen(PORT, resolve));
-
-    await assert.rejects(
-      () => connectLinuxBridge({ port: PORT, timeoutMs: 100 }),
-      /timed out|ECONNREFUSED/,
-    );
-  });
+function fixture(timeout = 200) {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  return { input, output, bridge: new LinuxBridge(input, output, timeout) };
+}
+test("pipe CDP preserves browser/session messages and fragmented responses", async () => {
+  const { bridge, input, output } = fixture();
+  const frames = [];
+  input.on("data", (data) =>
+    frames.push(JSON.parse(data.toString().replace(/\0$/, ""))),
+  );
+  const result = bridge.call(
+    "Runtime.evaluate",
+    { expression: "2+2" },
+    "owned-session",
+  );
+  assert.equal(frames[0].sessionId, "owned-session");
+  output.write('{"id":1,"result":');
+  output.write('{"value":4}}\0');
+  assert.deepEqual(await result, { value: 4 });
+  const event = new Promise((resolve) => (bridge.onEvent = resolve));
+  output.write(
+    '{"method":"Target.attachedToTarget","sessionId":"parent","params":{"sessionId":"child"}}\0',
+  );
+  assert.equal((await event).params.sessionId, "child");
+  bridge.close();
+});
+test("a connected pipe that never responds reaches the actual timeout", async () => {
+  const { bridge } = fixture(30);
+  const start = Date.now();
+  await assert.rejects(bridge.call("Browser.getVersion"), /timed out/);
+  assert.ok(Date.now() - start >= 25);
+  bridge.close();
+});
+test("pipe closure rejects pending commands promptly", async () => {
+  const { bridge, output } = fixture(5000);
+  const pending = bridge.call("Browser.getVersion");
+  output.end();
+  await assert.rejects(pending, /closed/);
 });

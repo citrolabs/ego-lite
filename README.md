@@ -88,34 +88,33 @@ Your browsing data, cookies, and everything else the browser holds stay on your 
 
 ## Highlights of ego lite
 
-| Feature | What it does |
-|---|---|
-| **Code-based, not CLI-based: faster runs on fewer tokens for complex tasks** | The capabilities ego lite exposes to the agent are wrapped as JavaScript functions the agent calls directly. The agent gets to do what it does best: write code, composing a multi-step task into a single output instead of getting stuck in a "call two commands, look at the result, call two more commands" loop. Compared to the conventional CLI approach, complex workflows finish far faster, with higher task success rates, far fewer tool calls per task, and a much lower cost per task. |
-| **A dedicated Space for every agent** | ego lite gives each agent its own fully isolated Space. You browse up front, your agent works in the background, and they don't get in each other's way. You can see which Space has an agent running at any moment, and take it over or stop it whenever you want. |
-| **Your agents multitask in Spaces, parallel workspaces inside the same browser** | Each Space gets its own AI agent or its own task, all running at the same time. Claude Code enriching 10 leads in 10 parallel Spaces. Codex scraping 5 competitor sites in 5 more. They don't collide or steal your tabs. Your mouse stays where you left it. |
-| **The strongest page Snapshot on the market** | Thanks to customization inside the browser engine, ego lite produces the highest-quality page snapshots, the view text-only models rely on to "see" and act on a webpage. It reliably handles tough cases like deeply nested iframes, exactly where other approaches consistently break down. |
-| **Any agent can drive it through `ego-browser`** | `ego-browser` is the connection layer between any agent CLI (Claude Code, Codex, Cursor, or a custom one) and ego lite. It exposes the browser as a set of in-page JavaScript tools: snapshot, fill, click, wait, navigate, capture. The agent writes a JavaScript snippet calling those tools, and `ego-browser` runs it on the page in one pass. |
-| **Experience accumulation that makes your agent faster the more you use it** *(coming soon)* | Most of an agent's time on browser tasks goes to trial and error. ego lite's official Skill distills every successful action into reusable tools and workflows, so similar tasks down the line run up to 5x faster. |
+| Feature                                                                                      | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Code-based, not CLI-based: faster runs on fewer tokens for complex tasks**                 | The capabilities ego lite exposes to the agent are wrapped as JavaScript functions the agent calls directly. The agent gets to do what it does best: write code, composing a multi-step task into a single output instead of getting stuck in a "call two commands, look at the result, call two more commands" loop. Compared to the conventional CLI approach, complex workflows finish far faster, with higher task success rates, far fewer tool calls per task, and a much lower cost per task. |
+| **A dedicated Space for every agent**                                                        | ego lite gives each agent its own fully isolated Space. You browse up front, your agent works in the background, and they don't get in each other's way. You can see which Space has an agent running at any moment, and take it over or stop it whenever you want.                                                                                                                                                                                                                                  |
+| **Your agents multitask in Spaces, parallel workspaces inside the same browser**             | Each Space gets its own AI agent or its own task, all running at the same time. Claude Code enriching 10 leads in 10 parallel Spaces. Codex scraping 5 competitor sites in 5 more. They don't collide or steal your tabs. Your mouse stays where you left it.                                                                                                                                                                                                                                        |
+| **The strongest page Snapshot on the market**                                                | Thanks to customization inside the browser engine, ego lite produces the highest-quality page snapshots, the view text-only models rely on to "see" and act on a webpage. It reliably handles tough cases like deeply nested iframes, exactly where other approaches consistently break down.                                                                                                                                                                                                        |
+| **Any agent can drive it through `ego-browser`**                                             | `ego-browser` is the connection layer between any agent CLI (Claude Code, Codex, Cursor, or a custom one) and ego lite. It exposes the browser as a set of in-page JavaScript tools: snapshot, fill, click, wait, navigate, capture. The agent writes a JavaScript snippet calling those tools, and `ego-browser` runs it on the page in one pass.                                                                                                                                                   |
+| **Experience accumulation that makes your agent faster the more you use it** _(coming soon)_ | Most of an agent's time on browser tasks goes to trial and error. ego lite's official Skill distills every successful action into reusable tools and workflows, so similar tasks down the line run up to 5x faster.                                                                                                                                                                                                                                                                                  |
 
 ## ego lite vs existing products
 
 Most tools can automate a browser. The real questions are what browser the agent gets, whether you can keep working at the same time, and whether the tool is built for the agent you already use or a built-in one.
 
-| Capability | ego lite | Browser-Use | agent-browser (Vercel) | ChatGPT Atlas | Perplexity Comet |
-|---|:---:|:---:|:---:|:---:|:---:|
-| Multitask in parallel | ✓ | — | — | — | — |
-| Reusable skills | ✓ | — | — | — | — |
-| Inherits Chrome's data | ✓ | — | — | ✓ | ✓ |
-| Same browser, separate workspace | ✓ | — | — | — | — |
-| Compressed semantic input | ✓ | — | ✓ | — | — |
-| Controllable by external agents | ✓ | ✓ | ✓ | — | — |
-| Data stored locally | ✓ | ✓ | ✓ | — | — |
-| No login friction | ✓ | — | — | ✓ | ✓ |
-| Daily-use browser | ✓ | — | — | ✓ | ✓ |
-| Free | ✓ | ✓ | ✓ | — | — |
+| Capability                       | ego lite | Browser-Use | agent-browser (Vercel) | ChatGPT Atlas | Perplexity Comet |
+| -------------------------------- | :------: | :---------: | :--------------------: | :-----------: | :--------------: |
+| Multitask in parallel            |    ✓     |      —      |           —            |       —       |        —         |
+| Reusable skills                  |    ✓     |      —      |           —            |       —       |        —         |
+| Inherits Chrome's data           |    ✓     |      —      |           —            |       ✓       |        ✓         |
+| Same browser, separate workspace |    ✓     |      —      |           —            |       —       |        —         |
+| Compressed semantic input        |    ✓     |      —      |           ✓            |       —       |        —         |
+| Controllable by external agents  |    ✓     |      ✓      |           ✓            |       —       |        —         |
+| Data stored locally              |    ✓     |      ✓      |           ✓            |       —       |        —         |
+| No login friction                |    ✓     |      —      |           —            |       ✓       |        ✓         |
+| Daily-use browser                |    ✓     |      —      |           —            |       ✓       |        ✓         |
+| Free                             |    ✓     |      ✓      |           ✓            |       —       |        —         |
 
 Two other categories try to solve the same problem. Browser automation frameworks like Browser-Use and Vercel's agent-browser are libraries the agent calls; they ship no browser of their own, so they need a separate one to drive and your logins rarely carry cleanly. AI browsers like ChatGPT Atlas and Perplexity Comet ship a built-in agent, and only that agent can drive the browser. ego lite is one browser, designed from the start for you and any agent you bring to share.
-
 
 ## Benchmarks
 
@@ -153,3 +152,10 @@ Tutorials, the full tool reference, and integration guides live at [lite.ego.app
 ## License
 
 The contents of this repository are released under the [MIT License](LICENSE). The ego lite browser is a separate, free download.
+
+### Experimental Linux host (this branch)
+
+The Linux runtime drives a separate sandboxed Chrome/Chromium instance through
+an owned DevTools pipe. It does not attach to an existing browser or inherit
+personal browser logins. See [Linux setup](skills/ego-browser/references/install.md#experimental-linux-host)
+for installation, task persistence, and current limitations.
