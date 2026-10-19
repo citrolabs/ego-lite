@@ -95,6 +95,14 @@ try {
   await bundle.write({ file: bundledCli, format: "esm", sourcemap: false });
   await bundle.close();
 
+  await build({
+    ...common,
+    entryPoints: ["src/linux/host.ts"],
+    outfile: "dist/out/host.js",
+    bundle: true,
+    absWorkingDir: root,
+  });
+
   await mkdir(bundledGuideDir, { recursive: true });
   await writeFile(
     join(bundledGuideDir, "SKILL.md"),
