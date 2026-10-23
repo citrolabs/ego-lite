@@ -1,0 +1,26 @@
+{
+  "name": "ego-windows-host",
+  "version": "0.1.0",
+  "description": "Run the ego-browser agent runtime against stock Microsoft Edge or Google Chrome on Windows.",
+  "type": "module",
+  "bin": {
+    "ego-windows-host": "./bin/ego-windows-host.mjs"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "npm run build && npm run typecheck && node --test \"src/**/*.test.mjs\""
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "ego-browser-v2": "file:../ego-browser"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.29",
+    "prettier": "^3.8.4",
+    "typescript": "^5.8.3"
+  }
+}
