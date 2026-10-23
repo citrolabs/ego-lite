@@ -9,6 +9,7 @@
 <p>
   <a href="https://cdn.ego.app/setup/macos/arm64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/Download-Apple%20Silicon-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Apple Silicon" /></a>
   <a href="https://cdn.ego.app/setup/macos/x64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/Download-Intel-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Intel" /></a>
+  <a href="https://cdn.ego.app/setup/windows/x64/egoliteSetup-Y7MbxKIuhzFB.exe"><img src="https://img.shields.io/badge/Download-Windows-000000?style=for-the-badge&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTAgMGgxMS4zNzd2MTEuMzcySDB6bTEyLjYyMyAwSDI0djExLjM3MkgxMi42MjN6TTAgMTIuNjIzaDExLjM3N1YyNEgwem0xMi42MjMgMEgyNFYyNEgxMi42MjN6Ii8%2BPC9zdmc%2B" alt="Download for Windows" /></a>
   <a href="https://discord.gg/5eGZVvHbTq"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" /></a>
   <a href="https://x.com/ego_agent"><img src="https://img.shields.io/badge/Follow-%40ego__agent-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow @ego_agent on X" /></a>
   <a href="https://lite.ego.app/document/"><img src="https://img.shields.io/badge/Docs-lite.ego.app-1E90FF?style=for-the-badge&logo=gitbook&logoColor=white" alt="Docs" /></a>
@@ -39,16 +40,17 @@ https://github.com/user-attachments/assets/ffe7954b-58ee-411e-b35d-ec30c58a08bc
 
 ## 快速开始
 
-ego lite 目前支持 macOS，且 Windows 版本即将发布内测，与此同时，Linux 已在[路线图](https://lite.ego.app/roadmap)上。
+ego lite 目前支持 macOS 和 Windows，Linux 已在[路线图](https://lite.ego.app/roadmap)上。
 
 ### 1. 安装
 
 选一种适合你的方式。
 
-**1.1 下载 macOS 应用**
+**1.1 下载应用**
 
 <a href="https://cdn.ego.app/setup/macos/arm64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/⬇%20Apple%20Silicon-.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download ego lite for Apple Silicon" /></a>
 <a href="https://cdn.ego.app/setup/macos/x64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/⬇%20Intel-.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download ego lite for Intel" /></a>
+<a href="https://cdn.ego.app/setup/windows/x64/egoliteSetup-Y7MbxKIuhzFB.exe"><img src="https://img.shields.io/badge/⬇%20Windows-.exe-000000?style=for-the-badge&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTAgMGgxMS4zNzd2MTEuMzcySDB6bTEyLjYyMyAwSDI0djExLjM3MkgxMi42MjN6TTAgMTIuNjIzaDExLjM3N1YyNEgwem0xMi42MjMgMEgyNFYyNEgxMi42MjN6Ii8%2BPC9zdmc%2B" alt="Download ego lite for Windows" /></a>
 
 点击即可下载，打开后完成安装。无论用哪种方式，ego lite 都会把 `ego-browser` Skill 写进你机器上每个 Agent 的 Skill 目录。
 
@@ -101,31 +103,31 @@ Agent 会加载 `ego-browser` Skill，在自己的 Space 里打开页面，读�
 
 大多数工具都能实现浏览器自动化。真正的问题在于：Agent 拿到的是哪个浏览器？你能否同时继续做自己的事？这个工具是为你已经在用的 Agent 打造的，还是只服务它自带的那一个？
 
-| 能力 | ego lite | Browser-Use | agent-browser (Vercel) | ChatGPT Atlas | Perplexity Comet |
-|---|:---:|:---:|:---:|:---:|:---:|
-| 并行多任务 | ✓ | — | — | — | — |
-| 可复用技能 | ✓ | — | — | — | — |
-| 继承 Chrome 的数据 | ✓ | — | — | ✓ | ✓ |
-| 同一个浏览器，独立工作区 | ✓ | — | — | — | — |
-| 压缩语义输入 | ✓ | — | ✓ | — | — |
-| 由外部 Agent 控制 | ✓ | ✓ | ✓ | — | — |
-| 数据存储在本地 | ✓ | ✓ | ✓ | — | — |
-| 无登录摩擦 | ✓ | — | — | ✓ | ✓ |
-| 日常使用的浏览器 | ✓ | — | — | ✓ | ✓ |
-| 免费 | ✓ | ✓ | ✓ | — | — |
-
-另外两类产品也在解同一道题。Browser-Use、Vercel 的 agent-browser 这类浏览器自动化框架，是供 Agent 调用的库；它们自己不带浏览器，所以要另找一个来驱动，你的登录状态也很难完整带过去。ChatGPT Atlas、Perplexity Comet 这类 AI 浏览器自带一个 Agent，而且只有那个 Agent 能驱动浏览器。ego lite 则是一款浏览器，从设计之初就是给你和你带来的任意 Agent 共用的。
-
+| 功能 | ego lite | 浏览器扩展<br><sub>Claude/Codex in Chrome</sub> | 内置浏览器<br><sub>Claude/ChatGPT 内置浏览器</sub> | 云浏览器<br><sub>Browserbase/Browser Use</sub> | 浏览器 CLI<br><sub>playwright-cli/Browser Harness</sub> | AI 浏览器<br><sub>Comet/Dia</sub> |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| 支持任意 AI Agent | ✓ | — | — | ✓ | ✓ | — |
+| 沿用你的浏览器登录状态 | ✓ | ✓ | — | — | — | ✓ |
+| 更少触发人机验证 | ✓ | ✓ | — | — | — | ✓ |
+| 能操作你的整台电脑 | ✓ | — | ✓ | — | ✓ | — |
+| 不会抢占你的浏览器 | ✓ | — | ✓ | ✓ | — | — |
+| 多任务并行 | ✓ | — | — | ✓ | — | — |
+| 能跑大规模数据抓取 | ✓ | — | — | ✓ | ✓ | — |
+| 可以当日常浏览器用 | ✓ | ✓ | — | — | — | ✓ |
+| 免费 | ✓ | — | — | — | ✓ | — |
+| 数据存储在本地 | ✓ | ✓ | ✓ | — | ✓ | — |
+| 可复用技能（即将上线） | ✓ | — | — | — | — | — |
 
 ## 基准测试
 
-我们在四个复杂的浏览器自动化任务上，把 ego lite 与 Vercel 的 agent-browser 做了对比测试。ego lite 每项任务最多快 2.5×，Token 消耗也大幅减少。任务越难，差距越明显。看看对比结果。
+跑得更快，成功率更高，更省 token。我们在 Real-World Bench 上测试了 ego-browser 和另外四款面向 AI Agent 的浏览器工具：31 个在真实线上网站上执行的复杂浏览器自动化任务。ego-browser 在速度、成功率和成本上全面领先，让你的 Agent 完成复杂网页任务的速度比其他工具快 47% 到 63%。
 
 <div align="center">
 
-<img src="docs/assets/ego-vs-agent-benchmark.png" alt="ego lite vs agent-browser, speed and cost across four tasks" width="100%" />
+<img src="docs/assets/real-world-bench.jpg" alt="Real-World Bench, 31 tasks: ego-browser vs Browser Harness, playwright-cli, chrome-devtools-cli and agent-browser on turns, rubric average, perfect rate, trajectory efficiency, average duration and average cost" width="100%" />
 
 </div>
+
+所有工具跑的是同样的 31 个任务，由同一个 Agent（pi）、同一个模型（gpt-5.6-sol，思考强度 max）驱动，并由同一个评审按每个任务的评分细则打分。只有满足全部要求的任务才算完整成功。
 
 ## 文档
 
