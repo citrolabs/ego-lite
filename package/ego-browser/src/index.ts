@@ -12,6 +12,7 @@ import { formatCliLogValue } from "./format.js";
 import {
   bufferOutput,
   createRoundConsole,
+  flushRound,
   installLifecycleFlush,
   resetSink,
 } from "./output-sink.js";
@@ -114,6 +115,14 @@ export function installEgoSdk(
     // calls execute(), so reset the per-run sink and flush it on process teardown.
     resetSink();
     installLifecycleFlush(process.stdout);
+    // A persistent context (the ego-run daemon's REPL session) drains the sink
+    // after each program instead of waiting for process teardown.
+    Object.defineProperty(target, "__egoBrowserFlushRound", {
+      value: flushRound,
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    });
   }
   if (target.ego && typeof target.ego === "object") {
     void emitUpdateNotice(target.ego, (line) => {

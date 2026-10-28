@@ -5,8 +5,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  guideModes,
   guidePlatforms,
   renderGuide,
+  selectBlocks,
   selectPlatform,
 } from "../scripts/render-guide.mjs";
 
@@ -20,6 +22,7 @@ const codeFences = (markdown) => markdown.match(/^```[^\n]*\n[\s\S]*?^```$/gm);
 const words = (markdown) => markdown.split(/\s+/).filter(Boolean);
 
 const platformMarker = /^\s*<!--\s*\/?platform\b.*-->\s*$/gm;
+const modeMarker = /^\s*<!--\s*\/?mode\b.*-->\s*$/gm;
 
 test("the bundled usage guide is the unwrapped source guide between version and end markers", async () => {
   const bundled = await readFile(join(outDir, "ego-browser/SKILL.md"), "utf8");
@@ -31,15 +34,19 @@ test("the bundled usage guide is the unwrapped source guide between version and 
     "SKILL.macos.md",
     "SKILL.md",
     "SKILL.windows.md",
+    "ego-run",
   ]);
   assert.equal(
     lines[0],
     `[ego-browser:skill] ego-browser usage guide v${version}`,
   );
   assert.equal(lines.at(-1), `[ego-browser:skill] end of guide v${version}`);
-  const body = source
-    .replace(/^---\n[\s\S]*?\n---\n/, "")
+  // The direct-mode guide: every platform block, only the `direct` mode blocks.
+  const body = selectBlocks(source.replace(/^---\n[\s\S]*?\n---\n/, ""), {
+    mode: "direct",
+  })
     .replace(platformMarker, "")
+    .replace(modeMarker, "")
     .trim();
   const bundledBody = lines.slice(2, -2).join("\n");
   assert.deepEqual(words(bundledBody), words(body));
@@ -87,6 +94,115 @@ test("each platform guide keeps only its own passages", async () => {
     /PowerShell|### cmd|Get-Content|forward slashes/,
   );
   assert.ok(guides.macos.length < guides.windows.length);
+});
+
+test("the ego-run guide swaps the direct-execution passages for session ones", async () => {
+  const source = await readFile(guideSource, "utf8");
+  const version = /^version: "([^"]+)"$/m.exec(source)[1];
+  const sourceBody = source.replace(/^---\n[\s\S]*?\n---\n/, "");
+  assert.deepEqual(guideModes, ["direct", "ego-run"]);
+  assert.deepEqual(
+    (await readdir(join(outDir, "ego-browser/ego-run"))).sort(),
+    ["SKILL.macos.md", "SKILL.md", "SKILL.windows.md"],
+  );
+  const all = await readFile(
+    join(outDir, "ego-browser/ego-run/SKILL.md"),
+    "utf8",
+  );
+  assert.equal(
+    all.split("\n")[0],
+    `[ego-browser:skill] ego-browser usage guide v${version} (ego-run)`,
+  );
+  assert.ok(all.length <= 25_000);
+  assert.doesNotMatch(all, /ego-browser nodejs/);
+  assert.match(all, /^ego-run --session inspect-example <<'EOF'$/m);
+  assert.match(all, /share one Node\.js context/);
+  for (const platform of guidePlatforms) {
+    const guide = await readFile(
+      join(outDir, `ego-browser/ego-run/SKILL.${platform}.md`),
+      "utf8",
+    );
+    const lines = guide.trimEnd().split("\n");
+    assert.equal(
+      lines[0],
+      `[ego-browser:skill] ego-browser usage guide v${version} (${platform}, ego-run)`,
+    );
+    assert.ok(!/<!--/.test(guide));
+    assert.ok(guide.length <= 25_000);
+    const expected = selectBlocks(sourceBody, {
+      platform,
+      mode: "ego-run",
+    }).trim();
+    assert.deepEqual(words(lines.slice(2, -2).join("\n")), words(expected));
+    assert.doesNotMatch(
+      guide,
+      /ego-browser nodejs|Every invocation starts a new Node\.js process/,
+    );
+  }
+  const windows = await readFile(
+    join(outDir, "ego-browser/ego-run/SKILL.windows.md"),
+    "utf8",
+  );
+  assert.match(
+    windows,
+    /^ego-run --session <id> --file C:\/Users\/<name>\/ego\/task\.mjs$/m,
+  );
+  assert.doesNotMatch(windows, /await import\('file:/);
+});
+
+test("selectBlocks lets mode and platform blocks nest but not the same kind", () => {
+  const source = [
+    "shared",
+    "<!-- platform: windows -->",
+    "windows",
+    "<!-- mode: ego-run -->",
+    "windows ego-run",
+    "<!-- /mode -->",
+    "<!-- /platform -->",
+    "<!-- mode: direct -->",
+    "direct",
+    "<!-- /mode -->",
+  ].join("\n");
+  const lines = (options) =>
+    selectBlocks(source, options).split("\n").filter(Boolean);
+  assert.deepEqual(lines({ platform: "windows", mode: "ego-run" }), [
+    "shared",
+    "windows",
+    "windows ego-run",
+  ]);
+  assert.deepEqual(lines({ platform: "windows" }), [
+    "shared",
+    "windows",
+    "direct",
+  ]);
+  assert.deepEqual(lines({ platform: "macos", mode: "ego-run" }), ["shared"]);
+  assert.deepEqual(lines({ mode: "ego-run" }), [
+    "shared",
+    "windows",
+    "windows ego-run",
+  ]);
+  assert.throws(
+    () =>
+      selectBlocks(
+        "<!-- mode: direct -->\n<!-- mode: ego-run -->\nx\n<!-- /mode -->\n<!-- /mode -->",
+      ),
+    /mode blocks do not nest/,
+  );
+  assert.throws(
+    () =>
+      selectBlocks(
+        "<!-- platform: macos -->\n<!-- mode: direct -->\nx\n<!-- /platform -->\n<!-- /mode -->",
+      ),
+    /platform block closed inside an open mode block/,
+  );
+  assert.throws(
+    () => selectBlocks("<!-- mode: repl -->\nx\n<!-- /mode -->"),
+    /unknown mode "repl"/,
+  );
+  assert.throws(
+    () => renderGuide('---\nversion: "1"\n---\nx', { mode: "repl" }),
+    /unknown guide mode/,
+  );
 });
 
 test("renderGuide selects platform blocks and strips the markers", () => {
