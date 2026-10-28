@@ -107,9 +107,15 @@ The SDK now treats one agent script as a *program* (`beginProgram()` /
 `__egoEndProgram`). The direct CLI and `installEgoSdk` begin one per process;
 the daemon wrapper calls both around every call. Inside a program:
 
-- a Page is activated once, and again only when the script switches Pages;
+- a Page is activated once, and again only when the script switches Pages or
+  after a new tab was created (a popup, a new Page): the new tab takes the
+  foreground, and a hidden tab does not answer input or animation-frame waits,
+  so the next action on the earlier Page would hang without re-activation;
 - the file chooser safety interception is armed on the first guarded action
-  and released at the end, instead of on and off around every action;
+  and released at the end, instead of on and off around every action. Its
+  timer is `unref`'d (`keepAlive: false`): the direct CLI releases the guard
+  from `beforeExit`, which only fires once the event loop has drained, so a
+  ref'd timer would keep every script with a click alive for 30 minutes;
 - the file-input probe is installed once per document (`documentEpoch()`), and
   reading it after an input action is the one renderer round trip that also
   orders popup events ahead of the receipt;

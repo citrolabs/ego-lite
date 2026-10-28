@@ -9,6 +9,7 @@ import {
   ensureSession,
   ensureFrameSessions,
   documentEpoch,
+  foregroundEpoch,
   invalidateSession,
   isCdpRequestTimeoutError,
   isPageUnresponsiveError,
@@ -529,7 +530,7 @@ type PageModelServices = {
   pendingDialog(sessionId: string): Record<string, unknown> | null;
   prepareFileChooser(
     sessionId: string,
-    options: { timeoutMs: number; cancel: boolean },
+    options: { timeoutMs: number; cancel: boolean; keepAlive?: boolean },
   ): FileChooserInterception;
   drainEvents(sessionId: string): any[];
   ensureNetworkTracking(
@@ -546,6 +547,8 @@ type PageModelServices = {
   ensureSession(targetId: string, timeoutMs?: number): Promise<string>;
   /** Main-document navigation count of the session's Page; -1 when unknown. */
   documentEpoch?(sessionId: string): number;
+  /** Bumped whenever a page target is created (a new tab takes the foreground). */
+  foregroundEpoch?(): number;
   ensureFrameSessions(
     targetId: string,
     timeoutMs?: number,
@@ -640,6 +643,8 @@ const PAGE_ACTION_RESOLUTION_RETRY_MS = 50;
  */
 type ProgramScope = {
   activatedTargetId: string | null;
+  /** The foreground epoch at the last activation; a new tab since then re-activates. */
+  activatedEpoch: number;
   /** Safety interceptions kept armed until the program ends, by session. */
   fileChooserGuards: Map<string, FileChooserInterception>;
 };
@@ -656,6 +661,7 @@ const fileInputProbes = new Map<string, number>();
 function newProgramScope(): ProgramScope {
   return {
     activatedTargetId: null,
+    activatedEpoch: -1,
     fileChooserGuards: new Map(),
   };
 }
@@ -1011,6 +1017,7 @@ const baseDefaultServices: Omit<PageModelServices, "ledger" | "pageBudget"> = {
   ensureSession,
   ensureFrameSessions,
   documentEpoch,
+  foregroundEpoch,
   invalidateSession,
   setPreferredTarget,
   supportsBackgroundPageDiscovery: isBrowserRuntime,
@@ -3670,12 +3677,19 @@ class Page {
   }
 
   async #activate(targetId: string): Promise<void> {
-    // Once per program and per switch between Pages: the browser keeps the
-    // tab active between actions, and a new program activates again so a tab
-    // the user switched away from comes back when the agent continues.
-    if (programScope.activatedTargetId !== targetId) {
+    // Once per program, per switch between Pages, and after any new tab: the
+    // browser keeps the tab active between actions, a new program activates
+    // again so a tab the user switched away from comes back when the agent
+    // continues, and a popup or new Page created since the last activation
+    // took the foreground (a hidden tab does not answer input).
+    const epoch = this.#services.foregroundEpoch?.() ?? 0;
+    if (
+      programScope.activatedTargetId !== targetId ||
+      programScope.activatedEpoch !== epoch
+    ) {
       await this.#services.cdp("Target.activateTarget", { targetId });
       programScope.activatedTargetId = targetId;
+      programScope.activatedEpoch = epoch;
     }
     this.#services.setPreferredTarget(targetId);
   }
@@ -3693,6 +3707,10 @@ class Page {
     guard = this.#services.prepareFileChooser(sessionId, {
       timeoutMs: PROGRAM_FILE_CHOOSER_GUARD_MS,
       cancel: true,
+      // The guard outlives the action; its timer must not hold the process
+      // open after the script has finished (the direct CLI ends the program
+      // from `beforeExit`).
+      keepAlive: false,
     });
     programScope.fileChooserGuards.set(sessionId, guard);
     try {

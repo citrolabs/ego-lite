@@ -67,6 +67,16 @@ const frameSessionCache = new Map<
 >();
 
 /** Forget cached frame discovery; called for every frame or target change. */
+// Page targets created in this browser so far. A new tab (a popup, a new
+// Page, one the user opened) takes the foreground, so a Page acted on earlier
+// in the program must be activated again before its next input: a hidden tab
+// does not answer input or animation-frame waits.
+let pageTargetsCreated = 0;
+
+export function foregroundEpoch(): number {
+  return pageTargetsCreated;
+}
+
 export function invalidateFrameDiscovery() {
   frameEpoch += 1;
   frameSessionCache.clear();
@@ -418,6 +428,7 @@ function clearTargetSession(targetId, { remove = false } = {}) {
   target.ignoredFaviconRequestIds.clear();
   target.lastNetworkActivityAt = state.now();
   target.pendingDialog = null;
+  clearTimeout(target.fileChooserInterception?.timer);
   target.fileChooserInterception = null;
 }
 
@@ -1144,7 +1155,11 @@ export async function pageNetworkSessions(
  */
 export function prepareFileChooser(
   sessionId: string,
-  { timeoutMs, cancel }: { timeoutMs: number; cancel: boolean },
+  {
+    timeoutMs,
+    cancel,
+    keepAlive = true,
+  }: { timeoutMs: number; cancel: boolean; keepAlive?: boolean },
 ): FileChooserInterception {
   const targetId = sessionTargets.get(sessionId);
   const target = targetId ? targetStates.get(targetId) : undefined;
@@ -1221,6 +1236,7 @@ export function prepareFileChooser(
         const error: any = new Error(
           `page.waitForFileChooser timed out after ${timeoutMs}ms`,
         );
+        interception.timer = undefined;
         error.code = "EGO_FILE_CHOOSER_TIMEOUT";
         if (target.fileChooserInterception === interception) {
           target.fileChooserInterception = null;
@@ -1232,6 +1248,10 @@ export function prepareFileChooser(
           ).catch(() => {});
         }
       }, timeoutMs);
+      // A program-wide safety guard must not keep the Node event loop alive:
+      // the direct CLI releases it from `beforeExit`, which only fires once
+      // the loop has drained.
+      if (!keepAlive) interception.timer.unref?.();
     })
     .catch((error) => {
       if (target.fileChooserInterception === interception) {
@@ -1740,6 +1760,12 @@ function handleMessage(message) {
   const target = targetId ? targetStates.get(targetId) : undefined;
   if (typeof data.method === "string" && FRAME_LIFECYCLE_EVENT(data.method)) {
     invalidateFrameDiscovery();
+  }
+  if (
+    data.method === "Target.targetCreated" &&
+    data.params?.targetInfo?.type === "page"
+  ) {
+    pageTargetsCreated += 1;
   }
   if (
     data.method === "Page.frameNavigated" &&

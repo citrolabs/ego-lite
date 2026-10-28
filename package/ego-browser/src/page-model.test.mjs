@@ -101,7 +101,14 @@ function createFixture(rootDir) {
   let domActivity = null;
   let fileInputClicked = false;
 
+  let pageTargetsCreated = 0;
   function dispatchBrowserEvent(event) {
+    if (
+      event.method === "Target.targetCreated" &&
+      event.params?.targetInfo?.type === "page"
+    ) {
+      pageTargetsCreated += 1;
+    }
     for (const listener of [...browserEventListeners]) listener(event);
   }
 
@@ -772,8 +779,14 @@ function createFixture(rootDir) {
     pendingDialog(sessionId) {
       return pendingDialogs.get(sessionId) || null;
     },
-    prepareFileChooser(sessionId, { timeoutMs, cancel }) {
-      calls.push(["prepareFileChooser", sessionId, { timeoutMs, cancel }]);
+    prepareFileChooser(sessionId, { timeoutMs, cancel, keepAlive }) {
+      calls.push([
+        "prepareFileChooser",
+        sessionId,
+        keepAlive === undefined
+          ? { timeoutMs, cancel }
+          : { timeoutMs, cancel, keepAlive },
+      ]);
       let observed;
       let resolveEvent;
       let rejectEvent;
@@ -851,6 +864,7 @@ function createFixture(rootDir) {
       browserEventListeners.add(listener);
       return () => browserEventListeners.delete(listener);
     },
+    foregroundEpoch: () => pageTargetsCreated,
     now: () => nowMs,
     sleep: async (ms) => {
       sleepDurations.push(ms);
@@ -1023,9 +1037,7 @@ function createFixture(rootDir) {
       pageEvents.set(sessionId, events);
     },
     emitBrowserEvent(method, params = {}) {
-      for (const listener of [...browserEventListeners]) {
-        listener({ method, params });
-      }
+      dispatchBrowserEvent({ method, params });
     },
   };
 }
@@ -4950,6 +4962,11 @@ test("unhandled file choosers are cancelled before a system dialog appears", asy
       ([kind]) => kind === "prepareFileChooser",
     );
     assert.equal(prepared[2].cancel, true);
+    assert.equal(
+      prepared[2].keepAlive,
+      false,
+      "the program-wide guard must not hold the process open after the script ends",
+    );
     assert.equal(fixture.systemFileChooserOpened(), false);
   });
 });
@@ -6989,6 +7006,41 @@ test("a popup reported by Target.targetCreated is adopted without a settle delay
       "the popup Page is usable from the receipt",
     );
     assert.deepEqual(fixture.sleepDurations.slice(sleepsBefore), []);
+  });
+});
+
+test("a Page is activated again after a popup took the foreground", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/source");
+    const activations = () =>
+      fixture.calls.filter(
+        ([kind, method, params]) =>
+          kind === "cdp" &&
+          method === "Target.activateTarget" &&
+          params.targetId === page.targetId,
+      ).length;
+
+    await page.click("#plain-button");
+    const before = activations();
+    await page.click("#plain-button");
+    assert.equal(
+      activations(),
+      before,
+      "actions within one program do not re-activate an active Page",
+    );
+
+    fixture.openPopupOnNextClick("https://example.test/popup");
+    const receipt = await page.click("#open-popup");
+    assert.equal(receipt.popups.length, 1);
+    await page.click("#plain-button");
+    assert.equal(
+      activations(),
+      before + 1,
+      "the popup took the foreground, so the next action brings the Page back",
+    );
+    await page.click("#plain-button");
+    assert.equal(activations(), before + 1, "and only once");
   });
 });
 
