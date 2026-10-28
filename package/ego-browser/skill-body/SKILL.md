@@ -214,7 +214,9 @@ next to the visible agent cursor in sync with the action. Other methods, such
 as `fill()`, `press()`, `focus()`, `selectOption()`, `waitForSelector()`,
 `keyboard.*()`, `mouse.down()`, and `mouse.up()`, reject a `label` option.
 The `label` in `selectOption(selector, { label })` is different: it selects the
-option whose visible text matches.
+option whose visible text matches. `click()` and `dblclick()` accept
+`hover: false` to skip the pointer move before the press (faster); keep the
+default for controls that only appear on hover.
 
 When the user explicitly asks for ego-browser, start with a real browser command
 and diagnose the CLI or installation only if it fails.

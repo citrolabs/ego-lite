@@ -94,7 +94,7 @@ test("schema-driven option validation rejects unknown and invalid fields", () =>
   );
   assert.throws(
     () => validatePublicApiOptions("Page.click", { trial: true }),
-    /unknown option: trial\. Expected: await page\.click\(selector, \{ button\?, clickCount\?, delay\?, position\?, force\?, timeout\?, label\? \}\)/,
+    /unknown option: trial\. Expected: await page\.click\(selector, \{ button\?, clickCount\?, delay\?, position\?, force\?, hover\?, timeout\?, label\? \}\)/,
   );
   assert.throws(
     () => validatePublicApiOptions("Page.screenshot", { scale: "invalid" }),

@@ -18,6 +18,8 @@ import {
 } from "../dist/src/browser-runtime.js";
 import { PageLedgerStore } from "../dist/src/page-ledger.js";
 import {
+  beginProgram,
+  endProgram,
   captureTaskSpaceUserBoundary,
   createTaskSpaceHandle,
   initializeTaskSpaceHandle,
@@ -30,9 +32,13 @@ import {
 
 async function withFixture(fn) {
   const rootDir = await mkdtemp(join(tmpdir(), "ego-page-model-test-"));
+  // Each fixture is one agent program: once-per-program state (activation,
+  // the file chooser guard, the file-input probe) must not leak between tests.
+  beginProgram();
   try {
     return await fn(createFixture(rootDir));
   } finally {
+    await endProgram();
     await rm(rootDir, { recursive: true, force: true });
   }
 }
@@ -6947,13 +6953,16 @@ test("an input action without a popup skips tab polling and settle delays", asyn
       [],
       "the action boundary no longer sleeps to settle the tab list",
     );
+    // The file-input probe read after the input is that round trip; a plain
+    // "0" sync is only sent when no probe is live.
     const syncCalls = fixture.calls
       .slice(callsBefore)
       .filter(
         ([kind, method, params]) =>
-          kind === "cdp" &&
-          method === "Runtime.evaluate" &&
-          params?.expression === "0",
+          (kind === "cdp" &&
+            method === "Runtime.evaluate" &&
+            params?.expression === "0") ||
+          kind === "fileInputProbeRead",
       );
     assert.equal(
       syncCalls.length,

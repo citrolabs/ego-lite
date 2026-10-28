@@ -223,6 +223,7 @@ export function wrapProgram(
   }
   let __timer, __result;
   try {
+    if (typeof globalThis.__egoBeginProgram === "function") globalThis.__egoBeginProgram();
     const value = await Promise.race([
       (async () => {
 ${program.body}
@@ -236,6 +237,7 @@ ${program.body}
     clearTimeout(__timer);
     process.exit = __exit;
     globalThis.console = __console;
+    try { if (typeof globalThis.__egoEndProgram === "function") await Promise.race([globalThis.__egoEndProgram(), new Promise((resolve) => setTimeout(resolve, 2000))]); } catch {}
     try { if (typeof __flush === "function") __flush(__sink, !__result.ok); } catch (error) { __ego.logs.push("[ego-run] flush failed: " + (error?.message ?? error) + "\\n"); }
     __result.logs = __ego.logs.join("");
     let json;

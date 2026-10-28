@@ -21,6 +21,16 @@ const FRAME_LIFECYCLE_LOST =
   /Frame with the given frameId is not found|No frame with given id found|No target with given id/i;
 const BROWSER_LEVEL = (method) =>
   method.startsWith("Target.") || method.startsWith("Browser.");
+// Events after which cached frame discovery may be stale.
+const FRAME_LIFECYCLE_EVENT = (method: string) =>
+  method === "Target.attachedToTarget" ||
+  method === "Target.detachedFromTarget" ||
+  method === "Target.targetCreated" ||
+  method === "Target.targetDestroyed" ||
+  method === "Target.targetInfoChanged" ||
+  method === "Page.frameAttached" ||
+  method === "Page.frameDetached" ||
+  method === "Page.frameNavigated";
 const OOPIF_AUTO_ATTACH_PARAMS = {
   autoAttach: true,
   waitForDebuggerOnStart: true,
@@ -47,6 +57,38 @@ const browserEventSubscribers = new Set<(event: any) => void>();
 const pageEventSubscribers = new Map<string, Set<(event: any) => void>>();
 const targetStates = new Map();
 const sessionTargets = new Map();
+// Frame discovery cache: ensureFrameSessions() is answered from here while no
+// target or frame event has arrived since the last full discovery. Every
+// attach/detach/create/destroy and frame lifecycle event bumps the epoch.
+let frameEpoch = 0;
+const frameSessionCache = new Map<
+  string,
+  { epoch: number; pageSessionId: string; sessions: Map<string, string> }
+>();
+
+/** Forget cached frame discovery; called for every frame or target change. */
+export function invalidateFrameDiscovery() {
+  frameEpoch += 1;
+  frameSessionCache.clear();
+}
+
+/** Current frame-discovery epoch (diagnostics and tests). */
+export function frameDiscoveryEpoch() {
+  return frameEpoch;
+}
+
+/**
+ * How many times the main document of a Page session's root target has
+ * navigated since the runtime started. Per-document page-side state (such as
+ * the file-input probe) is keyed on it, so a navigation invalidates it.
+ */
+export function documentEpoch(sessionId: string): number {
+  const targetId = sessionTargets.get(sessionId);
+  const root = targetId
+    ? targetStates.get(pageRootTargetId(targetId))
+    : undefined;
+  return root ? (root.documentEpoch ?? 0) : -1;
+}
 const childTargets = new Map<string, Set<string>>();
 const parentTargets = new Map<string, string>();
 let defaultTargetId = null;
@@ -238,6 +280,7 @@ function targetState(targetId) {
       lastNetworkActivityAt: state.now(),
       pendingDialog: null,
       fileChooserInterception: null,
+      documentEpoch: 0,
     };
     targetStates.set(targetId, target);
   }
@@ -245,6 +288,7 @@ function targetState(targetId) {
 }
 
 function registerSession(targetId, sessionId) {
+  invalidateFrameDiscovery();
   const target = targetState(targetId);
   if (target.sessionId === sessionId) {
     target.sessionAt = Date.now();
@@ -344,6 +388,7 @@ function unregisterTargetParent(targetId: string) {
 }
 
 function clearTargetSession(targetId, { remove = false } = {}) {
+  invalidateFrameDiscovery();
   const target = targetStates.get(targetId);
   if (!target) return;
   rejectFileChooserInterception(
@@ -497,6 +542,21 @@ export function subscribePageEvents(
   };
 }
 
+// Diagnostic tap on every outgoing CDP command (method, sessionId, params).
+// Scripts set it through `__egoBrowserTraceCdp(fn)` to count the round trips
+// an action costs; null turns it off.
+let cdpTracer:
+  | ((method: string, sessionId: string | undefined, params: unknown) => void)
+  | null = null;
+
+export function traceCdp(
+  tracer:
+    | ((method: string, sessionId: string | undefined, params: unknown) => void)
+    | null,
+) {
+  cdpTracer = typeof tracer === "function" ? tracer : null;
+}
+
 function rawCdp(
   method,
   params: any = {},
@@ -505,6 +565,13 @@ function rawCdp(
 ) {
   const runtime = browserEgo();
   bindRuntimeCallbacks(runtime);
+  if (cdpTracer) {
+    try {
+      cdpTracer(method, sessionId, params);
+    } catch {
+      // a broken tracer must not break the command
+    }
+  }
   const id = nextMessageId++;
   const payload = JSON.stringify({
     id,
@@ -721,6 +788,15 @@ export async function ensureFrameSessions(
   const deadline = startedAt + Math.max(1, timeoutMs);
   const remaining = () => Math.max(1, deadline - state.now());
   const pageSessionId = await ensureSession(pageTargetId, remaining());
+  const cached = frameSessionCache.get(pageTargetId);
+  if (
+    cached &&
+    cached.epoch === frameEpoch &&
+    cached.pageSessionId === pageSessionId
+  ) {
+    return cached.sessions;
+  }
+  const discoveryEpoch = frameEpoch;
   let response;
   let frameTreeResponse;
   try {
@@ -910,6 +986,15 @@ export async function ensureFrameSessions(
   sessions.parentFrameIds = new Map(
     [...sessions.keys()].map((frameId) => [frameId, parentFrameIdOf(frameId)]),
   );
+  if (discoveryEpoch === frameEpoch) {
+    // Nothing changed while the two snapshots were taken; later actions can
+    // reuse this map until a frame or target event invalidates it.
+    frameSessionCache.set(pageTargetId, {
+      epoch: frameEpoch,
+      pageSessionId,
+      sessions,
+    });
+  }
   return sessions;
 }
 
@@ -925,6 +1010,7 @@ export function invalidateSession(targetId = undefined) {
   childTargets.clear();
   parentTargets.clear();
   defaultTargetId = null;
+  invalidateFrameDiscovery();
   resetUserControlProbe();
 }
 
@@ -1652,6 +1738,17 @@ function handleMessage(message) {
   const sessionId = data.sessionId;
   const targetId = sessionId ? sessionTargets.get(sessionId) : undefined;
   const target = targetId ? targetStates.get(targetId) : undefined;
+  if (typeof data.method === "string" && FRAME_LIFECYCLE_EVENT(data.method)) {
+    invalidateFrameDiscovery();
+  }
+  if (
+    data.method === "Page.frameNavigated" &&
+    target &&
+    !data.params?.frame?.parentId
+  ) {
+    const root = targetStates.get(pageRootTargetId(targetId));
+    if (root) root.documentEpoch = (root.documentEpoch ?? 0) + 1;
+  }
   if (target && typeof data.method === "string") {
     recordNetworkEvent(targetId, target, data);
   }

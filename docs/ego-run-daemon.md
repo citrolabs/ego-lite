@@ -100,6 +100,32 @@ session's lifetime; `EGO_BROWSER_BIN` picks the executable the daemon starts.
 - The protocol carries a version; a mismatch tells the agent to restart the
   daemon after a plugin upgrade.
 
+## Program boundaries (P3)
+
+The SDK now treats one agent script as a *program* (`beginProgram()` /
+`endProgram()` in `page-model.ts`, exposed as `__egoBeginProgram` /
+`__egoEndProgram`). The direct CLI and `installEgoSdk` begin one per process;
+the daemon wrapper calls both around every call. Inside a program:
+
+- a Page is activated once, and again only when the script switches Pages;
+- the file chooser safety interception is armed on the first guarded action
+  and released at the end, instead of on and off around every action;
+- the file-input probe is installed once per document (`documentEpoch()`), and
+  reading it after an input action is the one renderer round trip that also
+  orders popup events ahead of the receipt;
+- frame discovery (`Target.getTargets` + `Page.getFrameTree`) is answered from a
+  cache until a Target or Page frame lifecycle event invalidates it;
+- the click point settle waits two frames only when something may be moving
+  (a running animation or transition, or a scroll in the last 150 ms);
+- `click({ hover: false })` skips the pre-press pointer move.
+
+Measured on a local static form (CDP commands per action, direct path):
+click 17 → 10, fill 15 → 12, press 15 → 8, snapshot 22 → 15, waitForSelector
+6 → 3, evaluate 2 → 1. In a persistent session the second program pays one
+`Target.activateTarget` and one `Page.setInterceptFileChooserDialog`, nothing
+else. Click time 25 ms → 8 ms when the target is still, 2 to 5 ms with
+`hover: false`.
+
 ## Guide variant
 
 `skill-body/SKILL.md` carries `<!-- mode: direct -->` and `<!-- mode: ego-run -->`
