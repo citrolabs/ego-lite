@@ -1,0 +1,146 @@
+// A main-frame navigation that has started but not committed suspends every
+// renderer-bound CDP command until the new document commits or the navigation
+// stops. These cases pin the harness behavior on such a Page: public calls
+// stay inside one bounded wait, the error names the Page and what to do, and
+// Page.stopLoading recovers it.
+export function pagePendingNavigationCase() {
+  return `
+    const task = await taskSpace(taskName);
+    const page = await newPageAt(
+      task,
+      baseUrl + "/nav-target?pending-navigation=" + Date.now()
+    );
+    const heldUrl = baseUrl + "/hold-page?ms=120000";
+
+    const gotoStartedAt = Date.now();
+    let gotoError;
+    try {
+      await page.goto(heldUrl, { timeout: 1_500 });
+    } catch (error) {
+      gotoError = error;
+    }
+    assertEqual(
+      gotoError?.code,
+      "EGO_NAVIGATION_TIMEOUT",
+      "goto to a held response times out: " + gotoError?.message
+    );
+    assert(
+      Date.now() - gotoStartedAt < 4_000,
+      "goto returns close to its own timeout: " + (Date.now() - gotoStartedAt)
+    );
+
+    const snapshotStartedAt = Date.now();
+    let snapshotError;
+    try {
+      await page.snapshot();
+    } catch (error) {
+      snapshotError = error;
+    }
+    const snapshotElapsed = Date.now() - snapshotStartedAt;
+    assertEqual(
+      snapshotError?.code,
+      "EGO_PAGE_UNRESPONSIVE",
+      "snapshot during a pending navigation reports the unresponsive Page: " +
+        snapshotError?.message
+    );
+    assertIncludes(
+      snapshotError?.message,
+      "Page " + page.label,
+      "the error names the Page"
+    );
+    assertIncludes(
+      snapshotError?.message,
+      "(" + baseUrl + "/",
+      "the error names the Page URL"
+    );
+    assertIncludes(
+      snapshotError?.message,
+      'page.cdp("Page.stopLoading")',
+      "the error tells the agent how to recover"
+    );
+    assert(
+      snapshotElapsed < 20_000,
+      "snapshot gives up after one bounded wait, not one per setup command: " +
+        snapshotElapsed
+    );
+
+    const secondGotoStartedAt = Date.now();
+    let secondGotoError;
+    try {
+      await page.goto(heldUrl + "&second=1", { timeout: 2_000 });
+    } catch (error) {
+      secondGotoError = error;
+    }
+    assertEqual(
+      secondGotoError?.code,
+      "EGO_NAVIGATION_TIMEOUT",
+      "goto on an unresponsive Page still times out: " + secondGotoError?.message
+    );
+    assert(
+      Date.now() - secondGotoStartedAt < 4_500,
+      "goto on an unresponsive Page counts session setup against its timeout: " +
+        (Date.now() - secondGotoStartedAt)
+    );
+
+    await page.cdp("Page.stopLoading");
+    const recoveredStartedAt = Date.now();
+    const recovered = await page.snapshot();
+    assert(
+      Date.now() - recoveredStartedAt < 5_000,
+      "snapshot answers promptly once the pending navigation stops: " +
+        (Date.now() - recoveredStartedAt)
+    );
+    assertIncludes(
+      recovered,
+      "Navigation target",
+      "the Page still shows the last committed document"
+    );
+
+    // Leave a pending navigation behind for the fresh-process case.
+    try {
+      await page.goto(heldUrl + "&fresh=1", { timeout: 1_000 });
+    } catch {}
+    await writeFile(
+      join(tempDir, "pending-navigation-state.json"),
+      JSON.stringify({ label: page.label })
+    );
+  `;
+}
+
+export function pagePendingNavigationFreshProcessCase() {
+  return `
+    const task = await taskSpace(taskName);
+    const saved = JSON.parse(
+      await readFile(join(tempDir, "pending-navigation-state.json"), "utf8")
+    );
+    const page = task.page(saved.label);
+
+    const startedAt = Date.now();
+    let error;
+    try {
+      await page.snapshot();
+    } catch (caught) {
+      error = caught;
+    }
+    const elapsed = Date.now() - startedAt;
+    assertEqual(
+      error?.code,
+      "EGO_PAGE_UNRESPONSIVE",
+      "the first call of a new process reports the unresponsive Page: " +
+        error?.message
+    );
+    assert(
+      elapsed < 20_000,
+      "a new process does not wait a full transport timeout per setup command: " +
+        elapsed
+    );
+
+    await page.cdp("Page.stopLoading");
+    assertIncludes(
+      await page.snapshot(),
+      "Navigation target",
+      "the Page recovers in the new process as well"
+    );
+    await page.close();
+  `;
+}

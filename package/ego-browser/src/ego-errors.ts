@@ -29,6 +29,7 @@ export const EGO_ERROR_CODES = [
   "EGO_SNAPSHOT_FAILED",
   "EGO_TASK_HOST_DISCONNECTED",
   "EGO_TASK_SPACE_INACTIVE",
+  "EGO_TASK_SPACE_NAME_IN_USE",
   "EGO_TASK_SPACE_NOT_FOUND",
   "EGO_TASK_SPACE_NOT_SELECTED",
   "EGO_TASK_SPACE_UNAVAILABLE",
@@ -46,23 +47,64 @@ export type EgoErrorCode = (typeof EGO_ERROR_CODES)[number];
  * specific than any static line.
  */
 const EGO_ERROR_MESSAGES: Partial<Record<EgoErrorCode, string>> = {
+  // The native code does not say who ended the task or moved control: the
+  // agent's own task.finish() / task.handOff() produce the same codes as user
+  // actions in the browser. Keep this wording neutral about the cause.
   EGO_TASK_SPACE_INACTIVE: [
-    "The user has taken control of this task space and ended the task, so it is no longer assigned to the agent and browser commands are paused.",
-    "This is a hard stop, not an obstacle to route around — do not retry and do not take ownership back on your own.",
-    "Wait until the user explicitly asks you to continue, then claim the space and resume:",
-    "  await taskSpaces.claim(id)",
+    "This task space is no longer assigned to the agent: its task has ended, either through task.finish() or by the user, so browser commands are paused.",
+    "This is a hard stop, not an obstacle to route around — do not retry and do not take ownership back on your own. takeOverTaskSpace() cannot resume an ended task.",
+    "Wait until the user explicitly asks you to continue in this space, then claim it and resume:",
+    "  const task = await claimTaskSpace(spaceId)",
     "",
-    `Offer the user choices like "Continue" or "Finish task" if your harness supports it; otherwise tell them: "You now control this task space. Reply 'continue' when ready and I will resume."`,
+    `Offer the user choices like "Continue" or "Done" if your harness supports it; otherwise tell them: "This task has ended and the space is yours. Reply 'continue' if you want me to resume in it."`,
   ].join("\n"),
   EGO_TASK_SPACE_USER_IN_CONTROL: [
-    "The user has taken control of this task space, so browser commands are paused.",
+    "Control of this task space is with the user, either through task.handOff() or a takeover in the browser, so browser commands are paused.",
     "This is a hard stop, not an obstacle to route around — do not retry and do not take control back on your own.",
     "Wait until the user explicitly asks you to continue, then take control back and resume:",
-    "  await taskSpaces.takeOver()",
+    "  const task = await takeOverTaskSpace(spaceId)",
     "",
     `Offer the user choices like "Continue" or "Finish task" if your harness supports it; otherwise tell them: "You now control this task space. Reply 'continue' when ready and I will resume."`,
   ].join("\n"),
 };
+
+const USER_CONTROL_GUIDANCE =
+  EGO_ERROR_MESSAGES.EGO_TASK_SPACE_USER_IN_CONTROL as string;
+
+const USER_CONTROL_REASON_MESSAGES = Object.freeze({
+  notifications: permissionPrompt("notifications"),
+  location: permissionPrompt("location access"),
+  camera: permissionPrompt("camera access"),
+  microphone: permissionPrompt("microphone access"),
+  pan_tilt_zoom_microphone: permissionPrompt(
+    "camera control and microphone access",
+  ),
+  midi: permissionPrompt("MIDI device access"),
+  bluetooth: userPromptGuidance(
+    "A browser device chooser for Bluetooth has appeared.",
+  ),
+  usb: userPromptGuidance("A browser device chooser for USB has appeared."),
+  serial: userPromptGuidance(
+    "A browser port chooser for serial access has appeared.",
+  ),
+  hid: userPromptGuidance("A browser device chooser for HID has appeared."),
+  protocol_handler: permissionPrompt("protocol handler registration"),
+  manual_takeover: USER_CONTROL_GUIDANCE,
+});
+
+function permissionPrompt(access: string): string {
+  return userPromptGuidance(
+    `A browser permission prompt for ${access} has appeared.`,
+  );
+}
+
+function userPromptGuidance(firstLine: string): string {
+  return [
+    firstLine,
+    "The user now controls this task space. Wait for the user to handle the prompt.",
+    "Resume only after the user confirms, using takeOverTaskSpace(spaceId).",
+  ].join("\n");
+}
 
 /** Type guard for codes this build knows about. */
 export function isEgoErrorCode(value: unknown): value is EgoErrorCode {
@@ -103,16 +145,63 @@ export function resolveEgoError(err: unknown): {
 } {
   const code = egoErrorCode(err);
   const message =
-    (isEgoErrorCode(code) ? EGO_ERROR_MESSAGES[code] : undefined) ??
+    (code === "EGO_TASK_SPACE_USER_IN_CONTROL"
+      ? resolveUserControlMessage(err)
+      : isEgoErrorCode(code)
+        ? EGO_ERROR_MESSAGES[code]
+        : undefined) ??
     nativeErrorText(err) ??
     code ??
     "Unknown ego error";
   return { code, message };
 }
 
+function resolveUserControlMessage(err: unknown): string {
+  const nativeText = nativeErrorText(err);
+  if (nativeText && Object.hasOwn(USER_CONTROL_REASON_MESSAGES, nativeText)) {
+    return USER_CONTROL_REASON_MESSAGES[
+      nativeText as keyof typeof USER_CONTROL_REASON_MESSAGES
+    ];
+  }
+  return USER_CONTROL_GUIDANCE;
+}
+
 /** Whether an ego error means the task is currently under user control. */
 export function isEgoUserControlError(err: unknown): boolean {
   return egoErrorCode(err) === "EGO_TASK_SPACE_USER_IN_CONTROL";
+}
+
+/**
+ * Probe control without turning the expected user-control response into a hard
+ * stop. Ego bindings can report failures either by rejecting or by resolving an
+ * `{ error, error_code }` object, so both paths must be inspected here.
+ */
+export async function probeAgentControl(
+  invokeSnapshot: () => unknown | Promise<unknown>,
+): Promise<boolean> {
+  let result: unknown;
+  try {
+    result = await invokeSnapshot();
+  } catch (error) {
+    if (isEgoUserControlError(error)) return false;
+    throw error;
+  }
+  if (isResolvedEgoError(result)) {
+    if (isEgoUserControlError(result)) return false;
+    throw buildEgoError(result);
+  }
+  return true;
+}
+
+function isResolvedEgoError(
+  value: unknown,
+): value is { error: unknown; error_code?: unknown } {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "error" in value &&
+    (value as { error?: unknown }).error != null
+  );
 }
 
 /**
@@ -127,17 +216,11 @@ function isEgoHardStopCode(code: string | undefined): boolean {
   );
 }
 
-/** Whether an ego error is a hard stop the agent must not retry or route around. */
-export function isEgoHardStopError(err: unknown): boolean {
-  return isEgoHardStopCode(egoErrorCode(err));
-}
-
 /**
  * Build an Error carrying the resolved message and stable error_code from any ego
  * error shape. `op`, when given, prefixes the message with the failing operation.
- * Shared by assertNoEgoError (which throws it) and the CDP-send failure path (which
- * rejects pending requests with it) so every ego failure surfaces an identical
- * Error shape.
+ * Shared by invokeEgo and the CDP-send failure path so every ego failure surfaces
+ * an identical Error shape.
  */
 export function buildEgoError(
   err: unknown,
@@ -145,8 +228,8 @@ export function buildEgoError(
 ): Error & { error_code?: string } {
   const { code, message } = resolveEgoError(err);
   if (isEgoHardStopCode(code)) {
-    // buildEgoError is the single birthplace of every ego error — assertNoEgoError and
-    // the CDP-send failure path both route through it — so recording the hard stop here
+    // buildEgoError is the single birthplace of every ego error — invokeEgo and the
+    // CDP-send failure path both route through it — so recording the hard stop here
     // catches it even when the agent's own try/catch later swallows the thrown Error.
     // The op-less owned message is the one the agent should see, regardless of which
     // operation surfaced it.
@@ -159,7 +242,21 @@ export function buildEgoError(
   return error;
 }
 
-export function assertNoEgoError(result, op?: string) {
+/**
+ * Invoke a native binding and normalize synchronous throws, rejected Promises, and
+ * resolved `{ error, error_code }` objects. Control-wait probes intentionally bypass
+ * this helper because observing user control is their expected result, not a hard stop.
+ */
+export async function invokeEgo<T>(
+  op: string,
+  invoke: () => T | Promise<T>,
+): Promise<T> {
+  let result: T;
+  try {
+    result = await invoke();
+  } catch (error) {
+    throw buildEgoError(error, op);
+  }
   if (
     result &&
     typeof result === "object" &&

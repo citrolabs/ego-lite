@@ -1,27 +1,398 @@
 import { state } from "./state.js";
-import { assertNoEgoError, buildEgoError } from "./ego-errors.js";
+import {
+  buildEgoError,
+  invokeEgo,
+  isEgoUserControlError,
+} from "./ego-errors.js";
 
 const RESPONSE_TIMEOUT_MS = 15000;
+// Page.enable, Network.enable, and Target.setAutoAttach answer within
+// milliseconds on a responsive Page. A Page whose main-frame navigation has
+// started but not committed, or whose renderer hangs, answers none of them
+// until it recovers, so one caller never waits longer than this for setup.
+const SESSION_SETUP_WAIT_MS = 2000;
 const SESSION_TTL_MS = 2000;
 // Upper bound for buffered CDP events. The runtime can be long-lived (installEgoSdk
 // inside the browser); without a cap, undrained events grow without bound.
 const MAX_BUFFERED_EVENTS = 10000;
 const SESSION_LOST =
   /Session (?:with given id )?not found|Target closed|No session/i;
+const FRAME_LIFECYCLE_LOST =
+  /Frame with the given frameId is not found|No frame with given id found|No target with given id/i;
 const BROWSER_LEVEL = (method) =>
   method.startsWith("Target.") || method.startsWith("Browser.");
-type BrowserEventSubscriber = {
-  method: string;
-  sessionId?: string;
-  listener: (event: any) => void;
+const OOPIF_AUTO_ATTACH_PARAMS = {
+  autoAttach: true,
+  waitForDebuggerOnStart: true,
+  flatten: true,
+  // Ego Lite can pause an excluded related target (dedicated worker,
+  // AudioWorklet, ...) without attaching it, leaving no session through which
+  // the harness can resume it. Attach every type; the attach handler resumes
+  // and detaches everything except iframes.
+  filter: [{}],
 };
+// A modal JavaScript dialog stalls every command the renderer has to answer,
+// including Page.getFrameTree, Page.captureScreenshot, DOM.*, Accessibility.*,
+// and even Page.enable. Only methods the browser process answers on its own
+// keep working, so allow those and fail every other command fast instead of
+// letting it run into the transport timeout.
+const DIALOG_SAFE_METHOD = (method) =>
+  BROWSER_LEVEL(method) ||
+  method === "Page.handleJavaScriptDialog" ||
+  method === "Page.setDownloadBehavior";
 let nextMessageId = 1;
 const pending = new Map();
-const events = [];
-const eventWaiters = [];
-const eventSubscribers = new Set<BrowserEventSubscriber>();
-const pageEnabledSessions = new Set();
-const pendingDialogs = new Map();
+const browserEvents = [];
+const browserEventSubscribers = new Set<(event: any) => void>();
+const pageEventSubscribers = new Map<string, Set<(event: any) => void>>();
+const targetStates = new Map();
+const sessionTargets = new Map();
+const childTargets = new Map<string, Set<string>>();
+const parentTargets = new Map<string, string>();
+let defaultTargetId = null;
+let userControlProbeState: "idle" | "probing" | "stopped" = "idle";
+let userControlStopError: (Error & { error_code?: string }) | null = null;
+let userControlProbeGeneration = 0;
+type EgoCdpCallbackRuntime = {
+  onCDPMessage?: (payload: string) => void;
+  onSendCDPMessageError?: (message: unknown, errorCode?: string) => void;
+};
+let callbackRuntime: EgoCdpCallbackRuntime | undefined;
+
+export class CdpRequestTimeoutError extends Error {
+  readonly code: "EGO_CDP_REQUEST_TIMEOUT" | "EGO_PAGE_UNRESPONSIVE" =
+    "EGO_CDP_REQUEST_TIMEOUT";
+  readonly method: string;
+  readonly timeoutMs: number;
+  readonly sessionId?: string;
+
+  constructor(method: string, timeoutMs: number, sessionId?: string) {
+    super(`CDP request timed out: ${method}`);
+    this.name = "CdpRequestTimeoutError";
+    this.method = method;
+    this.timeoutMs = timeoutMs;
+    this.sessionId = sessionId;
+  }
+}
+
+/**
+ * The Page's renderer did not answer a command it has to answer itself.
+ * Chromium suspends every renderer-bound command while a main-frame navigation
+ * has started but not committed; a hung renderer behaves the same way. It is
+ * still a request timeout, so budget-driven retry loops that treat a timeout
+ * at their deadline as their own timeout keep doing so.
+ */
+export class PageUnresponsiveError extends CdpRequestTimeoutError {
+  override readonly code = "EGO_PAGE_UNRESPONSIVE";
+  readonly waitedMs: number;
+  readonly targetId?: string;
+
+  constructor(
+    method: string,
+    waitedMs: number,
+    targetId?: string,
+    sessionId?: string,
+  ) {
+    super(method, waitedMs, sessionId);
+    this.name = "PageUnresponsiveError";
+    this.message = `Page did not answer ${method} within ${waitedMs}ms; its main-frame navigation has not committed or its renderer is unresponsive`;
+    this.waitedMs = waitedMs;
+    this.targetId = targetId;
+  }
+}
+
+export function isPageUnresponsiveError(
+  error: unknown,
+): error is PageUnresponsiveError {
+  return (
+    error instanceof PageUnresponsiveError ||
+    (error instanceof Error &&
+      (error as { code?: unknown }).code === "EGO_PAGE_UNRESPONSIVE")
+  );
+}
+
+export function isCdpRequestTimeoutError(
+  error: unknown,
+): error is CdpRequestTimeoutError {
+  return (
+    error instanceof CdpRequestTimeoutError ||
+    (Boolean(error) &&
+      typeof error === "object" &&
+      (error as { code?: unknown }).code === "EGO_CDP_REQUEST_TIMEOUT")
+  );
+}
+
+/** A CDP command error carrying the session it was addressed to. */
+export type CdpCommandError = Error & { sessionId?: string };
+
+/** The CDP session that issued a failed command is gone. */
+export function isSessionLostError(error: unknown): error is CdpCommandError {
+  return error instanceof Error && SESSION_LOST.test(error.message);
+}
+
+/** A frame or iframe target vanished between enumeration and use. */
+export function isFrameLifecycleError(
+  error: unknown,
+): error is CdpCommandError {
+  return error instanceof Error && FRAME_LIFECYCLE_LOST.test(error.message);
+}
+
+/**
+ * A frame or its session disappeared mid-operation. Callers that have not yet
+ * dispatched input may rediscover frame sessions and retry.
+ */
+export function isRetryableFrameLifecycleError(
+  error: unknown,
+): error is CdpCommandError {
+  return isSessionLostError(error) || isFrameLifecycleError(error);
+}
+
+/**
+ * Signals that a modal JavaScript dialog prevented a CDP command from
+ * completing. The dialog remains open; Page-level code decides whether to
+ * expose it in an action receipt or surface this error to the caller.
+ */
+export class PageDialogOpenedError extends Error {
+  readonly code = "EGO_PAGE_DIALOG_OPENED";
+  readonly method: string;
+  readonly sessionId: string;
+  readonly dialog: Record<string, unknown>;
+
+  constructor(
+    method: string,
+    sessionId: string,
+    dialog: Record<string, unknown>,
+    { alreadyOpen = false }: { alreadyOpen?: boolean } = {},
+  ) {
+    const kind =
+      typeof dialog.type === "string" && dialog.type
+        ? `JavaScript ${dialog.type} dialog`
+        : "JavaScript dialog";
+    const text =
+      typeof dialog.message === "string" && dialog.message
+        ? ` (${JSON.stringify(dialog.message)})`
+        : "";
+    const situation = alreadyOpen
+      ? `${method} cannot run while a ${kind}${text} is open`
+      : `a ${kind}${text} opened while ${method} was running`;
+    super(
+      `${situation}; handle it with page.acceptDialog() or page.dismissDialog() before continuing`,
+    );
+    this.name = "PageDialogOpenedError";
+    this.method = method;
+    this.sessionId = sessionId;
+    this.dialog = { ...dialog };
+  }
+}
+
+export function isPageDialogOpenedError(
+  error: unknown,
+): error is PageDialogOpenedError {
+  return (
+    error instanceof PageDialogOpenedError ||
+    (Boolean(error) &&
+      typeof error === "object" &&
+      (error as { code?: unknown }).code === "EGO_PAGE_DIALOG_OPENED")
+  );
+}
+
+export type FileChooserOpenedEvent = {
+  backendNodeId: number;
+  frameId?: string;
+  mode?: "selectSingle" | "selectMultiple";
+};
+
+export type FileChooserInterception = {
+  ready: Promise<void>;
+  event: Promise<FileChooserOpenedEvent>;
+  peek(): FileChooserOpenedEvent | undefined;
+  dispose(reason?: Error): Promise<void>;
+};
+
+function targetState(targetId) {
+  let target = targetStates.get(targetId);
+  if (!target) {
+    target = {
+      sessionId: null,
+      sessionAt: 0,
+      sessionInflight: null,
+      events: [],
+      egoAutomationEnabled: false,
+      pageEventsEnabled: false,
+      pageEnableInflight: null,
+      networkDomainEnabled: false,
+      networkEnableInflight: null,
+      autoAttachEnabled: false,
+      autoAttachInflight: null,
+      inflightNetworkRequests: new Map<
+        string,
+        {
+          requestId: string;
+          frameId?: string;
+          loaderId?: string;
+          type?: string;
+          url?: string;
+        }
+      >(),
+      ignoredFaviconRequestIds: new Set<string>(),
+      lastNetworkActivityAt: state.now(),
+      pendingDialog: null,
+      fileChooserInterception: null,
+    };
+    targetStates.set(targetId, target);
+  }
+  return target;
+}
+
+function registerSession(targetId, sessionId) {
+  const target = targetState(targetId);
+  if (target.sessionId === sessionId) {
+    target.sessionAt = Date.now();
+    sessionTargets.set(sessionId, targetId);
+    return;
+  }
+  if (target.sessionId && target.sessionId !== sessionId) {
+    sessionTargets.delete(target.sessionId);
+  }
+  target.sessionId = sessionId;
+  target.sessionAt = Date.now();
+  target.egoAutomationEnabled = false;
+  target.pageEventsEnabled = false;
+  target.pageEnableInflight = null;
+  target.networkDomainEnabled = false;
+  target.networkEnableInflight = null;
+  target.autoAttachEnabled = false;
+  target.autoAttachInflight = null;
+  target.inflightNetworkRequests.clear();
+  target.ignoredFaviconRequestIds.clear();
+  target.lastNetworkActivityAt = state.now();
+  target.pendingDialog = null;
+  sessionTargets.set(sessionId, targetId);
+}
+
+function registerTargetParent(targetId: string, parentTargetId: string) {
+  const previousParent = parentTargets.get(targetId);
+  if (previousParent === parentTargetId) {
+    // A renderer swap can reattach the same frame target after a new document
+    // request has already started in the parent session.
+    migrateFrameRequests(targetId, parentTargetId);
+    return;
+  }
+  if (previousParent) {
+    const previousChildren = childTargets.get(previousParent);
+    previousChildren?.delete(targetId);
+    if (previousChildren?.size === 0) childTargets.delete(previousParent);
+  }
+  parentTargets.set(targetId, parentTargetId);
+  let children = childTargets.get(parentTargetId);
+  if (!children) {
+    children = new Set();
+    childTargets.set(parentTargetId, children);
+  }
+  children.add(targetId);
+  migrateFrameRequests(targetId, parentTargetId);
+}
+
+function migrateFrameRequests(targetId: string, parentTargetId: string): void {
+  const destination = targetState(targetId);
+  const rootTargetId = pageRootTargetId(parentTargetId);
+  for (const sourceTargetId of pageTreeTargetIds(rootTargetId)) {
+    if (sourceTargetId === targetId) continue;
+    const source = targetStates.get(sourceTargetId);
+    if (!source) continue;
+    for (const [requestId, request] of source.inflightNetworkRequests) {
+      if (request.frameId !== targetId) continue;
+      source.inflightNetworkRequests.delete(requestId);
+      destination.inflightNetworkRequests.set(requestId, request);
+      destination.lastNetworkActivityAt = Math.max(
+        destination.lastNetworkActivityAt,
+        source.lastNetworkActivityAt,
+      );
+    }
+  }
+}
+
+function pageRootTargetId(targetId: string): string {
+  let current = targetId;
+  const visited = new Set<string>();
+  while (parentTargets.has(current) && !visited.has(current)) {
+    visited.add(current);
+    current = parentTargets.get(current)!;
+  }
+  return current;
+}
+
+function pageTreeTargetIds(rootTargetId: string): string[] {
+  const result: string[] = [];
+  const visit = (targetId: string) => {
+    result.push(targetId);
+    for (const childTargetId of childTargets.get(targetId) || []) {
+      visit(childTargetId);
+    }
+  };
+  visit(rootTargetId);
+  return result;
+}
+
+function unregisterTargetParent(targetId: string) {
+  const parentTargetId = parentTargets.get(targetId);
+  if (!parentTargetId) return;
+  parentTargets.delete(targetId);
+  const siblings = childTargets.get(parentTargetId);
+  siblings?.delete(targetId);
+  if (siblings?.size === 0) childTargets.delete(parentTargetId);
+}
+
+function clearTargetSession(targetId, { remove = false } = {}) {
+  const target = targetStates.get(targetId);
+  if (!target) return;
+  rejectFileChooserInterception(
+    target,
+    new Error("file chooser session was detached"),
+  );
+  if (target.sessionId) {
+    sessionTargets.delete(target.sessionId);
+  }
+  if (remove) {
+    targetStates.delete(targetId);
+    if (defaultTargetId === targetId) defaultTargetId = null;
+    return;
+  }
+  target.sessionId = null;
+  target.sessionAt = 0;
+  target.sessionInflight = null;
+  target.events.length = 0;
+  target.egoAutomationEnabled = false;
+  target.pageEventsEnabled = false;
+  target.pageEnableInflight = null;
+  target.networkDomainEnabled = false;
+  target.networkEnableInflight = null;
+  target.autoAttachEnabled = false;
+  target.autoAttachInflight = null;
+  target.inflightNetworkRequests.clear();
+  target.ignoredFaviconRequestIds.clear();
+  target.lastNetworkActivityAt = state.now();
+  target.pendingDialog = null;
+  target.fileChooserInterception = null;
+}
+
+function clearTargetSessionTree(targetId: string, { remove = false } = {}) {
+  for (const childTargetId of [...(childTargets.get(targetId) || [])]) {
+    clearTargetSessionTree(childTargetId, { remove: true });
+  }
+  clearTargetSession(targetId, { remove });
+  if (remove) {
+    childTargets.delete(targetId);
+    unregisterTargetParent(targetId);
+  }
+}
+
+function capEvents(events) {
+  if (events.length > MAX_BUFFERED_EVENTS) {
+    events.splice(0, events.length - MAX_BUFFERED_EVENTS);
+  }
+}
+
 export function isBrowserRuntime() {
   return Boolean(
     globalThis.ego && typeof globalThis.ego.sendCDPMessage === "function",
@@ -35,6 +406,97 @@ export function browserEgo() {
   return globalThis.ego;
 }
 
+/** Keep exceptions from crossing the native-to-JavaScript callback boundary. */
+function guardNativeCallback(label: string, callback: () => void): void {
+  try {
+    callback();
+  } catch (error) {
+    try {
+      console.error(`[ego-browser] ${label} failed:`, error);
+    } catch {
+      // Error reporting must not re-enter the native callback failure.
+    }
+  }
+}
+
+function dispatchCdpMessage(payload: string): void {
+  guardNativeCallback("onCDPMessage", () => handleMessage(payload));
+}
+
+function dispatchCdpSendError(message: unknown, errorCode?: string): void {
+  guardNativeCallback("onSendCDPMessageError", () =>
+    handleSendError(message, errorCode),
+  );
+}
+
+function bindRuntimeCallbacks(runtime: EgoCdpCallbackRuntime): void {
+  if (callbackRuntime && callbackRuntime !== runtime) {
+    releaseRuntimeCallbacks(callbackRuntime);
+  }
+  runtime.onCDPMessage = dispatchCdpMessage;
+  runtime.onSendCDPMessageError = dispatchCdpSendError;
+  callbackRuntime = runtime;
+}
+
+/** Release only callbacks installed by this runtime, preserving foreign owners. */
+export function releaseRuntimeCallbacks(
+  runtime: EgoCdpCallbackRuntime | undefined = callbackRuntime,
+): void {
+  if (!runtime) return;
+  if (runtime.onCDPMessage === dispatchCdpMessage) {
+    runtime.onCDPMessage = undefined;
+  }
+  if (runtime.onSendCDPMessageError === dispatchCdpSendError) {
+    runtime.onSendCDPMessageError = undefined;
+  }
+  if (callbackRuntime === runtime) callbackRuntime = undefined;
+}
+
+/** Stop all runtime work before an embedded Node context is discarded. */
+export function disposeBrowserRuntime(
+  runtime: EgoCdpCallbackRuntime | undefined = callbackRuntime,
+): void {
+  releaseRuntimeCallbacks(runtime);
+  rejectAllPending(new Error("ego-browser runtime was disposed"));
+  browserEventSubscribers.clear();
+  pageEventSubscribers.clear();
+  invalidateSession();
+}
+
+/** Subscribe to Target/Browser events without consuming the legacy event queue. */
+export function subscribeBrowserEvents(
+  listener: (event: any) => void,
+): () => void {
+  if (typeof listener !== "function") {
+    throw new TypeError("browser event listener must be a function");
+  }
+  browserEventSubscribers.add(listener);
+  return () => browserEventSubscribers.delete(listener);
+}
+
+/** Subscribe to session events for one browser target. */
+export function subscribePageEvents(
+  targetId: string,
+  listener: (event: any) => void,
+): () => void {
+  if (typeof targetId !== "string" || targetId.length === 0) {
+    throw new TypeError("page event subscription requires a targetId");
+  }
+  if (typeof listener !== "function") {
+    throw new TypeError("page event listener must be a function");
+  }
+  let listeners = pageEventSubscribers.get(targetId);
+  if (!listeners) {
+    listeners = new Set();
+    pageEventSubscribers.set(targetId, listeners);
+  }
+  listeners.add(listener);
+  return () => {
+    listeners?.delete(listener);
+    if (listeners?.size === 0) pageEventSubscribers.delete(targetId);
+  };
+}
+
 function rawCdp(
   method,
   params: any = {},
@@ -42,8 +504,7 @@ function rawCdp(
   timeoutMs = RESPONSE_TIMEOUT_MS,
 ) {
   const runtime = browserEgo();
-  runtime.onCDPMessage = handleMessage;
-  runtime.onSendCDPMessageError = handleSendError;
+  bindRuntimeCallbacks(runtime);
   const id = nextMessageId++;
   const payload = JSON.stringify({
     id,
@@ -54,9 +515,23 @@ function rawCdp(
   return new Promise<any>((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      reject(new Error(`CDP request timed out: ${method}`));
+      // Commands sent outside browserCdp() skip its dialog check. Name the
+      // dialog if one is what stalled this command.
+      const dialog =
+        sessionId && !DIALOG_SAFE_METHOD(method)
+          ? pendingDialog(sessionId)
+          : null;
+      reject(
+        dialog
+          ? new PageDialogOpenedError(method, sessionId, dialog, {
+              alreadyOpen: true,
+            })
+          : new CdpRequestTimeoutError(method, timeoutMs, sessionId),
+      );
     }, timeoutMs);
     pending.set(id, {
+      method,
+      sessionId,
       resolve: (response) => {
         clearTimeout(timer);
         resolve(response);
@@ -71,7 +546,7 @@ function rawCdp(
     } catch (error) {
       clearTimeout(timer);
       pending.delete(id);
-      reject(error);
+      reject(buildEgoError(error));
     }
   });
 }
@@ -83,74 +558,374 @@ export async function browserCdp(
   timeoutMs = RESPONSE_TIMEOUT_MS,
 ) {
   // Test mock: cdpOverride bypasses everything including session injection.
+  // Include the effective timeout so tests can verify timing contracts without
+  // waiting for a real CDP deadline.
   if (state.cdpOverride) {
-    return state.cdpOverride(method, params, sessionId);
+    return state.cdpOverride(method, params, sessionId, timeoutMs);
   }
   const explicit = sessionId !== undefined;
   let effective = sessionId;
   if (!explicit && !BROWSER_LEVEL(method)) {
     effective = await ensureSession();
   }
+  const dialog =
+    effective && !DIALOG_SAFE_METHOD(method) ? pendingDialog(effective) : null;
+  if (dialog) {
+    throw new PageDialogOpenedError(method, effective, dialog, {
+      alreadyOpen: true,
+    });
+  }
   try {
-    return await rawCdp(method, params, effective, timeoutMs);
+    const response = await rawCdp(method, params, effective, timeoutMs);
+    recordCommandState(method, params, effective, response);
+    return response;
   } catch (error) {
     const lost = SESSION_LOST.test(error?.message || "");
     if (lost && !explicit && !BROWSER_LEVEL(method)) {
-      invalidateSession();
-      const fresh = await ensureSession();
-      return rawCdp(method, params, fresh, timeoutMs);
+      const lostTargetId = effective
+        ? sessionTargets.get(effective)
+        : defaultTargetId;
+      if (lostTargetId) clearTargetSession(lostTargetId);
+      const fresh = await ensureSession(lostTargetId);
+      const response = await rawCdp(method, params, fresh, timeoutMs);
+      recordCommandState(method, params, fresh, response);
+      return response;
     }
     throw error;
   }
 }
 
-export async function ensureSession() {
-  if (state.sessionId && Date.now() - state.sessionAt < SESSION_TTL_MS) {
-    return state.sessionId;
+function recordCommandState(method, params, sessionId, response) {
+  if (method === "Target.attachToTarget") {
+    const attachedSessionId = response.result?.sessionId || response.sessionId;
+    if (params?.targetId && attachedSessionId) {
+      registerSession(params.targetId, attachedSessionId);
+      enableEgoAutomation(attachedSessionId);
+    }
+    return;
   }
-  if (state.sessionInflight) {
-    return state.sessionInflight;
+  if (method === "Target.detachFromTarget" && params?.sessionId) {
+    const targetId = sessionTargets.get(params.sessionId);
+    if (targetId) clearTargetSession(targetId);
+    return;
   }
-  state.sessionInflight = (async () => {
+  if (!sessionId) return;
+  const targetId = sessionTargets.get(sessionId);
+  if (!targetId) return;
+  const target = targetStates.get(targetId);
+  if (!target) return;
+  if (method === "Network.enable") {
+    if (!target.networkDomainEnabled) {
+      target.lastNetworkActivityAt = state.now();
+    }
+    target.networkDomainEnabled = true;
+  }
+  if (method === "Network.disable") {
+    target.networkDomainEnabled = false;
+    target.inflightNetworkRequests.clear();
+    target.ignoredFaviconRequestIds.clear();
+    target.lastNetworkActivityAt = state.now();
+  }
+  if (method === "Target.setAutoAttach") {
+    target.autoAttachEnabled = params?.autoAttach === true;
+  }
+}
+
+export async function ensureSession(
+  requestedTargetId = undefined,
+  timeoutMs = RESPONSE_TIMEOUT_MS,
+) {
+  const cachedTargetId =
+    requestedTargetId || state.preferredTargetId || defaultTargetId;
+  const cached = cachedTargetId ? targetStates.get(cachedTargetId) : undefined;
+  // Session setup is best-effort and shared: an unanswered request keeps
+  // running for later callers, while this caller's wait stays short so that
+  // the command it actually came for gets the rest of its budget.
+  const setupWaitMs = Math.min(Math.max(1, timeoutMs), SESSION_SETUP_WAIT_MS);
+  if (cached?.sessionId && Date.now() - cached.sessionAt < SESSION_TTL_MS) {
+    await Promise.all([
+      enablePageEvents(cached.sessionId, setupWaitMs),
+      enableNetworkTrackingForSession(cached.sessionId, false, setupWaitMs),
+      enableOopifAutoAttach(cached.sessionId, setupWaitMs),
+    ]);
+    cached.sessionAt = Date.now();
+    return cached.sessionId;
+  }
+
+  let targetId = requestedTargetId;
+  if (!targetId) {
+    const result: any = await invokeEgo("listTabs", () =>
+      browserEgo().listTabs(),
+    );
+    const tabs = result?.tabs || result?.targetInfos || [];
+    const preferred = state.preferredTargetId
+      ? tabs.find((tab) => tab.targetId === state.preferredTargetId)
+      : null;
+    const active =
+      preferred || tabs.find((tab) => tab.active) || tabs[tabs.length - 1];
+    if (!active) {
+      throw new Error("no active tab to attach session");
+    }
+    targetId = active.targetId;
+  }
+
+  defaultTargetId = targetId;
+  const target = targetState(targetId);
+  if (target.sessionInflight) {
+    return target.sessionInflight;
+  }
+  target.sessionInflight = (async () => {
     try {
-      const result = assertNoEgoError(await browserEgo().listTabs());
-      const tabs = result?.tabs || result?.targetInfos || [];
-      const preferred = state.preferredTargetId
-        ? tabs.find((t) => t.targetId === state.preferredTargetId)
-        : null;
-      const active =
-        preferred || tabs.find((t) => t.active) || tabs[tabs.length - 1];
-      if (!active) {
-        throw new Error("no active tab to attach session");
-      }
-      const targetId = active.targetId;
-      if (targetId !== state.sessionTargetId || !state.sessionId) {
+      if (!target.sessionId) {
         const attached = await rawCdp(
           "Target.attachToTarget",
           { targetId, flatten: true },
           undefined,
+          timeoutMs,
         );
-        state.sessionId = attached.result?.sessionId || attached.sessionId;
-        state.sessionTargetId = targetId;
+        const sessionId = attached.result?.sessionId || attached.sessionId;
+        if (!sessionId) {
+          throw new Error("Target.attachToTarget returned no sessionId");
+        }
+        registerSession(targetId, sessionId);
       }
-      await enablePageEvents(state.sessionId);
-      state.sessionAt = Date.now();
-      return state.sessionId;
+      enableEgoAutomation(target.sessionId);
+      await Promise.all([
+        enablePageEvents(target.sessionId, setupWaitMs),
+        enableNetworkTrackingForSession(target.sessionId, false, setupWaitMs),
+        enableOopifAutoAttach(target.sessionId, setupWaitMs),
+      ]);
+      target.sessionAt = Date.now();
+      return target.sessionId;
     } finally {
-      state.sessionInflight = null;
+      target.sessionInflight = null;
     }
   })();
-  return state.sessionInflight;
+  return target.sessionInflight;
 }
 
-export function invalidateSession() {
-  if (state.sessionId) {
-    pageEnabledSessions.delete(state.sessionId);
-    pendingDialogs.delete(state.sessionId);
+/**
+ * Attach sessions for every live OOPIF that belongs to one top-level Page.
+ * Standard CDP reports an iframe target's parent as a frame id. The frame tree
+ * and target metadata together recover the nearest Page/OOPIF target ancestor
+ * without admitting unrelated iframe targets.
+ */
+export async function ensureFrameSessions(
+  pageTargetId: string,
+  timeoutMs = RESPONSE_TIMEOUT_MS,
+) {
+  if (typeof pageTargetId !== "string" || pageTargetId.length === 0) {
+    throw new TypeError("ensureFrameSessions requires a non-empty targetId");
   }
-  state.sessionId = null;
-  state.sessionTargetId = null;
-  state.sessionAt = 0;
+  const startedAt = state.now();
+  const deadline = startedAt + Math.max(1, timeoutMs);
+  const remaining = () => Math.max(1, deadline - state.now());
+  const pageSessionId = await ensureSession(pageTargetId, remaining());
+  let response;
+  let frameTreeResponse;
+  try {
+    [response, frameTreeResponse] = await Promise.all([
+      browserCdp("Target.getTargets", {}, undefined, remaining()),
+      browserCdp("Page.getFrameTree", {}, pageSessionId, remaining()),
+    ]);
+  } catch (error) {
+    // The browser process answers Target.getTargets on its own, so a frame
+    // tree timeout means the Page's renderer did not answer within the budget
+    // this call had left: name that instead of the last command sent.
+    if (
+      isCdpRequestTimeoutError(error) &&
+      error.method === "Page.getFrameTree"
+    ) {
+      throw new PageUnresponsiveError(
+        "Page.getFrameTree",
+        state.now() - startedAt,
+        pageTargetId,
+        pageSessionId,
+      );
+    }
+    throw error;
+  }
+  const targetInfos =
+    response?.result?.targetInfos || response?.targetInfos || [];
+  const frameTree =
+    frameTreeResponse?.result?.frameTree || frameTreeResponse?.frameTree;
+  const frameParents = new Map<string, string | undefined>();
+  const collectFrameGraph = (
+    tree: any,
+    recursiveParentId: string | undefined,
+  ) => {
+    const frameId = tree?.frame?.id;
+    if (typeof frameId !== "string") return;
+    const protocolParentId = tree?.frame?.parentId;
+    frameParents.set(
+      frameId,
+      typeof protocolParentId === "string"
+        ? protocolParentId
+        : recursiveParentId,
+    );
+    for (const child of tree?.childFrames || []) {
+      collectFrameGraph(child, frameId);
+    }
+  };
+  if (frameTree) collectFrameGraph(frameTree, undefined);
+  const rootFrameId = frameTree?.frame?.id;
+
+  const iframeInfos = targetInfos.filter(
+    (info) => info?.type === "iframe" && typeof info.targetId === "string",
+  );
+  const iframeInfoByTarget = new Map(
+    iframeInfos.map((info) => [info.targetId as string, info]),
+  );
+  const reportedParentFrameId = (info: any): string | undefined => {
+    const parentFrameId = info?.parentFrameId ?? info?.parentId;
+    return typeof parentFrameId === "string" ? parentFrameId : undefined;
+  };
+  const parentFrameIdOf = (frameId: string): string | undefined => {
+    if (frameParents.has(frameId)) return frameParents.get(frameId);
+    return reportedParentFrameId(iframeInfoByTarget.get(frameId));
+  };
+  const ancestryToPage = (
+    frameId: string,
+  ): { belongs: boolean; depth: number } => {
+    let current: string | undefined = frameId;
+    let depth = 0;
+    const visited = new Set<string>();
+    while (current && !visited.has(current)) {
+      if (current === pageTargetId || current === rootFrameId) {
+        return { belongs: true, depth };
+      }
+      visited.add(current);
+      current = parentFrameIdOf(current);
+      depth += 1;
+    }
+    return { belongs: false, depth };
+  };
+
+  const descendants = iframeInfos
+    .map((info) => ({ info, ancestry: ancestryToPage(info.targetId) }))
+    .filter(({ ancestry }) => ancestry.belongs)
+    .sort((left, right) => left.ancestry.depth - right.ancestry.depth)
+    .map(({ info }) => info);
+  const liveTargetIds = new Set(
+    descendants.map((info) => info.targetId as string),
+  );
+  const allLiveIframeTargetIds = new Set(
+    iframeInfos.map((info) => info.targetId as string),
+  );
+  const knownDescendants: string[] = [];
+  const collectKnownDescendants = (parentTargetId: string) => {
+    for (const childTargetId of childTargets.get(parentTargetId) || []) {
+      knownDescendants.push(childTargetId);
+      collectKnownDescendants(childTargetId);
+    }
+  };
+  collectKnownDescendants(pageTargetId);
+  for (const knownTargetId of [...knownDescendants].reverse()) {
+    // Target.getTargets and Page.getFrameTree are separate snapshots. A live
+    // target can momentarily be absent from the frame tree during a swap, so
+    // only target disappearance is authoritative enough to discard a session.
+    if (!allLiveIframeTargetIds.has(knownTargetId)) {
+      clearTargetSessionTree(knownTargetId, { remove: true });
+    }
+  }
+  for (const knownTargetId of knownDescendants) {
+    if (
+      allLiveIframeTargetIds.has(knownTargetId) &&
+      !liveTargetIds.has(knownTargetId)
+    ) {
+      const info = iframeInfoByTarget.get(knownTargetId);
+      if (info) {
+        descendants.push(info);
+        liveTargetIds.add(knownTargetId);
+      }
+    }
+  }
+
+  const nearestTargetParent = (info: any): string => {
+    const ancestry = ancestryToPage(info.targetId);
+    if (!ancestry.belongs) {
+      const knownParentTargetId = parentTargets.get(info.targetId);
+      if (knownParentTargetId) return knownParentTargetId;
+    }
+    let current = parentFrameIdOf(info.targetId);
+    const visited = new Set<string>();
+    while (current && !visited.has(current)) {
+      if (current === pageTargetId || current === rootFrameId) {
+        return pageTargetId;
+      }
+      if (liveTargetIds.has(current)) return current;
+      visited.add(current);
+      current = parentFrameIdOf(current);
+    }
+    return pageTargetId;
+  };
+
+  const sessionByTarget = new Map<string, string>([
+    [pageTargetId, pageSessionId],
+  ]);
+  const vanishedTargetIds = new Set<string>();
+  for (const info of descendants) {
+    let sessionId: string;
+    try {
+      sessionId = await ensureSession(info.targetId, remaining());
+    } catch (error) {
+      // Target.getTargets is a snapshot: an OOPIF can be destroyed between
+      // enumeration and attach. Such a frame is no longer part of the page, so
+      // drop it rather than fail (or restart) the whole discovery. Errors on
+      // the Page target itself are raised by ensureSession above and are not
+      // retried here.
+      if (!isRetryableFrameLifecycleError(error)) throw error;
+      vanishedTargetIds.add(info.targetId);
+      liveTargetIds.delete(info.targetId);
+      clearTargetSessionTree(info.targetId, { remove: true });
+      continue;
+    }
+    registerTargetParent(info.targetId, nearestTargetParent(info));
+    sessionByTarget.set(info.targetId, sessionId);
+  }
+
+  const sessions = new Map<string, string>() as Map<string, string> & {
+    parentFrameIds?: ReadonlyMap<string, string | undefined>;
+  };
+  const collectFrameSessions = (
+    tree: any,
+    inheritedSessionId: string,
+    isRoot = false,
+  ) => {
+    const frameId = tree?.frame?.id;
+    if (typeof frameId !== "string" || vanishedTargetIds.has(frameId)) return;
+    const sessionId = sessionByTarget.get(frameId) || inheritedSessionId;
+    if (!isRoot) sessions.set(frameId, sessionId);
+    for (const child of tree?.childFrames || []) {
+      collectFrameSessions(child, sessionId);
+    }
+  };
+  if (frameTree) collectFrameSessions(frameTree, pageSessionId, true);
+  for (const info of descendants) {
+    if (vanishedTargetIds.has(info.targetId)) continue;
+    if (!sessions.has(info.targetId)) {
+      sessions.set(info.targetId, sessionByTarget.get(info.targetId)!);
+    }
+  }
+  sessions.parentFrameIds = new Map(
+    [...sessions.keys()].map((frameId) => [frameId, parentFrameIdOf(frameId)]),
+  );
+  return sessions;
+}
+
+export function invalidateSession(targetId = undefined) {
+  if (targetId) {
+    clearTargetSessionTree(targetId, { remove: true });
+    return;
+  }
+  for (const knownTargetId of [...targetStates.keys()]) {
+    clearTargetSession(knownTargetId, { remove: true });
+  }
+  browserEvents.length = 0;
+  childTargets.clear();
+  parentTargets.clear();
+  defaultTargetId = null;
+  resetUserControlProbe();
 }
 
 export function setPreferredTarget(targetId) {
@@ -161,72 +936,634 @@ export function clearPreferredTarget() {
   state.preferredTargetId = null;
 }
 
-export function drainBrowserEvents() {
-  const out = events.splice(0, events.length);
+export function drainBrowserEvents(sessionId = undefined) {
+  const targetId = sessionId
+    ? sessionTargets.get(sessionId)
+    : state.preferredTargetId || defaultTargetId;
+  const target = targetId ? targetStates.get(targetId) : undefined;
+  const out = browserEvents.splice(0, browserEvents.length);
+  if (target) out.push(...target.events.splice(0, target.events.length));
   return out;
 }
 
-export function waitForBrowserEvent(
-  predicate,
-  timeoutMs = state.defaultTimeout,
-) {
-  return new Promise((resolve, reject) => {
-    const waiter = {
-      predicate,
-      resolve,
-      reject,
-      timer: setTimeout(() => {
-        const index = eventWaiters.indexOf(waiter);
-        if (index >= 0) eventWaiters.splice(index, 1);
-        reject(new Error("page.waitForEvent timed out"));
-      }, timeoutMs),
-    };
-    eventWaiters.push(waiter);
-  });
+/** Drain only events routed to one Page session. */
+export function drainPageEvents(sessionId) {
+  const targetId = sessionId ? sessionTargets.get(sessionId) : undefined;
+  const target = targetId ? targetStates.get(targetId) : undefined;
+  return target ? target.events.splice(0, target.events.length) : [];
 }
 
-export function subscribeBrowserEvent(
-  method: string,
-  sessionId: string | undefined,
-  listener: (event: any) => void,
-) {
-  const subscriber = { method, sessionId, listener };
-  eventSubscribers.add(subscriber);
-  return () => eventSubscribers.delete(subscriber);
+/**
+ * Return the JavaScript dialog blocking the Page that owns this session. An
+ * OOPIF session reports its top-level Page's dialog: Chromium delivers every
+ * dialog event on the Page session, and a dialog opened by any frame stalls
+ * that frame's renderer.
+ */
+export function pendingDialog(sessionId) {
+  const targetId = sessionId
+    ? sessionTargets.get(sessionId)
+    : state.preferredTargetId || defaultTargetId;
+  const dialog = targetId
+    ? targetStates.get(pageRootTargetId(targetId))?.pendingDialog
+    : null;
+  return dialog ? { ...dialog } : null;
 }
 
-export function pendingDialog(sessionId = state.sessionId) {
-  if (sessionId && pendingDialogs.has(sessionId)) {
-    return { ...pendingDialogs.get(sessionId) };
+export function isNetworkDomainEnabled(sessionId) {
+  const targetId = sessionId ? sessionTargets.get(sessionId) : undefined;
+  return targetId
+    ? Boolean(targetStates.get(targetId)?.networkDomainEnabled)
+    : false;
+}
+
+/** Ensure Network events are available on every selected Page/OOPIF session. */
+export async function ensureNetworkTracking(
+  sessionIds: string[],
+  timeoutMs = RESPONSE_TIMEOUT_MS,
+): Promise<void> {
+  const unique = [...new Set(sessionIds.filter(Boolean))];
+  await Promise.all(
+    unique.map((sessionId) =>
+      enableNetworkTrackingForSession(sessionId, true, timeoutMs),
+    ),
+  );
+}
+
+/** Read continuous network state without consuming the public Page event queue. */
+export function networkActivity(sessionIds: string[]): {
+  tracking: boolean;
+  inflight: number;
+  lastActivityAt: number;
+  pendingRequests: string[];
+} {
+  let tracking = sessionIds.length > 0;
+  let inflight = 0;
+  let lastActivityAt = 0;
+  const pendingRequests: string[] = [];
+  const counted = new Set<string>();
+  for (const sessionId of new Set(sessionIds)) {
+    const targetId = sessionTargets.get(sessionId);
+    const target = targetId ? targetStates.get(targetId) : undefined;
+    if (
+      !target ||
+      target.sessionId !== sessionId ||
+      !target.networkDomainEnabled
+    ) {
+      tracking = false;
+      continue;
+    }
+    // A request migrates to a child frame target the moment that target
+    // attaches, which can precede the caller's next frame enumeration. Count
+    // the whole subtree so migration never hides an in-flight request.
+    for (const treeTargetId of pageTreeTargetIds(targetId!)) {
+      if (counted.has(treeTargetId)) continue;
+      counted.add(treeTargetId);
+      const member = targetStates.get(treeTargetId);
+      if (!member) continue;
+      inflight += member.inflightNetworkRequests.size;
+      lastActivityAt = Math.max(lastActivityAt, member.lastNetworkActivityAt);
+      for (const request of member.inflightNetworkRequests.values()) {
+        pendingRequests.push(
+          `${request.type || "Other"} ${request.url || request.requestId}`,
+        );
+      }
+    }
   }
-  return null;
+  return { tracking, inflight, lastActivityAt, pendingRequests };
 }
 
-async function enablePageEvents(sessionId) {
-  if (!sessionId || pageEnabledSessions.has(sessionId)) {
+/** Refresh and return the main and known OOPIF sessions for one Page. */
+export async function pageNetworkSessions(
+  sessionId: string,
+  timeoutMs = RESPONSE_TIMEOUT_MS,
+): Promise<string[]> {
+  const targetId = sessionTargets.get(sessionId);
+  if (!targetId) {
+    throw new Error(
+      "cannot resolve Page network sessions from a detached session",
+    );
+  }
+  const frameSessions = await ensureFrameSessions(targetId, timeoutMs);
+  const currentMainSession = targetStates.get(targetId)?.sessionId;
+  if (!currentMainSession) {
+    throw new Error("Page session was detached while refreshing network state");
+  }
+  return [...new Set([currentMainSession, ...frameSessions.values()])];
+}
+
+/**
+ * Suppress the operating-system file picker and observe the next chooser in
+ * one Page session. The caller owns the short-lived interception and must
+ * dispose it after setting files or completing an input action.
+ */
+export function prepareFileChooser(
+  sessionId: string,
+  { timeoutMs, cancel }: { timeoutMs: number; cancel: boolean },
+): FileChooserInterception {
+  const targetId = sessionTargets.get(sessionId);
+  const target = targetId ? targetStates.get(targetId) : undefined;
+  if (!target) {
+    throw new Error("cannot intercept a file chooser without a Page session");
+  }
+  if (target.fileChooserInterception) {
+    throw new Error("this Page is already waiting for a file chooser");
+  }
+
+  let observed: FileChooserOpenedEvent | undefined;
+  let resolveEvent!: (event: FileChooserOpenedEvent) => void;
+  let rejectEvent!: (error: Error) => void;
+  const event = new Promise<FileChooserOpenedEvent>((resolve, reject) => {
+    resolveEvent = resolve;
+    rejectEvent = reject;
+  });
+  // A safety interceptor normally consumes peek() instead of awaiting event.
+  // Attach a rejection observer so disposal never creates an unhandled promise.
+  void event.catch(() => {});
+
+  const interception: any = {
+    cancelPromise: undefined,
+    event,
+    reject: rejectEvent,
+    resolve(value: FileChooserOpenedEvent) {
+      if (observed) return;
+      observed = value;
+      clearTimeout(interception.timer);
+      resolveEvent(value);
+      if (cancel) {
+        // An empty file list completes the intercepted chooser without opening
+        // the native picker or changing the input's current selection.
+        interception.cancelPromise = rawCdp(
+          "DOM.setFileInputFiles",
+          { files: [], backendNodeId: value.backendNodeId },
+          sessionId,
+        ).catch(() => {});
+      }
+    },
+    peek() {
+      return observed;
+    },
+    async dispose(reason?: Error) {
+      if (target.fileChooserInterception !== interception) return;
+      target.fileChooserInterception = null;
+      clearTimeout(interception.timer);
+      if (!observed && reason) rejectEvent(reason);
+      await interception.ready.catch(() => {});
+      await interception.cancelPromise;
+      const disable = rawCdp(
+        "Page.setInterceptFileChooserDialog",
+        { enabled: false },
+        sessionId,
+      ).catch(() => {});
+      if (target.pendingDialog) {
+        // Chromium can hold this housekeeping response until the modal dialog
+        // closes. Send it now, but do not keep the triggering action's gate
+        // occupied; Page.handleJavaScriptDialog must be able to run next.
+        void disable;
+        return;
+      }
+      await disable;
+    },
+  };
+  target.fileChooserInterception = interception;
+  interception.ready = rawCdp(
+    "Page.setInterceptFileChooserDialog",
+    { enabled: true },
+    sessionId,
+  )
+    .then(() => {
+      interception.timer = setTimeout(() => {
+        const error: any = new Error(
+          `page.waitForFileChooser timed out after ${timeoutMs}ms`,
+        );
+        error.code = "EGO_FILE_CHOOSER_TIMEOUT";
+        if (target.fileChooserInterception === interception) {
+          target.fileChooserInterception = null;
+          rejectEvent(error);
+          void rawCdp(
+            "Page.setInterceptFileChooserDialog",
+            { enabled: false },
+            sessionId,
+          ).catch(() => {});
+        }
+      }, timeoutMs);
+    })
+    .catch((error) => {
+      if (target.fileChooserInterception === interception) {
+        target.fileChooserInterception = null;
+      }
+      rejectEvent(error);
+      throw error;
+    });
+  return interception;
+}
+
+/**
+ * Turn on Ego Lite's automation hooks for one renderer session. They keep the
+ * session's Runtime domain from reporting console messages and capturing call
+ * stacks, both of which pages can observe to detect CDP automation. The
+ * browser keeps the flag across renderer swaps, so it is sent once per session
+ * and before anything else, without waiting: older browsers reject the unknown
+ * domain, and a renderer stalled by a dialog must not block attachment.
+ */
+function enableEgoAutomation(sessionId: string): void {
+  const targetId = sessionId ? sessionTargets.get(sessionId) : undefined;
+  const target = targetId ? targetStates.get(targetId) : undefined;
+  if (
+    !target ||
+    target.sessionId !== sessionId ||
+    target.egoAutomationEnabled
+  ) {
+    return;
+  }
+  target.egoAutomationEnabled = true;
+  void rawCdp("egoAutomated.enable", {}, sessionId).catch(() => {});
+}
+
+async function enablePageEvents(sessionId, timeoutMs = RESPONSE_TIMEOUT_MS) {
+  const targetId = sessionId ? sessionTargets.get(sessionId) : undefined;
+  const target = targetId ? targetStates.get(targetId) : undefined;
+  if (!target || target.sessionId !== sessionId || target.pageEventsEnabled) {
     return;
   }
   try {
-    await rawCdp("Page.enable", {}, sessionId);
-    pageEnabledSessions.add(sessionId);
+    await sharedSetupCommand(
+      target,
+      "pageEnableInflight",
+      "Page.enable",
+      {},
+      sessionId,
+      timeoutMs,
+      () => {
+        target.pageEventsEnabled = true;
+      },
+    );
   } catch {
     // Dialog tracking is best-effort. Do not make all helpers fail on targets
-    // that reject Page.enable, such as unusual internal pages.
+    // that reject Page.enable, such as unusual internal pages, or that cannot
+    // answer yet because a navigation has not committed.
   }
 }
 
-// Local send failures for ego.sendCDPMessage() arrive here (task inactive,
-// user-controlled, not selected/claimed, host gone) instead of as a CDP
-// response, so the matching request would otherwise sit until the 15s timeout.
-// The callback carries no request id; these failures are task-level (every
-// in-flight send fails the same way), so reject all pending requests, routing
-// the stable code through buildEgoError to use the ego-browser-owned wording.
+async function enableNetworkTrackingForSession(
+  sessionId: string,
+  required = false,
+  timeoutMs = RESPONSE_TIMEOUT_MS,
+): Promise<void> {
+  const targetId = sessionId ? sessionTargets.get(sessionId) : undefined;
+  const target = targetId ? targetStates.get(targetId) : undefined;
+  if (!target || target.sessionId !== sessionId) {
+    if (required) {
+      throw new Error(
+        "cannot track network activity for a detached Page session",
+      );
+    }
+    return;
+  }
+  if (target.networkDomainEnabled) return;
+
+  try {
+    await sharedSetupCommand(
+      target,
+      "networkEnableInflight",
+      "Network.enable",
+      {},
+      sessionId,
+      timeoutMs,
+      () => {
+        // Events and an OOPIF request migration can race ahead of this
+        // response. Network.disable and session replacement already clear
+        // stale state, so enabling must preserve everything observed for the
+        // current session.
+        if (!target.networkDomainEnabled) {
+          target.lastNetworkActivityAt = state.now();
+          target.networkDomainEnabled = true;
+        }
+      },
+    );
+  } catch (error) {
+    if (required) throw error;
+  }
+  if (required && !target.networkDomainEnabled) {
+    throw new Error(
+      "network tracking was interrupted by a detached Page session",
+    );
+  }
+}
+
+async function enableOopifAutoAttach(
+  sessionId: string,
+  timeoutMs = RESPONSE_TIMEOUT_MS,
+): Promise<void> {
+  const targetId = sessionId ? sessionTargets.get(sessionId) : undefined;
+  const target = targetId ? targetStates.get(targetId) : undefined;
+  if (!target || target.sessionId !== sessionId || target.autoAttachEnabled) {
+    return;
+  }
+  try {
+    await sharedSetupCommand(
+      target,
+      "autoAttachInflight",
+      "Target.setAutoAttach",
+      OOPIF_AUTO_ATTACH_PARAMS,
+      sessionId,
+      timeoutMs,
+      () => {
+        target.autoAttachEnabled = true;
+      },
+    );
+  } catch {
+    // Page APIs still work on bridges without auto-attach. Frame discovery can
+    // attach explicitly later, but exact network-idle tracking needs support.
+  }
+}
+
+type SetupInflightKey =
+  | "pageEnableInflight"
+  | "networkEnableInflight"
+  | "autoAttachInflight";
+
+/**
+ * Send one session-setup command at most once at a time per session, and
+ * bound this caller's wait without cancelling the request. The request keeps
+ * the full transport timeout, so a Page that answers late (after its pending
+ * navigation commits) still records the enabled state for later callers
+ * instead of each caller sending the command again and waiting again.
+ */
+function sharedSetupCommand(
+  target,
+  key: SetupInflightKey,
+  method: string,
+  params: Record<string, unknown>,
+  sessionId: string,
+  timeoutMs: number,
+  onSuccess: () => void,
+): Promise<void> {
+  let inflight: Promise<void> | null = target[key];
+  if (!inflight) {
+    inflight = rawCdp(method, params, sessionId).then(() => {
+      if (target.sessionId === sessionId) onSuccess();
+    });
+    target[key] = inflight;
+    const clear = () => {
+      if (target[key] === inflight) target[key] = null;
+    };
+    void inflight.then(clear, clear);
+  }
+  return waitForSharedCdpRequest(inflight, method, sessionId, timeoutMs);
+}
+
+/** Bound one caller's wait without cancelling the shared CDP request. */
+function waitForSharedCdpRequest(
+  request: Promise<void>,
+  method: string,
+  sessionId: string,
+  timeoutMs: number,
+): Promise<void> {
+  const callerTimeoutMs = Math.max(1, timeoutMs);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      // Mirror rawCdp's timeout: name a dialog if one is what stalled it.
+      const dialog = DIALOG_SAFE_METHOD(method)
+        ? null
+        : pendingDialog(sessionId);
+      reject(
+        dialog
+          ? new PageDialogOpenedError(method, sessionId, dialog, {
+              alreadyOpen: true,
+            })
+          : new CdpRequestTimeoutError(method, callerTimeoutMs, sessionId),
+      );
+    }, callerTimeoutMs);
+    request.then(
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
+function initializeAutoAttachedTarget(
+  sessionId: string,
+  waitingForDebugger: boolean,
+): void {
+  // Invoke every initializer before awaiting any result. Chromium can pause an
+  // OOPIF at attachment, so waiting for Network.enable before sending resume
+  // would deadlock if the protocol response depends on renderer progress.
+  // Automation hooks go first so they cover the frame's first script.
+  enableEgoAutomation(sessionId);
+  const pageEvents = enablePageEvents(sessionId);
+  const networkEvents = enableNetworkTrackingForSession(sessionId);
+  const nestedFrames = enableOopifAutoAttach(sessionId);
+  const resume = waitingForDebugger
+    ? rawCdp("Runtime.runIfWaitingForDebugger", {}, sessionId).catch(() => {})
+    : Promise.resolve();
+  void Promise.allSettled([pageEvents, networkEvents, nestedFrames, resume]);
+}
+
+/**
+ * Resume a non-frame target (worker, worklet, ...) paused by auto-attach and
+ * drop its session, so the harness never holds a debugger on targets it does
+ * not drive.
+ */
+function releaseAutoAttachedTarget(
+  sessionId: string,
+  parentSessionId: string,
+  waitingForDebugger: boolean,
+): void {
+  // Detach is answered by the browser and could overtake a resume still on its
+  // way to the renderer, so only detach after the resume has been answered.
+  const resume = waitingForDebugger
+    ? rawCdp("Runtime.runIfWaitingForDebugger", {}, sessionId)
+    : Promise.resolve();
+  void resume
+    .catch(() => {})
+    .then(() =>
+      rawCdp("Target.detachFromTarget", { sessionId }, parentSessionId),
+    )
+    .catch(() => {});
+}
+
+function finishNetworkRequest(targetId: string, requestId: string): void {
+  const now = state.now();
+  const rootTargetId = pageRootTargetId(targetId);
+  for (const pageTargetId of pageTreeTargetIds(rootTargetId)) {
+    const pageTarget = targetStates.get(pageTargetId);
+    if (!pageTarget) continue;
+    if (pageTarget.inflightNetworkRequests.delete(requestId)) {
+      pageTarget.lastNetworkActivityAt = now;
+    }
+  }
+}
+
+function isIgnoredFaviconRequest(targetId: string, requestId: string): boolean {
+  const rootTargetId = pageRootTargetId(targetId);
+  return pageTreeTargetIds(rootTargetId).some((pageTargetId) =>
+    targetStates.get(pageTargetId)?.ignoredFaviconRequestIds.has(requestId),
+  );
+}
+
+function clearIgnoredFaviconRequest(
+  targetId: string,
+  requestId: string,
+): boolean {
+  const rootTargetId = pageRootTargetId(targetId);
+  let deleted = false;
+  for (const pageTargetId of pageTreeTargetIds(rootTargetId)) {
+    deleted =
+      Boolean(
+        targetStates
+          .get(pageTargetId)
+          ?.ignoredFaviconRequestIds.delete(requestId),
+      ) || deleted;
+  }
+  return deleted;
+}
+
+function recordNetworkEvent(targetId: string, target, data): void {
+  // A response to Network.disable can be followed by a queued terminal event.
+  // Ignore it once tracking is off, while still accepting events that race the
+  // response to our own Network.enable request.
+  if (!target.networkDomainEnabled && !target.networkEnableInflight) return;
+  const requestId = data?.params?.requestId;
+  if (typeof requestId !== "string" || requestId.length === 0) return;
+
+  if (data.method === "Network.requestWillBeSent") {
+    const url = data.params?.request?.url;
+    // Chromium can omit the terminal event for its automatic favicon request.
+    // Playwright excludes favicons from network-idle accounting for the same
+    // reason, so they must never leave a permanent in-flight entry here.
+    if (
+      (typeof url === "string" && url.endsWith("/favicon.ico")) ||
+      isIgnoredFaviconRequest(targetId, requestId)
+    ) {
+      target.ignoredFaviconRequestIds.add(requestId);
+      if (target.inflightNetworkRequests.delete(requestId)) {
+        target.lastNetworkActivityAt = state.now();
+      }
+      return;
+    }
+    target.networkDomainEnabled = true;
+    target.inflightNetworkRequests.set(requestId, {
+      requestId,
+      ...(typeof data.params?.frameId === "string"
+        ? { frameId: data.params.frameId }
+        : {}),
+      ...(typeof data.params?.loaderId === "string"
+        ? { loaderId: data.params.loaderId }
+        : {}),
+      ...(typeof data.params?.type === "string"
+        ? { type: data.params.type }
+        : {}),
+      ...(typeof url === "string" ? { url } : {}),
+    });
+    target.lastNetworkActivityAt = state.now();
+    return;
+  }
+  if (
+    data.method === "Network.loadingFinished" ||
+    data.method === "Network.loadingFailed"
+  ) {
+    target.networkDomainEnabled = true;
+    if (clearIgnoredFaviconRequest(targetId, requestId)) return;
+    finishNetworkRequest(targetId, requestId);
+    target.lastNetworkActivityAt = state.now();
+  }
+}
+
+// Local send failures for ego.sendCDPMessage() arrive here instead of as a CDP
+// response. The callback carries no request id, so task-level failures reject
+// every pending request. User-control failures first probe the native task state:
+// the CDP callback does not carry the permission reason, while ordinary native
+// calls may do so on newer Ego Lite builds.
 function handleSendError(message, error_code) {
   if (pending.size === 0) return;
-  const error = buildEgoError({ error: message, error_code });
+
+  if (error_code !== "EGO_TASK_SPACE_USER_IN_CONTROL") {
+    rejectAllPending(buildEgoError({ error: message, error_code }));
+    return;
+  }
+  if (userControlProbeState === "stopped" && userControlStopError) {
+    rejectAllPending(userControlStopError);
+    return;
+  }
+  if (userControlProbeState === "probing") return;
+
+  userControlProbeState = "probing";
+  const generation = ++userControlProbeGeneration;
+  void probeUserControlReason(message, error_code, generation);
+}
+
+async function probeUserControlReason(
+  message: string,
+  error_code: string,
+  generation: number,
+): Promise<void> {
+  const fallback = { error: message, error_code };
+  const runtime = browserEgo();
+  if (typeof runtime.setAgentTaskState !== "function") {
+    stopForUserControl(fallback, generation);
+    return;
+  }
+
+  try {
+    const result = await runtime.setAgentTaskState("Waiting for the user");
+    if (generation !== userControlProbeGeneration) return;
+    if (isEgoUserControlError(result)) {
+      stopForUserControl(result, generation);
+      return;
+    }
+    if (result && typeof result === "object" && "error" in result) {
+      stopForUserControl(fallback, generation);
+      return;
+    }
+
+    // Control came back between the failed send and the probe. The original
+    // command still failed, but it must not create a new global hard stop.
+    userControlProbeState = "idle";
+    userControlStopError = null;
+    rejectAllPending(nativeSendError(message, error_code));
+  } catch (error) {
+    if (generation !== userControlProbeGeneration) return;
+    stopForUserControl(
+      isEgoUserControlError(error) ? error : fallback,
+      generation,
+    );
+  }
+}
+
+function stopForUserControl(errorLike: unknown, generation: number): void {
+  if (generation !== userControlProbeGeneration) return;
+  userControlStopError = buildEgoError(errorLike);
+  userControlProbeState = "stopped";
+  rejectAllPending(userControlStopError);
+}
+
+function rejectAllPending(error: Error): void {
   const entries = [...pending.values()];
   pending.clear();
   for (const entry of entries) entry.reject(error);
+}
+
+function nativeSendError(
+  message: string,
+  error_code: string,
+): Error & { error_code?: string } {
+  const error: Error & { error_code?: string } = new Error(
+    message || error_code || "CDP send failed",
+  );
+  if (error_code) error.error_code = error_code;
+  return error;
+}
+
+function resetUserControlProbe(): void {
+  userControlProbeGeneration += 1;
+  userControlProbeState = "idle";
+  userControlStopError = null;
 }
 
 function handleMessage(message) {
@@ -243,8 +1580,17 @@ function handleMessage(message) {
     }
     pending.delete(data.id);
     if (data.error) {
-      entry.reject(new Error(data.error.message || data.error));
+      const error: CdpCommandError = new Error(
+        data.error.message || data.error,
+      );
+      if (entry.sessionId) error.sessionId = entry.sessionId;
+      entry.reject(error);
       return;
+    }
+    if (userControlProbeState === "stopped") {
+      // A successful command proves control has returned. Re-arm detection so a
+      // later, separate takeover can run its own reason probe.
+      resetUserControlProbe();
     }
     entry.resolve(data);
     return;
@@ -253,61 +1599,127 @@ function handleMessage(message) {
     data.method === "Target.detachedFromTarget" ||
     data.method === "Target.targetDestroyed"
   ) {
-    const sessionId = data.params?.sessionId || data.sessionId;
-    if (sessionId) {
-      pageEnabledSessions.delete(sessionId);
-      pendingDialogs.delete(sessionId);
+    const targetId =
+      data.params?.targetId ||
+      data.params?.targetInfo?.targetId ||
+      (data.params?.sessionId
+        ? sessionTargets.get(data.params.sessionId)
+        : undefined);
+    if (targetId) {
+      clearTargetSessionTree(targetId, {
+        remove: data.method === "Target.targetDestroyed",
+      });
     }
-    const targetId = data.params?.targetId || data.params?.targetInfo?.targetId;
-    if (targetId && targetId === state.sessionTargetId) {
-      invalidateSession();
+  } else if (data.method === "Target.attachedToTarget") {
+    const sessionId = data.params?.sessionId;
+    const targetId = data.params?.targetInfo?.targetId;
+    const targetType = data.params?.targetInfo?.type;
+    const reportedParentFrameId =
+      data.params?.targetInfo?.parentFrameId ||
+      data.params?.targetInfo?.parentId;
+    // Target.attachedToTarget is emitted on the nearest owning target session.
+    // Prefer that target edge over parentFrameId, which may name a same-process
+    // frame and is not itself a debuggable target.
+    const sourceTargetId = data.sessionId
+      ? sessionTargets.get(data.sessionId)
+      : undefined;
+    const parentTargetId = sourceTargetId || reportedParentFrameId;
+    if (sessionId && targetId) registerSession(targetId, sessionId);
+    if (targetId && parentTargetId && targetId !== parentTargetId) {
+      registerTargetParent(targetId, parentTargetId);
     }
+    if (sessionId && targetType === "iframe") {
+      initializeAutoAttachedTarget(
+        sessionId,
+        data.params?.waitingForDebugger === true,
+      );
+    } else if (sessionId && sourceTargetId && targetType !== "page") {
+      // Auto-attached by one of this runtime's sessions: a worker, worklet, or
+      // other related target the harness does not drive.
+      releaseAutoAttachedTarget(
+        sessionId,
+        data.sessionId,
+        data.params?.waitingForDebugger === true,
+      );
+    } else if (sessionId && data.params?.waitingForDebugger === true) {
+      // A foreign auto-attach configuration may still deliver other related
+      // target types. Never leave an unrelated target paused by this runtime.
+      void rawCdp("Runtime.runIfWaitingForDebugger", {}, sessionId).catch(
+        () => {},
+      );
+    }
+  }
+  const sessionId = data.sessionId;
+  const targetId = sessionId ? sessionTargets.get(sessionId) : undefined;
+  const target = targetId ? targetStates.get(targetId) : undefined;
+  if (target && typeof data.method === "string") {
+    recordNetworkEvent(targetId, target, data);
   }
   if (data.method === "Page.javascriptDialogOpening") {
-    const sessionId = data.sessionId || state.sessionId;
-    if (sessionId) {
-      pendingDialogs.set(sessionId, data.params || {});
+    if (target) {
+      // A Page event proves the domain is enabled even if the Page.enable
+      // response is stalled behind this dialog and rejected below.
+      target.pageEventsEnabled = true;
+      const root = targetStates.get(pageRootTargetId(targetId));
+      if (root) {
+        root.pendingDialog = data.params || {};
+        rejectCommandsBlockedByDialog(
+          targetId,
+          root.pendingDialog as Record<string, unknown>,
+        );
+      }
     }
   } else if (data.method === "Page.javascriptDialogClosed") {
-    const sessionId = data.sessionId || state.sessionId;
-    if (sessionId) {
-      pendingDialogs.delete(sessionId);
+    const root = targetId
+      ? targetStates.get(pageRootTargetId(targetId))
+      : undefined;
+    if (root) root.pendingDialog = null;
+  } else if (data.method === "Page.fileChooserOpened") {
+    target?.fileChooserInterception?.resolve(data.params || {});
+  }
+  if (typeof data.method === "string" && BROWSER_LEVEL(data.method)) {
+    for (const listener of [...browserEventSubscribers]) {
+      guardNativeCallback("browser event subscriber", () => listener(data));
     }
   }
-  let deliveredToSubscriber = false;
-  for (const subscriber of eventSubscribers) {
-    if (subscriber.method !== data.method) continue;
-    if (subscriber.sessionId && subscriber.sessionId !== data.sessionId) {
+  if (targetId && typeof data.method === "string") {
+    for (const listener of [...(pageEventSubscribers.get(targetId) || [])]) {
+      guardNativeCallback("page event subscriber", () => listener(data));
+    }
+  }
+  const events = target ? target.events : browserEvents;
+  events.push(data);
+  capEvents(events);
+}
+
+function rejectCommandsBlockedByDialog(
+  targetId: string,
+  dialog: Record<string, unknown>,
+) {
+  // The dialog stalls whichever renderer opened it, and CDP does not say which
+  // frame session that is. Treat the whole Page tree as blocked.
+  const sessionIds = new Set(
+    pageTreeTargetIds(pageRootTargetId(targetId))
+      .map((id) => targetStates.get(id)?.sessionId)
+      .filter(Boolean),
+  );
+  for (const [id, entry] of pending) {
+    if (!sessionIds.has(entry.sessionId) || DIALOG_SAFE_METHOD(entry.method)) {
       continue;
     }
-    deliveredToSubscriber = true;
-    try {
-      subscriber.listener(data);
-    } catch (error) {
-      console.error("Browser event subscriber failed:", error);
-    }
+    pending.delete(id);
+    entry.reject(
+      new PageDialogOpenedError(entry.method, entry.sessionId, dialog),
+    );
   }
-  if (!(deliveredToSubscriber && data.method === "Page.screencastFrame")) {
-    events.push(data);
-    if (events.length > MAX_BUFFERED_EVENTS) {
-      events.splice(0, events.length - MAX_BUFFERED_EVENTS);
-    }
-  }
-  for (const waiter of [...eventWaiters]) {
-    let matched = false;
-    try {
-      matched = waiter.predicate(data);
-    } catch (error) {
-      clearTimeout(waiter.timer);
-      eventWaiters.splice(eventWaiters.indexOf(waiter), 1);
-      waiter.reject(error);
-      continue;
-    }
-    if (!matched) continue;
-    clearTimeout(waiter.timer);
-    eventWaiters.splice(eventWaiters.indexOf(waiter), 1);
-    waiter.resolve(data);
-  }
+}
+
+function rejectFileChooserInterception(target, error: Error) {
+  const interception = target.fileChooserInterception;
+  if (!interception) return;
+  target.fileChooserInterception = null;
+  clearTimeout(interception.timer);
+  interception.reject(error);
 }
 
 export function browserSnapshotRefsToRefMap(refMap, refs = []) {
@@ -319,12 +1731,13 @@ export function browserSnapshotRefsToRefMap(refMap, refs = []) {
     if (ref.backendNodeId === undefined || ref.backendNodeId === null) {
       continue;
     }
-    refMap.add(
-      String(ref.backendNodeId),
+    refMap.addWithFrame(
+      String(ref.refId ?? ref.backendNodeId),
       ref.backendNodeId,
       ref.role,
       ref.name,
       undefined,
+      ref.frameId,
     );
   }
 }

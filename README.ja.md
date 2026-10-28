@@ -2,26 +2,36 @@
 
 <img src="docs/assets/banner.png" alt="ego lite" width="100%" />
 
-**AI エージェントがブラウザ自動化を実行するための最速ブラウザ。**
-
-[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
+**AI エージェントが最速で Web 自動化を実行できるブラウザ**
 
 <a href="https://trendshift.io/repositories/42334?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-42334" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/42334" alt="citrolabs%2Fego-lite | Trendshift" width="250" height="55"/></a>
 
 <p>
-  <a href="https://cdn.ego.app/channel/github_github_referral/setup/macos/arm64/egolite.dmg"><img src="https://img.shields.io/badge/Download-Apple%20Silicon-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Apple Silicon 版をダウンロード" /></a>
-  <a href="https://cdn.ego.app/channel/github_github_referral/setup/macos/x64/egolite.dmg"><img src="https://img.shields.io/badge/Download-Intel-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Intel 版をダウンロード" /></a>
-  <a href="https://discord.gg/5eGZVvHbTq"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord に参加" /></a>
-  <a href="https://x.com/ego_agent"><img src="https://img.shields.io/badge/Follow-%40ego__agent-000000?style=for-the-badge&logo=x&logoColor=white" alt="X で @ego_agent をフォロー" /></a>
-  <a href="https://lite.ego.app/document/"><img src="https://img.shields.io/badge/Docs-lite.ego.app-1E90FF?style=for-the-badge&logo=gitbook&logoColor=white" alt="ドキュメント" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-3DA639?style=for-the-badge" alt="MIT ライセンス" /></a>
+  <a href="https://cdn.ego.app/setup/macos/arm64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/Download-Apple%20Silicon-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Apple Silicon" /></a>
+  <a href="https://cdn.ego.app/setup/macos/x64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/Download-Intel-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Intel" /></a>
+  <a href="https://discord.gg/5eGZVvHbTq"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" /></a>
+  <a href="https://x.com/ego_agent"><img src="https://img.shields.io/badge/Follow-%40ego__agent-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow @ego_agent on X" /></a>
+  <a href="https://lite.ego.app/document/"><img src="https://img.shields.io/badge/Docs-lite.ego.app-1E90FF?style=for-the-badge&logo=gitbook&logoColor=white" alt="Docs" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-3DA639?style=for-the-badge" alt="License MIT" /></a>
+</p>
+
+<p>
+  <a href="README.md">English</a> ·
+  <a href="README.zh-CN.md">简体中文</a> ·
+  <b>日本語</b> ·
+  <a href="README.ko.md">한국어</a> ·
+  <a href="README.pt.md">Português</a> ·
+  <a href="README.es.md">Español</a> ·
+  <a href="README.fr.md">Français</a> ·
+  <a href="README.it.md">Italiano</a> ·
+  <a href="README.ru.md">Русский</a>
 </p>
 
 </div>
 
-ego (lite) は、あなたと AI エージェントが並行して作業できるブラウザです。エージェントはそれぞれ専用の Space で複数のブラウザタスクを実行し、あなたは自分のタブをそのまま使い続けられます。さらに、タスクをより少ないトークンで、より速く完了できます。
+ego (lite) は、ユーザーと AI エージェントが並行して作業できるブラウザです。エージェントがそれぞれの Space（エージェント専用に切り離されたブラウザの作業領域）で複数のブラウザタスクを実行する一方で、自分の Space では自由に Web を閲覧でき、エージェントにブラウザの主導権を奪われることはありません。さらに、Web の自動化タスクはより速く完了し、トークンの消費も少なくて済みます。
 
-browser-use や agent-browser などの既存ツールはブラウザ自動化フレームワークです。操作対象となる別のブラウザが必要で、ログイン状態をうまく引き継げず、あなたとエージェントが同じタブを取り合うことになります。ego lite は、最初から両者で共有するために設計された一つのブラウザです。追加設定は不要で、エージェントは `ego-browser` を通じて、実際のログイン状態やタブにいつでもアクセスできます。
+browser-use や agent-browser などの既存ツールは、ブラウザそのものではなく、ブラウザへの橋渡しであり、自前のブラウザを備えているわけではありません。操作するには別のブラウザが必要で、ブラウザのデータをそのまま引き継ぐことはほとんどできず、接続も安定しません。最終的には人とエージェントがブラウザの主導権を奪い合うことになります。一方、ego lite は、最初から人とエージェントの両者が共有するために設計された 1 つのブラウザです。追加のセットアップは不要で、エージェントは `ego-browser` を通じて、ログイン済みのセッションやタブにいつでもアクセスできます。
 
 ## デモ
 
@@ -29,113 +39,117 @@ https://github.com/user-attachments/assets/ffe7954b-58ee-411e-b35d-ec30c58a08bc
 
 ## クイックスタート
 
-現在、ego lite は macOS で動作します。Windows と Linux は[ロードマップ](https://lite.ego.app/roadmap)に含まれています。
+ego lite は現在 macOS に対応しており、Windows 版はまもなくクローズドベータを開始する予定です。Linux 版は[ロードマップ](https://lite.ego.app/roadmap)にあります。
 
 ### 1. インストール
 
-自分の使い方に合う方法を選んでください。
+自分の進め方に合う方法を選んでください。
 
-**1.1 macOS アプリをダウンロード**
+**1.1 macOS アプリをダウンロードする**
 
-<a href="https://cdn.ego.app/channel/github_github_referral/setup/macos/arm64/egolite.dmg"><img src="https://img.shields.io/badge/⬇%20Apple%20Silicon-.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Apple Silicon 用 ego lite をダウンロード" /></a>
-<a href="https://cdn.ego.app/channel/github_github_referral/setup/macos/x64/egolite.dmg"><img src="https://img.shields.io/badge/⬇%20Intel-.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Intel 用 ego lite をダウンロード" /></a>
+<a href="https://cdn.ego.app/setup/macos/arm64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/⬇%20Apple%20Silicon-.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download ego lite for Apple Silicon" /></a>
+<a href="https://cdn.ego.app/setup/macos/x64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/⬇%20Intel-.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download ego lite for Intel" /></a>
 
-クリックしてダウンロードし、ファイルを開いてインストールします。どの方法を選んでも、ego lite はマシン上にあるすべてのエージェントのスキルディレクトリへ `ego-browser` スキルを追加します。
+クリックしてダウンロードし、開いてインストールします。Apple Silicon 版と Intel 版のどちらをインストールしても、ego lite はマシン上で使われている各エージェントの Skill ディレクトリに `ego-browser` Skill を追加します。
 
-**1.2 npx でスキルを追加**
+**1.2 npx で Skill を追加する**
 
-`ego-browser` スキルだけをインストールします。
+`ego-browser` Skill だけをインストールする場合：
 
 ```bash
 npx skills add citrolabs/ego-lite
 ```
 
-エージェントが初めてブラウザタスクを実行するときに、ego lite アプリのインストール手順を案内します。
+エージェントが初めてブラウザタスクを実行するとき、エージェントのほうから ego lite アプリのインストール手順を案内してくれます。
 
-**1.3 エージェントにセットアップを任せる**
+**1.3 エージェントにセットアップさせる**
 
-次の内容をエージェントに貼り付けます。
-
-```
-Set up ego lite for me: https://github.com/citrolabs/ego-lite
-
-Read `skills/ego-browser/references/install.md` and follow the steps to install ego lite.
-```
-
-初回起動時に、ego lite は Chrome データを移行するかどうかを一度だけ確認します。「はい」を選ぶと、エージェントが既存のログイン状態、Cookie、拡張機能、ブックマークを引き継ぎます。
-
-### 2. 最初のタスクを実行
-
-エージェントの CLI で `/ego-browser` と入力し、空白に続けて実行したい内容を自然言語で記述します。
+エージェントに以下を貼り付けてください：
 
 ```
-ego-browser follow @ego_agent on x.com for me
+ego lite をセットアップしてください：https://github.com/citrolabs/ego-lite
+
+`skills/ego-browser/references/install.md` を読み、手順に従って ego lite をインストールしてください。
 ```
 
-エージェントは `ego-browser` スキルを読み込み、自分専用の Space でページを開き、Snapshot を読み、ページを操作して結果を報告します。その間も、あなた自身のタブには一切影響しません。
+初回起動時に ego lite が尋ねるのは、Chrome のデータを移行するかどうかの 1 点だけです。「はい」と答えれば、エージェントは既存のログイン情報、Cookie、拡張機能、ブックマークをそのまま引き継ぎます。
 
-閲覧データは端末内に保存されます。ego lite が記録するのは、セットアップ時に Chrome の移行を選択したかどうかだけです。
+### 2. 最初のタスクを動かしてみる
+
+エージェントの CLI で `/ego-browser` と入力し、半角スペースを 1 つはさんで、やりたいことを普通の言葉で伝えます：
+
+```
+ego-browser で x.com の @ego_agent をフォローして
+```
+
+エージェントは `ego-browser` Skill を読み込み、エージェント専用の Space でページを開き、ページ構造をテキスト化した Snapshot を読み取り、ページ上で操作し、結果を報告します。その間、手元のタブには一切触れません。
+
+閲覧データや Cookie など、すべてのブラウザデータはお使いのデバイスの中にとどまります。ego lite が集めるデータはごく限られていて、ego lite を既定のブラウザに設定したかどうかといった、基本的な利用状況のシグナルだけです。
 
 ## ego lite の特長
 
-| 機能 | 内容 |
+| 機能 | できること |
 |---|---|
-| **CLI ではなくコードを基盤にして、複雑なタスクを少ないトークンで高速実行** | ego lite がエージェントに公開する機能は、直接呼び出せる JavaScript 関数としてラップされています。これによりエージェントは、得意とするコード記述を活かし、複数の手順を一度の実行にまとめられます。「コマンドを二つ呼び出して結果を確認し、また二つ呼び出す」というループにはまりません。従来の CLI 方式と比べて、複雑なワークフローを最大 2.5 倍速く完了でき、タスク成功率も高まり、ツール呼び出し回数も大幅に減ります。 |
-| **すべてのエージェントに専用 Space** | ego lite は各エージェントに完全に分離された専用 Space を提供します。あなたが手前でブラウジングしている間、エージェントはバックグラウンドで作業し、互いに邪魔をしません。どの Space でエージェントが動いているかをいつでも確認し、必要に応じて操作を引き継いだり停止したりできます。 |
-| **同じブラウザ内の並列ワークスペースである Space を使って、エージェントがマルチタスクを実行** | 各 Space には一つの AI エージェントまたは一つのタスクを割り当て、すべてを同時に実行できます。たとえば Claude Code が 10 個の Space で 10 件の見込み顧客情報を充実させ、Codex がさらに 5 個の Space で 5 件の競合サイトを収集できます。互いに衝突したり、あなたのタブを奪ったりせず、マウスも元の位置に留まります。 |
-| **市場最高水準のページ Snapshot** | カーネルレベルのカスタマイズにより、ego lite はモデルがウェブページを「見て」操作するために使う高品質なページスナップショットを生成します。他の方式が失敗しやすい、深くネストされた iframe のような難しいケースも確実に処理できます。 |
-| **どのエージェントからでも `ego-browser` を介して操作可能** | `ego-browser` は、任意のエージェント CLI（Claude Code、Codex、Cursor、独自エージェント）と ego lite をつなぐレイヤーです。ブラウザをページ内 JavaScript ツールのセットとして公開します。利用できるのは snapshot、fill、click、wait、navigate、capture です。エージェントがこれらのツールを呼び出す JavaScript スニペットを作成し、`ego-browser` がページ上で一度に実行します。 |
-| **経験を蓄積し、使うほどエージェントを高速化** *（近日提供予定）* | エージェントがブラウザタスクに費やす時間の大部分は試行錯誤です。ego lite の公式 Skill は成功した各操作を再利用可能なツールとワークフローへ抽出するため、将来同様のタスクを最大 5 倍速く実行できます。 |
+| **CLI 経由ではなくコードで直接操作し、複雑なタスクをより速く・より少ないトークンで実行** | ego lite がエージェントに公開する機能は、エージェントが直接呼び出す JavaScript 関数としてラップされています。エージェントは得意なこと、つまりコードを書くことに専念できます。多段階の処理を 1 回の出力にまとめられるので、「コマンドを 2 つ呼び出し、結果を見て、また 2 つ呼び出す」というループにはまりません。従来の CLI 方式と比べて、複雑なワークフローの実行が大幅に速くなり、成功率も高くなります。1 回あたりのツール呼び出し回数もはるかに少なく、最終的にかかるコストも大きく削減されます。 |
+| **エージェントごとに専用の Space** | ego lite は各エージェントに、完全に独立した Space を用意します。あなたは手前の画面でブラウジングし、エージェントはバックグラウンドで作業します。互いに邪魔し合うことはありません。どの Space でエージェントが動いているかはいつでも確認でき、好きなタイミングで引き継いだり停止したりできます。 |
+| **同じブラウザ内の並列ワークスペース「Spaces」で、複数のエージェントが同時に作業** | 各 Space にはそれぞれの AI エージェント、またはそれぞれのタスクが割り当てられ、すべてが同時に動きます。Claude Code が 10 件のリード（見込み客）情報を 10 個の並列 Space で調べて補完します。Codex が 5 つの競合サイトをさらに 5 つの Space でスクレイピングします。互いに衝突することも、あなたのタブを奪うこともありません。マウスカーソルも置いた場所のままです。 |
+| **現時点で最も強力なページ Snapshot** | ブラウザエンジンそのものに手を入れているため、ego lite は最高品質のページ Snapshot を生成します。Snapshot とは、テキストしか扱えないモデルが Web ページを「見て」操作するために使う、ページ構造をテキストで表した情報です。深くネストした iframe のような難所（ほかの手法が必ずと言っていいほど破綻する場面）も確実に処理します。 |
+| **どんなエージェントからでも `ego-browser` 経由で操作可能** | `ego-browser` は、あらゆるエージェント CLI（Claude Code、Codex、Cursor、あるいは自作のもの）と ego lite をつなぐ接続層です。ブラウザの機能を、snapshot, fill, click, wait, navigate, capture といったページ内で実行できる JavaScript ツール群として提供します。エージェントがこれらのツールを呼び出す JavaScript スニペットを書くと、`ego-browser` がそれをページ上で一度に実行します。 |
+| **経験を蓄積し、使うほどエージェントが速くなる** *（近日公開）* | エージェントがブラウザタスクに費やす時間の大半は、試行錯誤に消えています。ego lite 公式の Skill は、成功した操作をすべて再利用可能なツールとワークフローに落とし込み、以降の似たタスクを最大 5 倍の速さで実行できるようにします。 |
 
-## ego lite と既存製品の比較
+## ego lite と既存プロダクトの比較
 
-ほとんどのツールでブラウザ自動化はできます。本当に重要なのは、エージェントがどのブラウザを使うのか、あなたが同時に作業を続けられるのか、そしてそのツールが既に使っているエージェント向けに作られているのか、それとも内蔵エージェント専用なのかという点です。
+ほとんどのツールはブラウザを自動化できます。本当に問われるのは次の 3 点です。エージェントがどのブラウザを使うのか。あなたが同時に作業を続けられるのか。そしてそのツールが、あなたがすでに使っているエージェント向けなのか、内蔵エージェント向けなのか。
 
 | 機能 | ego lite | Browser-Use | agent-browser (Vercel) | ChatGPT Atlas | Perplexity Comet |
 |---|:---:|:---:|:---:|:---:|:---:|
-| 並行してマルチタスクを実行 | ✓ | — | — | — | — |
-| 再利用可能なスキル | ✓ | — | — | — | — |
-| Chrome のデータを継承 | ✓ | — | — | ✓ | ✓ |
-| 同じブラウザ内の独立したワークスペース | ✓ | — | — | — | — |
+| 並列マルチタスク | ✓ | — | — | — | — |
+| 再利用可能な Skill | ✓ | — | — | — | — |
+| Chrome のデータを引き継ぐ | ✓ | — | — | ✓ | ✓ |
+| 同じブラウザ、独立したワークスペース | ✓ | — | — | — | — |
 | 圧縮されたセマンティック入力 | ✓ | — | ✓ | — | — |
 | 外部エージェントから制御可能 | ✓ | ✓ | ✓ | — | — |
-| データをローカルに保存 | ✓ | ✓ | ✓ | — | — |
-| ログイン時の手間なし | ✓ | — | — | ✓ | ✓ |
-| 日常用ブラウザとして使用可能 | ✓ | — | — | ✓ | ✓ |
+| データはローカルに保存 | ✓ | ✓ | ✓ | — | — |
+| ログインの手間がない | ✓ | — | — | ✓ | ✓ |
+| 日常使いのブラウザ | ✓ | — | — | ✓ | ✓ |
 | 無料 | ✓ | ✓ | ✓ | — | — |
 
-同じ問題を解決しようとする製品には、ほかに二つの分類があります。Browser-Use や Vercel の agent-browser のようなブラウザ自動化フレームワークは、エージェントが呼び出すライブラリです。独自のブラウザを提供しないため、別のブラウザを操作する必要があり、ログイン状態もうまく引き継げません。ChatGPT Atlas や Perplexity Comet のような AI ブラウザはエージェントを内蔵していますが、そのエージェントしかブラウザを操作できません。ego lite は、あなたと持ち込んだ任意のエージェントが共有できるよう、最初から設計された一つのブラウザです。
+同じ課題に取り組むカテゴリは、ほかにも 2 つあります。Browser-Use や Vercel の agent-browser のようなブラウザ自動化フレームワークは、エージェントが呼び出すライブラリであり、ブラウザ自体は付属しません。そのため操作するには別のブラウザが必要で、あなたのログイン状態がそのまま引き継がれることはほとんどありません。ChatGPT Atlas や Perplexity Comet のような AI ブラウザは内蔵エージェントを備えており、そのエージェントしかブラウザを操作できません。ego lite は 1 つのブラウザであり、最初からあなたと、どのエージェントとでも共有するために設計されています。
+
 
 ## ベンチマーク
 
-四つの複雑なブラウザ自動化タスクで、ego lite と Vercel の agent-browser を比較しました。ego lite はすべてのタスクを最大 2.5 倍速く完了し、使用するトークンも大幅に少なくなりました。タスクが難しいほど差は大きくなります。比較結果をご覧ください。
+ego lite を Vercel の agent-browser と 4 つの複雑なブラウザ自動化タスクで比較し、ベンチマークしました。ego lite はどのタスクも最大 2.5 倍の速さで、しかもトークン消費を大幅に抑えて完了しました。タスクが難しいほど、差は広がります。結果は次のとおりです。
 
 <div align="center">
 
-<img src="docs/assets/ego-vs-agent-benchmark.png" alt="四つのタスクにおける ego lite と agent-browser の速度およびコスト比較" width="100%" />
+<img src="docs/assets/ego-vs-agent-benchmark.png" alt="ego lite vs agent-browser, speed and cost across four tasks" width="100%" />
 
 </div>
 
 ## ドキュメント
 
-チュートリアル、完全なツールリファレンス、統合ガイドは [lite.ego.app/document/](https://lite.ego.app/document/) にあります。
+チュートリアル、ツールの完全なリファレンス、連携ガイドは [lite.ego.app/document/](https://lite.ego.app/document/) にあります。
 
 ## コミュニティ
 
-- [Discord](https://discord.gg/5eGZVvHbTq)：質問、セットアップの支援、スキルの共有
-- [GitHub Discussions](https://github.com/citrolabs/ego-lite/discussions)：アイデアや詳しい議論
+- [Discord](https://discord.gg/5eGZVvHbTq)：質問、セットアップの相談、Skill の共有
+- [GitHub Discussions](https://github.com/citrolabs/ego-lite/discussions)：アイデアやじっくり議論したいスレッド
 - [X/Twitter](https://x.com/ego_agent)：最新情報とリリース
 
-## Star の推移
+## Star 数の推移
 
-<a href="https://www.star-history.com/?repos=citrolabs%2Fego-lite&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=citrolabs/ego-lite&type=date&theme=dark&legend=top-left&sealed_token=REc3U13uyXA_SL88c2BU0N5DOPw40Uiufp-RaA8pQS-JIMVaaxcGBjHmFV3Vwn9GMMIiL5e40DXSqHNcDjtXItvqvpMr013AaU6OkphU5o60GjasXVoXTQRR4TkWQSCPrPIxmKHehNll1TAsdoQ8rD3wPyRaj-Z_iHXqDDWf9b0gSWHxkyYoMUj6yWxY" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=citrolabs/ego-lite&type=date&legend=top-left&sealed_token=REc3U13uyXA_SL88c2BU0N5DOPw40Uiufp-RaA8pQS-JIMVaaxcGBjHmFV3Vwn9GMMIiL5e40DXSqHNcDjtXItvqvpMr013AaU6OkphU5o60GjasXVoXTQRR4TkWQSCPrPIxmKHehNll1TAsdoQ8rD3wPyRaj-Z_iHXqDDWf9b0gSWHxkyYoMUj6yWxY" />
-   <img alt="Star の推移グラフ" src="https://api.star-history.com/chart?repos=citrolabs/ego-lite&type=date&legend=top-left&sealed_token=REc3U13uyXA_SL88c2BU0N5DOPw40Uiufp-RaA8pQS-JIMVaaxcGBjHmFV3Vwn9GMMIiL5e40DXSqHNcDjtXItvqvpMr013AaU6OkphU5o60GjasXVoXTQRR4TkWQSCPrPIxmKHehNll1TAsdoQ8rD3wPyRaj-Z_iHXqDDWf9b0gSWHxkyYoMUj6yWxY" />
- </picture>
+<a href="https://github.com/citrolabs/ego-lite/stargazers">
+<!-- star-history:start -->
+<!-- Generated daily by .github/workflows/star-history.yml and published to the
+     'star-history' branch, because main's ruleset will not take a bot commit. -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/citrolabs/ego-lite/star-history/star-history-dark.svg">
+  <img alt="Star history" src="https://raw.githubusercontent.com/citrolabs/ego-lite/star-history/star-history-light.svg">
+</picture>
+<!-- star-history:end -->
 </a>
 
 ## ライセンス
 
-このリポジトリの内容は [MIT ライセンス](LICENSE)で公開されています。ego lite ブラウザは、別途無料でダウンロードできます。
+このリポジトリの内容は [MIT License](LICENSE) のもとで公開しています。ego lite ブラウザ本体は、別途無料でダウンロードできるソフトウェアです。

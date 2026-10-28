@@ -3,8 +3,8 @@ import {
   cp,
   mkdir,
   open,
-  readFile,
   readdir,
+  readFile,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -17,9 +17,7 @@ import { rollup } from "rollup";
 import resolve from "@rollup/plugin-node-resolve";
 import typescript from "@rollup/plugin-typescript";
 
-import { extractHelpDocs } from "./extract-help-docs.mjs";
-
-const HELP_DOCS_PLACEHOLDER = '"__EGO_EMBEDDED_HELP_DOCS__"';
+import { guidePlatforms, renderGuide } from "./render-guide.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = dirname(dirname(root));
@@ -27,8 +25,21 @@ const distDir = join(root, "dist");
 const outDir = join(distDir, "out");
 const bundledCliDir = outDir;
 const bundledCli = join(bundledCliDir, "index.js");
-const skillSourceDir = join(repoRoot, "skills", "ego-browser");
-const bundledSkillDir = join(outDir, "ego-browser");
+// The usage guide printed by `ego-browser skill`, versioned with this SDK.
+const guideSource = join(root, "skill-body", "SKILL.md");
+const bundledGuideDir = join(outDir, "ego-browser");
+// The entry Skill the browser installs into ~/.agents/skills/ego-browser. It
+// carries the site learnings, which the runtime also reads from this copy.
+const entrySkillSourceDir = join(repoRoot, "skills", "ego-browser");
+const bundledEntrySkillDir = join(outDir, "agent-skills", "ego-browser");
+const entrySkillEntries = [
+  "SKILL.md",
+  "references",
+  "scripts",
+  "agents",
+  "assets",
+  "learnings",
+];
 const buildLock = join(root, ".build.lock");
 
 let lock;
@@ -84,38 +95,31 @@ try {
   await bundle.write({ file: bundledCli, format: "esm", sourcemap: false });
   await bundle.close();
 
-  await embedHelpDocs(bundledCli, join(distDir, "src", "help-runtime.js"));
-
-  await cp(skillSourceDir, bundledSkillDir, { recursive: true });
+  // `SKILL.md` keeps every platform's passages, for launchers that do not
+  // pick a platform guide; `SKILL.<platform>.md` drops the others'.
+  await mkdir(bundledGuideDir, { recursive: true });
+  const guideMarkdown = await readFile(guideSource, "utf8");
+  await writeFile(
+    join(bundledGuideDir, "SKILL.md"),
+    renderGuide(guideMarkdown, { name: guideSource }),
+  );
+  for (const platform of guidePlatforms) {
+    await writeFile(
+      join(bundledGuideDir, `SKILL.${platform}.md`),
+      renderGuide(guideMarkdown, { platform, name: guideSource }),
+    );
+  }
+  for (const entry of entrySkillEntries) {
+    await cp(
+      join(entrySkillSourceDir, entry),
+      join(bundledEntrySkillDir, entry),
+      { recursive: true },
+    );
+  }
   await chmod(bundledCli, 0o755);
 } finally {
   await lock.close();
   await rm(buildLock, { force: true });
-}
-
-async function embedHelpDocs(...files) {
-  // The docs are extracted from the emitted bundle (it carries every helper's
-  // JSDoc with comments preserved) and injected into each build artifact that
-  // ships help-runtime, replacing the placeholder string constant. Doing this
-  // at build time means the runtime never has to read its own source. See
-  // GitHub issue #84.
-  const bundleSource = await readFile(files[0], "utf-8");
-  const docs = extractHelpDocs(bundleSource);
-  if (docs.length === 0) {
-    throw new Error("embedHelpDocs: extracted 0 helper docs from the bundle");
-  }
-  const injected = JSON.stringify(JSON.stringify(docs));
-  for (const file of files) {
-    const source = await readFile(file, "utf-8");
-    if (!source.includes(HELP_DOCS_PLACEHOLDER)) {
-      throw new Error(`embedHelpDocs: placeholder not found in ${file}`);
-    }
-    // Use a replacer function so `$` sequences in the JSON are inserted literally.
-    await writeFile(
-      file,
-      source.replace(HELP_DOCS_PLACEHOLDER, () => injected),
-    );
-  }
 }
 
 async function tsEntryPoints(dirs) {

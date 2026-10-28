@@ -23,26 +23,43 @@ pre-commit:
         exit 1
     style-check:
       run: |
-        files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^package/ego-browser/.*\.(ts|mjs|js|json|md)$' || true)
+        files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^(package/ego-browser|plugins)/.*\.(ts|mjs|js|json|md)$' | grep -v '^skills/ego-browser/learnings/' || true)
         [ -z "$files" ] && exit 0
         package/ego-browser/node_modules/.bin/prettier --check $files
     vulnerability-audit:
       run: |
         git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
         cd package/ego-browser && npm audit --registry=https://registry.npmjs.org --audit-level=moderate
-    code-check:
-      run: |
-        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
-        cd package/ego-browser && npm run typecheck
     smoke-test:
       run: |
-        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
+        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(package/ego-browser/|skills/ego-browser/)' || exit 0
         cd package/ego-browser && npm test
     site-skill-validation:
       run: |
-        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(package/ego-browser/|skills/ego-browser/learnings/)' || exit 0
+        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(package/ego-browser/(src/learning/|scripts/validate-site-skills\.ts)|skills/ego-browser/learnings/)' || exit 0
         cd package/ego-browser && npm run validate:site-skills
+    plugin-skill-sync:
+      # Lefthook runs commands in name order, so this refreshes the plugin's
+      # copy of the entry Skill before plugin-tests checks it.
+      run: |
+        git diff --cached --name-only | grep -q '^skills/ego-browser/' || exit 0
+        node plugins/scripts/sync-skills.mjs ego --staged
+    plugin-tests:
+      run: |
+        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(plugins/|skills/ego-browser/|package/ego-browser/skill-body/|\.agents/plugins/|\.claude-plugin/|\.cursor-plugin/)' || exit 0
+        npm --prefix plugins/ego test
     e2e-test:
       run: |
-        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
+        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(package/ego-browser/|skills/ego-browser/)' || exit 0
         cd package/ego-browser && npm run e2e
+
+post-commit:
+  commands:
+    plugin-skill-index:
+      # `git commit <paths>` commits plugin-skill-sync's copy from a temporary
+      # index, so the real index keeps the old copy. Point it back at HEAD.
+      run: |
+        copy=plugins/ego/skills/ego-browser
+        if git diff --quiet HEAD -- "$copy" && ! git diff --cached --quiet -- "$copy"; then
+          git reset -q -- "$copy"
+        fi

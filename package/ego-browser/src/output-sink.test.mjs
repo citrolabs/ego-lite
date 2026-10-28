@@ -1,13 +1,48 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { mkdtemp, open, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   bufferOutput,
   flushSink,
+  installLifecycleFlush,
   markHardStop,
   resetSink,
-  setNoticeTrailer,
 } from "../dist/src/output-sink.js";
+import {
+  markPageObserved,
+  recordUnhandledPage,
+} from "../dist/src/page-discovery.js";
+
+test("lifecycle flush writes synchronously when stdout exposes an fd", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "ego-output-sink-test-"));
+  const path = join(directory, "stdout.txt");
+  const file = await open(path, "w");
+  const lifecycle = new EventEmitter();
+  try {
+    resetSink();
+    bufferOutput("tail output\n");
+    installLifecycleFlush(
+      {
+        fd: file.fd,
+        write() {
+          throw new Error("asynchronous write should not be used");
+        },
+      },
+      lifecycle,
+    );
+
+    lifecycle.emit("exit");
+    await file.sync();
+    assert.equal(await readFile(path, "utf8"), "tail output\n");
+  } finally {
+    await file.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 function fakeStream() {
   const chunks = [];
@@ -74,18 +109,54 @@ test("a message that already ends in a newline is not double-terminated", () => 
   assert.equal(out.text(), "already terminated\n");
 });
 
-test("a stale-skill hard stop remains distinct from a trailing update notice", () => {
+test("flushSink appends unhandled pages after the script output", () => {
   resetSink();
-  markHardStop("[ego-browser:skill-stale] re-read the skill");
-  setNoticeTrailer("[ego-browser:notice] ego lite update available");
+  bufferOutput("saved rows\n");
+  recordUnhandledPage({
+    spaceId: 7,
+    targetId: "target-popup",
+    label: "p4",
+    openerLabel: "p1",
+    url: "https://example.test/popup",
+  });
   const out = fakeStream();
+
   flushSink(out, false);
+
   assert.equal(
     out.text(),
-    [
-      "[ego-browser:skill-stale] re-read the skill",
-      "[ego-browser:notice] ego lite update available",
-      "",
-    ].join("\n"),
+    "saved rows\n[ego-browser:pages]\nUnhandled page p4 from p1: https://example.test/popup\n",
   );
+});
+
+test("using a discovered Page suppresses its round-end notice", () => {
+  resetSink();
+  recordUnhandledPage({
+    spaceId: 7,
+    targetId: "target-popup",
+    label: "p4",
+    url: "about:blank",
+  });
+  markPageObserved(7, "target-popup");
+  const out = fakeStream();
+
+  flushSink(out, false);
+
+  assert.equal(out.text(), "");
+});
+
+test("a hard stop discards unhandled-page notices with other output", () => {
+  resetSink();
+  recordUnhandledPage({
+    spaceId: 7,
+    targetId: "target-popup",
+    label: "p4",
+    url: "about:blank",
+  });
+  markHardStop("STOP");
+  const out = fakeStream();
+
+  flushSink(out, false);
+
+  assert.equal(out.text(), "STOP\n");
 });

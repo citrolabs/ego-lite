@@ -2,26 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { setOverrides } from "../../dist/src/state.js";
-import {
-  click,
-  down,
-  hover,
-  scrollIntoViewIfNeeded,
-  up,
-  wheel,
-} from "../../dist/src/driver/pointer.js";
-
-function visibleAndFocused(value) {
-  return (method, params) => {
-    if (
-      method === "Runtime.evaluate" &&
-      params.expression.includes("visibilityState")
-    ) {
-      return { result: { value } };
-    }
-    return {};
-  };
-}
+import { click, scroll } from "../../dist/src/driver/pointer.js";
 
 test("click resolves selector offsets without the public elementEval helper", async () => {
   const calls = [];
@@ -50,11 +31,8 @@ test("click resolves selector offsets without the public elementEval helper", as
   }
 
   const callFunction = calls.find(
-    (call) =>
-      call.method === "Runtime.callFunctionOn" &&
-      call.params.functionDeclaration.includes("getBoundingClientRect"),
+    (call) => call.method === "Runtime.callFunctionOn",
   );
-  assert.ok(callFunction, "resolves the selector-relative bounding rect");
   assert.equal(callFunction.params.objectId, "object-1");
   assert.match(
     callFunction.params.functionDeclaration,
@@ -88,369 +66,360 @@ test("click resolves selector offsets without the public elementEval helper", as
   );
 });
 
-test("click scrolls a selector into view before resolving its click point", async () => {
+test("scroll defaults to scrolling down (positive deltaY, DOM wheel convention)", async () => {
+  // Regression: the default used to be deltaY -300, which scrolls UP — CDP
+  // negates wheel deltas internally, so the DOM convention (positive = down)
+  // applies end to end. SKILL.md documents scroll({ dy: 900 }) as a downward
+  // scroll, matching scrollBy / scrollToBottomUntil.
   const calls = [];
   const restore = setOverrides({
-    cdpOverride(method, params) {
-      calls.push({ method, params });
-      if (
-        method === "Runtime.evaluate" &&
-        params.objectGroup === "ego-browser"
-      ) {
-        return { result: { objectId: "object-1" } };
-      }
-      if (method === "Runtime.evaluate") {
-        return { result: { value: { x: 100, y: 200 } } };
-      }
-      if (method === "Runtime.callFunctionOn") {
-        return {
-          result: {
-            value: params.functionDeclaration.includes("checkVisibility")
-              ? true
-              : null,
-          },
-        };
-      }
+    cdpOverride(method, params, sessionId, timeoutMs) {
+      calls.push({ method, params, sessionId, timeoutMs });
       return {};
     },
   });
   try {
-    await click("#target");
+    await scroll();
   } finally {
     restore();
   }
-
-  const scrollIndex = calls.findIndex(
-    (call) => call.method === "DOM.scrollIntoViewIfNeeded",
-  );
-  const dispatchIndex = calls.findIndex(
-    (call) => call.method === "Input.dispatchMouseEvent",
-  );
-  assert.ok(scrollIndex >= 0, "scrolls the target into the viewport");
-  assert.ok(scrollIndex < dispatchIndex, "scrolls before mouse dispatch");
-});
-
-// The scroll must run browser-side: an in-page scroll is animated under CSS
-// scroll-behavior:smooth unless a style override is injected, and a strict
-// style-src CSP rejects that override. CDP scrolling has neither problem.
-test("scrollIntoViewIfNeeded scrolls through CDP, not page-side JavaScript", async () => {
-  const calls = [];
-  const restore = setOverrides({
-    cdpOverride(method, params) {
-      calls.push({ method, params });
-      if (
-        method === "Runtime.evaluate" &&
-        params.objectGroup === "ego-browser"
-      ) {
-        return { result: { objectId: "object-1" } };
-      }
-      return {};
-    },
-  });
-  try {
-    await scrollIntoViewIfNeeded("#target");
-  } finally {
-    restore();
-  }
-
-  const scroll = calls.find(
-    (call) => call.method === "DOM.scrollIntoViewIfNeeded",
-  );
-  assert.ok(scroll, "scrolls via DOM.scrollIntoViewIfNeeded");
-  assert.equal(scroll.params.objectId, "object-1");
-  assert.ok(
-    !calls.some((call) => call.method === "Runtime.callFunctionOn"),
-    "does not run page-side scroll code on the CDP path",
-  );
-  assert.ok(
-    calls.some(
-      (call) =>
-        call.method === "Runtime.releaseObject" &&
-        call.params.objectId === "object-1",
-    ),
-    "releases the resolved handle",
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "Input.dispatchMouseEvent");
+  assert.equal(calls[0].params.deltaY, 300);
+  assert.equal(calls[0].params.deltaX, 0);
+  assert.equal(
+    calls[0].timeoutMs,
+    15_000,
+    "wheel dispatch uses the normal CDP timeout instead of a fragile one-second deadline",
   );
 });
 
-test("scrollIntoViewIfNeeded falls back to an in-page scroll when the CDP scroll fails", async () => {
-  const calls = [];
-  const restore = setOverrides({
-    cdpOverride(method, params) {
-      calls.push({ method, params });
-      if (
-        method === "Runtime.evaluate" &&
-        params.objectGroup === "ego-browser"
-      ) {
-        return { result: { objectId: "object-1" } };
-      }
-      if (method === "DOM.scrollIntoViewIfNeeded") {
-        throw new Error("'DOM.scrollIntoViewIfNeeded' wasn't found");
-      }
-      return {};
-    },
-  });
-  try {
-    await scrollIntoViewIfNeeded("#target");
-  } finally {
-    restore();
-  }
-
-  const fallback = calls.find(
-    (call) =>
-      call.method === "Runtime.callFunctionOn" &&
-      call.params.functionDeclaration.includes("scrollIntoView"),
-  );
-  assert.ok(fallback, "scrolls page-side when the CDP scroll is unavailable");
-  assert.match(
-    fallback.params.functionDeclaration,
-    /scroll-behavior:auto !important/,
-  );
-});
-
-test("wheel defaults to scrolling down (positive deltaY) via CDP when visible and focused", async () => {
-  // CDP negates wheel deltas internally, so the DOM convention (positive = down)
-  // applies end to end — matching Playwright's mouse.wheel(deltaX, deltaY).
-  const calls = [];
-  const probe = visibleAndFocused(true);
-  const restore = setOverrides({
-    cdpOverride(method, params) {
-      calls.push({ method, params });
-      return probe(method, params);
-    },
-  });
-  try {
-    await wheel();
-  } finally {
-    restore();
-  }
-  const dispatch = calls.find((c) => c.method === "Input.dispatchMouseEvent");
-  assert.ok(dispatch, "dispatches a CDP wheel event");
-  assert.deepEqual(dispatch.params, {
-    type: "mouseWheel",
-    x: 0,
-    y: 0,
-    deltaX: 0,
-    deltaY: 300,
-  });
-});
-
-test("down and up use the current mouse position", async () => {
+test("scroll falls back to DOM scrolling only when wheel dispatch is unsupported", async () => {
   const calls = [];
   const restore = setOverrides({
     cdpOverride(method, params, sessionId) {
       calls.push({ method, params, sessionId });
+      if (method === "Input.dispatchMouseEvent") {
+        throw new Error("'Input.dispatchMouseEvent' wasn't found");
+      }
+      if (method === "Runtime.evaluate") {
+        return { result: { value: { x: 0, y: 450 } } };
+      }
       return {};
     },
   });
   try {
-    await hover([23, 45]);
-    await down();
-    await up();
+    const result = await scroll({ x: 50, y: 60, dx: 10, dy: 450 });
+    assert.deepEqual(result, { x: 0, y: 450 });
   } finally {
     restore();
   }
 
-  const mouseEvents = calls.filter(
-    (call) => call.method === "Input.dispatchMouseEvent",
-  );
-  assert.deepEqual(
-    mouseEvents.map((call) => ({
-      type: call.params.type,
-      x: call.params.x,
-      y: call.params.y,
-      button: call.params.button,
-      buttons: call.params.buttons,
-    })),
-    [
-      { type: "mouseMoved", x: 23, y: 45, button: undefined, buttons: 0 },
-      { type: "mousePressed", x: 23, y: 45, button: "left", buttons: 1 },
-      { type: "mouseReleased", x: 23, y: 45, button: "left", buttons: 0 },
-    ],
-  );
-});
-
-test("wheel forwards deltaX/deltaY and the viewport point to CDP", async () => {
-  const calls = [];
-  const probe = visibleAndFocused(true);
-  const restore = setOverrides({
-    cdpOverride(method, params) {
-      calls.push({ method, params });
-      return probe(method, params);
-    },
-  });
-  try {
-    await wheel(10, 450, { x: 50, y: 60 });
-  } finally {
-    restore();
-  }
-  const dispatch = calls.find((c) => c.method === "Input.dispatchMouseEvent");
-  assert.deepEqual(dispatch.params, {
+  assert.equal(calls[0].method, "Input.dispatchMouseEvent");
+  assert.deepEqual(calls[0].params, {
     type: "mouseWheel",
     x: 50,
     y: 60,
     deltaX: 10,
     deltaY: 450,
   });
+  assert.equal(calls[1].method, "Runtime.evaluate");
+  assert.match(calls[1].params.expression, /window\.scrollBy/);
 });
 
-test("wheel dispatches a synthetic WheelEvent when the page is not visible/focused", async () => {
+test("scroll propagates wheel dispatch timeouts instead of silently degrading", async () => {
+  // Regression: any error (including timeouts and "user is controlling") used
+  // to silently fall back to window.scrollBy, which is not equivalent to a
+  // real wheel event and masked the original failure.
   const calls = [];
-  const probe = visibleAndFocused(false);
   const restore = setOverrides({
-    cdpOverride(method, params) {
-      calls.push({ method, params });
-      return probe(method, params);
-    },
-  });
-  try {
-    await wheel(0, 350, { x: 5, y: 7 });
-  } finally {
-    restore();
-  }
-  assert.ok(
-    !calls.some((c) => c.method === "Input.dispatchMouseEvent"),
-    "no CDP wheel dispatch on a backgrounded/unfocused tab",
-  );
-  const synthetic = calls.find(
-    (c) =>
-      c.method === "Runtime.evaluate" &&
-      c.params.expression.includes("WheelEvent"),
-  );
-  assert.ok(synthetic, "dispatches a synthetic WheelEvent in the page");
-  assert.match(synthetic.params.expression, /elementFromPoint\(5, 7\)/);
-  assert.match(synthetic.params.expression, /deltaY: 350/);
-});
-
-test("wheel propagates user-control errors from the CDP dispatch", async () => {
-  const probe = visibleAndFocused(true);
-  const restore = setOverrides({
-    cdpOverride(method, params) {
+    cdpOverride(method) {
+      calls.push(method);
       if (method === "Input.dispatchMouseEvent") {
-        throw new Error("user is controlling this task space");
-      }
-      return probe(method, params);
-    },
-  });
-  try {
-    await assert.rejects(() => wheel(), /user is controlling/);
-  } finally {
-    restore();
-  }
-});
-
-test("wheel rejects non-numeric deltas before dispatching", async () => {
-  // Regression: only the x/y viewport point was validated; a bad deltaX/deltaY
-  // flowed straight to CDP (string) or became a null no-op on the synthetic path.
-  await assert.rejects(() => wheel("bad"), /invalid mouse offset/);
-  await assert.rejects(() => wheel(0, "bad"), /invalid mouse offset/);
-});
-
-test("click triggers probe fallback when CDP click is not trusted", async () => {
-  const originalEgo = globalThis.ego;
-  globalThis.ego = { sendCDPMessage: () => {} };
-  let probeEvaluateCount = 0;
-  const evaluateExpressions = [];
-  const restore = setOverrides({
-    cdpOverride(method, params, sessionId) {
-      if (method === "Runtime.evaluate") {
-        // Probe calls contain __egoBrowserInputProbes; element resolution does not
-        if (params.expression?.includes("__egoBrowserInputProbes")) {
-          probeEvaluateCount++;
-          evaluateExpressions.push(params.expression);
-          if (probeEvaluateCount === 1) {
-            // installClickProbe — elementFromPoint returns truthy
-            return { result: { value: true } };
-          }
-          // finishClickProbe — simulate CDP click was NOT seen
-          return { result: { value: { seen: false, fallback: true } } };
-        }
-        if (params.objectGroup === "ego-browser") {
-          return { result: { objectId: "object-1" } };
-        }
-        // Element resolution (buildSelectorCenterJs) — return center point
-        return { result: { value: { x: 100, y: 200 } } };
-      }
-      if (method === "Runtime.callFunctionOn") {
-        return { result: { value: true } };
-      }
-      // Input.dispatchMouseEvent calls proceed normally
-      return {};
-    },
-  });
-  try {
-    await click("#target");
-  } finally {
-    restore();
-    if (originalEgo === undefined) delete globalThis.ego;
-    else globalThis.ego = originalEgo;
-  }
-
-  // 2 probe Runtime.evaluate calls: install + finish (element resolution excluded)
-  assert.equal(
-    probeEvaluateCount,
-    2,
-    "Runtime.evaluate called for install and finish probes",
-  );
-  assert.match(
-    evaluateExpressions[0],
-    /__egoBrowserInputProbes/,
-    "install expression sets up click probe",
-  );
-  assert.match(
-    evaluateExpressions[1],
-    /dispatchEvent/,
-    "finish expression contains fallback mouse events",
-  );
-  assert.match(
-    evaluateExpressions[1],
-    /MouseEvent/,
-    "finish expression dispatches MouseEvent in fallback",
-  );
-});
-
-test("click absorbs CDP timeout when probe fallback succeeds", async () => {
-  const originalEgo = globalThis.ego;
-  globalThis.ego = { sendCDPMessage: () => {} };
-  let probeEvaluateCount = 0;
-  const restore = setOverrides({
-    cdpOverride(method, params, sessionId) {
-      if (method === "Runtime.evaluate") {
-        // Probe calls contain __egoBrowserInputProbes; element resolution does not
-        if (params.expression?.includes("__egoBrowserInputProbes")) {
-          probeEvaluateCount++;
-          if (probeEvaluateCount === 1) {
-            return { result: { value: true } };
-          }
-          // Fallback succeeded
-          return { result: { value: { seen: false, fallback: true } } };
-        }
-        if (params.objectGroup === "ego-browser") {
-          return { result: { objectId: "object-1" } };
-        }
-        // Element resolution (buildSelectorCenterJs) — return center point
-        return { result: { value: { x: 100, y: 200 } } };
-      }
-      if (method === "Runtime.callFunctionOn") {
-        return { result: { value: true } };
-      }
-      if (method === "Input.dispatchMouseEvent") {
-        // Simulate CDP timeout — the browser couldn't dispatch the event
         throw new Error("CDP request timed out: Input.dispatchMouseEvent");
       }
       return {};
     },
   });
   try {
-    // Should NOT throw — timeout is absorbed because fallback succeeded
-    await click("#target");
+    await assert.rejects(() => scroll({ dy: 450 }), /timed out/);
   } finally {
     restore();
+  }
+  assert.deepEqual(calls, ["Input.dispatchMouseEvent"]);
+});
+
+test("scroll propagates user-control errors from wheel dispatch", async () => {
+  const restore = setOverrides({
+    cdpOverride(method) {
+      if (method === "Input.dispatchMouseEvent") {
+        throw new Error("user is controlling this task space");
+      }
+      return {};
+    },
+  });
+  try {
+    await assert.rejects(() => scroll(), /user is controlling/);
+  } finally {
+    restore();
+  }
+});
+
+function withFakeEgo(run) {
+  const originalEgo = globalThis.ego;
+  globalThis.ego = { sendCDPMessage: () => {} };
+  return run().finally(() => {
     if (originalEgo === undefined) delete globalThis.ego;
     else globalThis.ego = originalEgo;
+  });
+}
+
+function methodSequence(calls) {
+  return calls.map((call) =>
+    call.method === "Input.dispatchMouseEvent"
+      ? `${call.method}:${call.params.type}`
+      : call.method,
+  );
+}
+
+function isProbeExpression(call) {
+  return Boolean(call.params.expression?.includes("__egoBrowserInputProbes"));
+}
+
+/**
+ * CDP double for a v1 click on a CSS selector with native bindings: the
+ * resolving evaluate returns the center, a probe read answers `probeResult`,
+ * and native input either succeeds or times out.
+ */
+function clickOverride({ inputTimesOut = false, probeResult } = {}) {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      calls.push({ method, params });
+      if (method === "Runtime.evaluate") {
+        if (params.expression.includes("probe.dispose();\n        delete")) {
+          // finishClickProbe
+          return { result: { value: probeResult } };
+        }
+        // Resolution (buildSelectorCenterJs) plus the probe install
+        return { result: { value: { x: 100, y: 200 } } };
+      }
+      if (method === "Input.dispatchMouseEvent" && inputTimesOut) {
+        throw new Error("CDP request timed out: Input.dispatchMouseEvent");
+      }
+      return {};
+    },
+  });
+  return { calls, restore };
+}
+
+test("click resolves a CSS selector and installs its probe in one page call, then never reads it back", async () => {
+  const { calls, restore } = clickOverride();
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
   }
 
-  assert.ok(
-    probeEvaluateCount >= 2,
-    "probe install and finish were called despite CDP timeout",
+  assert.deepEqual(
+    methodSequence(calls),
+    [
+      "Runtime.evaluate",
+      "Input.dispatchMouseEvent:mouseMoved",
+      "Input.dispatchMouseEvent:mousePressed",
+      "Input.dispatchMouseEvent:mouseReleased",
+    ],
+    "a normal click is one resolving page call plus three native input events",
+  );
+  assert.match(
+    calls[0].params.expression,
+    /querySelector|document\./,
+    "the single page call resolves the selector",
+  );
+  assert.match(
+    calls[0].params.expression,
+    /addEventListener\("click", probe\.handler, true\)/,
+    "the same page call installs the trusted-click probe before any input",
+  );
+  assert.match(
+    calls[0].params.expression,
+    /setTimeout\(\(\) => \{\s*probe\.dispose\(\);/,
+    "the probe removes itself so an acknowledged click never reads it back",
+  );
+  assert.deepEqual(
+    calls.slice(1).map((call) => [call.params.x, call.params.y]),
+    [
+      [100, 200],
+      [100, 200],
+      [100, 200],
+    ],
+  );
+});
+
+test("click installs the probe before input for coordinate targets and skips the read-back", async () => {
+  const { calls, restore } = clickOverride();
+  try {
+    await withFakeEgo(() => click([30, 40]));
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(methodSequence(calls), [
+    "Runtime.evaluate",
+    "Input.dispatchMouseEvent:mouseMoved",
+    "Input.dispatchMouseEvent:mousePressed",
+    "Input.dispatchMouseEvent:mouseReleased",
+  ]);
+  assert(isProbeExpression(calls[0]), "the probe is installed before input");
+  assert.match(calls[0].params.expression, /\{"x":30,"y":40\}/);
+});
+
+test("click reads the probe and falls back to synthetic events only after a dispatch timeout", async () => {
+  const { calls, restore } = clickOverride({
+    inputTimesOut: true,
+    probeResult: { seen: false, fallback: true },
+  });
+  try {
+    // Does not throw: the fallback reached the element.
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(methodSequence(calls), [
+    "Runtime.evaluate",
+    "Input.dispatchMouseEvent:mouseMoved",
+    "Runtime.evaluate",
+  ]);
+  assert(isProbeExpression(calls[0]), "the probe was installed before input");
+  const finish = calls[2].params.expression;
+  assert.match(finish, /probe\.dispose\(\)/);
+  assert.match(finish, /if \(probe\.seen \|\| !probe\.target\) return/);
+  assert.match(finish, /dispatchEvent\(new MouseEvent\("click"/);
+});
+
+test("click treats a trusted click that landed before the dispatch timeout as delivered", async () => {
+  // The renderer can deliver the event and still miss the CDP deadline. The
+  // probe installed before dispatch has seen the click, so no synthetic click
+  // is replayed and the timeout is absorbed.
+  const { calls, restore } = clickOverride({
+    inputTimesOut: true,
+    probeResult: { seen: true, fallback: false },
+  });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(methodSequence(calls), [
+    "Runtime.evaluate",
+    "Input.dispatchMouseEvent:mouseMoved",
+    "Runtime.evaluate",
+  ]);
+  assert.equal(
+    calls.filter(isProbeExpression).length,
+    2,
+    "the probe is installed once before input and read once after the timeout",
+  );
+});
+
+test("click rethrows a dispatch timeout when the probe has no element to fall back to", async () => {
+  const { restore } = clickOverride({
+    inputTimesOut: true,
+    probeResult: { seen: false, fallback: false },
+  });
+  try {
+    await assert.rejects(
+      () => withFakeEgo(() => click("#target")),
+      /CDP request timed out: Input\.dispatchMouseEvent/,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("click falls back to the shared resolver when the fast path finds no element", async () => {
+  // The combined resolve-and-probe evaluate searches the default session only.
+  // A miss there must not be reported as "not found": the shared resolver
+  // decides, and when it resolves the element the probe is installed in a
+  // call of its own before any input.
+  const calls = [];
+  let evaluations = 0;
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      calls.push({ method, params });
+      if (method === "Runtime.evaluate") {
+        evaluations += 1;
+        if (evaluations === 1) return { result: { value: null } };
+        if (params.expression.includes("__egoBrowserInputProbes")) {
+          return { result: { value: true } };
+        }
+        return { result: { value: { x: 70, y: 80 } } };
+      }
+      return {};
+    },
+  });
+  try {
+    await withFakeEgo(() => click("#inside-frame"));
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(methodSequence(calls), [
+    "Runtime.evaluate",
+    "Runtime.evaluate",
+    "Runtime.evaluate",
+    "Input.dispatchMouseEvent:mouseMoved",
+    "Input.dispatchMouseEvent:mousePressed",
+    "Input.dispatchMouseEvent:mouseReleased",
+  ]);
+  assert(
+    isProbeExpression(calls[0]),
+    "the fast path tried to resolve and probe at once",
+  );
+  assert.equal(
+    isProbeExpression(calls[1]),
+    false,
+    "the shared resolver evaluates the selector without a probe",
+  );
+  assert(isProbeExpression(calls[2]), "the probe is installed before input");
+  assert.match(calls[2].params.expression, /\{"x":70,"y":80\}/);
+  assert.deepEqual(
+    calls.slice(3).map((call) => [call.params.x, call.params.y]),
+    [
+      [70, 80],
+      [70, 80],
+      [70, 80],
+    ],
+  );
+});
+
+test("click reports a selector missing from every session with the resolver's wording", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      calls.push({ method, params });
+      if (method === "Runtime.evaluate") return { result: { value: null } };
+      return {};
+    },
+  });
+  try {
+    await assert.rejects(
+      () => withFakeEgo(() => click("#missing")),
+      (error) => {
+        assert.equal(error.name, "ElementResolutionError");
+        assert.equal(error.kind, "transient");
+        assert.equal(error.message, "Element not found: #missing");
+        return true;
+      },
+    );
+  } finally {
+    restore();
+  }
+  assert.deepEqual(
+    methodSequence(calls),
+    ["Runtime.evaluate", "Runtime.evaluate"],
+    "the fast path misses, the shared resolver reports",
   );
 });

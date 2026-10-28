@@ -1,67 +1,38 @@
-# Install ego lite
+# Install or upgrade ego lite
 
-Read this file only when ego lite isn't installed yet, or when the user asks to install ego lite. For day-to-day browser work, go back to `SKILL.md`.
+Read this file only when `ego-browser` is not found, when `ego-browser skill` reports an unknown command, or when the user asks to install ego lite. For day-to-day browser work, run `ego-browser skill` and follow its output.
 
-The ego-browser skill depends on the ego lite browser: the `ego-browser` command is provided by the ego lite app. Once ego lite is installed and you've gone through onboarding once, the environment is ready and there are no further environment issues.
+The ego-browser skill depends on the ego lite browser: the `ego-browser` command is provided by the ego lite app. Once ego lite is installed and you've completed onboarding, no additional setup is normally needed.
 
 ego lite website: https://lite.ego.app/
 
-## Install steps (macOS only)
+## Upgrade an older ego lite
 
-The install script lives at `scripts/install.sh` in this skill and supports macOS only. It will:
-
-- Download the ego lite installer (a DMG) for your CPU architecture (arm64 / x64).
-- Install `ego lite.app` to `/Applications` (falling back to `~/Applications` when needed).
-- Strip the quarantine attribute to keep Gatekeeper from blocking the first launch.
-- After installing, launch the `ego lite` app.
-
-Run the script (use the script's actual path under this skill's directory):
+If `ego-browser` exists but `ego-browser skill` reports `Unknown command: skill`, the installed ego lite is older than this skill. Ask the user for approval, then run:
 
 ```bash
-sh skills/ego-browser/scripts/install.sh
+ego-browser upgrade
 ```
 
-After installing, the script opens the ego lite app directly. If ego lite is already installed, the script skips the download and opens the app directly.
+If `upgrade` is also an unknown command, reinstall with the steps for the user's operating system. Then continue with "After installing: confirm `ego-browser` is available" in that file.
 
-After the script opens the ego lite app, the user completes the first-run onboarding in the app:
+## Install
+
+The install steps, the commands that confirm the installation, and the troubleshooting differ by operating system. Read the file for the machine you are running on and follow it to the end:
+
+- macOS: [install-macos.md](install-macos.md)
+- Windows: [install-windows.md](install-windows.md)
+- Other platforms: there is no installer. Have the user check https://lite.ego.app/ for a build; if none exists, ego-browser is not available on this machine.
+
+## Onboarding
+
+Onboarding is a step the user completes in the GUI, on every platform:
 
 - Choose to import data from Chrome or another browser as needed.
-- Onboarding registers the `ego-browser` command on the PATH (usually under `~/.local/bin`).
+- Onboarding registers the `ego-browser` command on the PATH.
 
-Onboarding is a step the user completes in the GUI. After the script opens ego lite, wait for the user to confirm they've finished onboarding before continuing.
-
-## After installing: confirm `ego-browser` is available
-
-Once the user has finished onboarding, confirm the command is ready:
-
-```bash
-command -v ego-browser
-```
-
-If it reports that the command isn't found, `~/.local/bin` is most likely not on the current PATH. Fix it temporarily and retry:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-command -v ego-browser
-```
-
-Once the command exists, verify the runtime with a minimal heredoc:
-
-```bash
-ego-browser nodejs <<'EOF'
-console.log('ego-browser ready')
-EOF
-```
-
-Printing `ego-browser ready` means the environment is ready.
+After the app opens, wait for the user to confirm they've finished onboarding before continuing. The per-platform file explains how to confirm the command is available afterwards.
 
 ## After that, return to the original task
 
-Once the environment is ready, return to the user's original task and continue with the task space flow in `SKILL.md` — start from `taskSpaces.useOrCreate(name)` and proceed as usual.
-
-## Troubleshooting
-
-- **Not macOS**: the script supports macOS only (`uname -s` is `Darwin`). On other platforms, have the user download and install from the ego lite website at https://lite.ego.app/.
-- **Download failed**: the script retries 3 times automatically; if it still fails, it's usually a network issue — have the user check their network and retry.
-- **Gatekeeper still blocks it**: the script already tries to strip quarantine; if the first launch is still blocked, have the user allow ego lite manually under System Settings → Privacy & Security.
-- **Command still unavailable after onboarding**: confirm `~/.local/bin` is on the PATH (see above); or have the user reopen ego lite, finish onboarding, and retry.
+Once the environment is ready, return to the user's original task: run `ego-browser skill` and follow its output.

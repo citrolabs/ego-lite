@@ -76,6 +76,11 @@ class FakeEgo {
     space.ownership = "agent";
     return { ...space };
   }
+
+  async listTabs() {
+    this.calls.push(["listTabs"]);
+    return { tabs: [] };
+  }
 }
 
 async function runTaskspaceScript(ego, code) {
@@ -89,7 +94,6 @@ async function runTaskspaceScript(ego, code) {
       stdinText: code,
       stdout,
       stderr,
-      services: { printUpdateBanner() {} },
     });
     return { exitCode, stdout: stdout.text(), stderr: stderr.text() };
   } finally {
@@ -122,8 +126,8 @@ test("taskspace e2e creates and selects a missing task space", async () => {
   const result = await runTaskspaceScript(
     ego,
     `
-    const task = await taskSpaces.useOrCreate("checkout-flow");
-    console.log(JSON.stringify({ task, selected: ego.selectedId }));
+    const task = await useOrCreateTaskSpace("checkout-flow");
+    cliLog(JSON.stringify({ task, selected: ego.selectedId }));
   `,
   );
 
@@ -159,8 +163,8 @@ test("taskspace e2e reuses an existing agent-owned task space", async () => {
   const result = await runTaskspaceScript(
     ego,
     `
-    const task = await taskSpaces.useOrCreate(7);
-    console.log(JSON.stringify({ task, selected: ego.selectedId }));
+    const task = await useOrCreateTaskSpace(7);
+    cliLog(JSON.stringify({ task, selected: ego.selectedId }));
   `,
   );
 
@@ -191,8 +195,8 @@ test("taskspace e2e claims and selects an existing user-owned task space", async
   const result = await runTaskspaceScript(
     ego,
     `
-    const task = await taskSpaces.claim("checkout-flow");
-    console.log(JSON.stringify({ task, selected: ego.selectedId }));
+    const task = await claimTaskSpace("checkout-flow");
+    cliLog(JSON.stringify({ task, selected: ego.selectedId }));
   `,
   );
 
@@ -211,10 +215,31 @@ test("taskspace e2e claims and selects an existing user-owned task space", async
     ["listTaskSpaces"],
     ["claimTaskSpace", 7, "checkout-flow"],
     ["useTaskSpace", 7],
+    ["useTaskSpace", 7],
+    ["listTabs"],
   ]);
 });
 
-test("taskspace e2e useOrCreateTaskSpace selects user-owned spaces without claiming and surfaces the owned user-control guidance", async () => {
+test("taskspace e2e useOrCreateTaskSpace reports a user-owned name as in use without selecting or claiming it", async () => {
+  const ego = new FakeEgo([
+    {
+      taskId: "checkout-flow",
+      id: 7,
+      name: "checkout-flow",
+      createdBy: "user",
+      ownership: "user",
+    },
+  ]);
+
+  await assert.rejects(
+    () =>
+      runTaskspaceScript(ego, `await useOrCreateTaskSpace("checkout-flow")`),
+    /already exists and belongs to the user \(id 7\)/,
+  );
+  assert.deepEqual(ego.calls, [["listTaskSpaces"]]);
+});
+
+test("taskspace e2e useOrCreateTaskSpace selects a user-owned space targeted by id without claiming and surfaces the owned user-control guidance", async () => {
   const ego = new FakeEgo([
     {
       taskId: "checkout-flow",
@@ -228,28 +253,21 @@ test("taskspace e2e useOrCreateTaskSpace selects user-owned spaces without claim
   // Native rejects with error_code EGO_TASK_SPACE_USER_IN_CONTROL, so the agent
   // sees ego-browser's owned guidance block, not the raw native text.
   await assert.rejects(
-    () =>
-      runTaskspaceScript(ego, `await taskSpaces.useOrCreate("checkout-flow")`),
-    /has taken control of this task space/,
+    () => runTaskspaceScript(ego, `await useOrCreateTaskSpace(7)`),
+    /Control of this task space is with the user/,
   );
   assert.deepEqual(ego.calls, [["listTaskSpaces"], ["useTaskSpace", 7]]);
 });
 
-test("taskspace e2e exposes taskSpaces facade", async () => {
+test("taskspace e2e exposes newTaskSpace and claimTaskSpace as helpers", async () => {
   const ego = new FakeEgo();
   const result = await runTaskspaceScript(
     ego,
     `
-    console.log(JSON.stringify({
-      taskSpacesType: typeof taskSpaces,
-      newType: typeof taskSpaces.new,
-      switchType: typeof taskSpaces.switch,
-      claimType: typeof taskSpaces.claim,
-      legacyNewGuardType: typeof newTaskSpace,
-      legacyNewGuardEnumerable: Object.prototype.propertyIsEnumerable.call(
-        globalThis,
-        "newTaskSpace"
-      ),
+    cliLog(JSON.stringify({
+      newType: typeof newTaskSpace,
+      switchType: typeof switchTaskSpace,
+      claimType: typeof claimTaskSpace,
       rawClaimType: typeof ego.claimTaskSpace
     }));
   `,
@@ -257,12 +275,9 @@ test("taskspace e2e exposes taskSpaces facade", async () => {
 
   assert.equal(result.exitCode, 0);
   assert.deepEqual(firstJsonLine(result.stdout), {
-    taskSpacesType: "object",
     newType: "function",
     switchType: "function",
     claimType: "function",
-    legacyNewGuardType: "function",
-    legacyNewGuardEnumerable: false,
     rawClaimType: "function",
   });
 });
@@ -272,12 +287,11 @@ test("cli e2e exposes the unified helperContext surface (help present, internals
   const result = await runTaskspaceScript(
     ego,
     `
-    console.log(JSON.stringify({
+    cliLog(JSON.stringify({
       helpType: typeof help,
-      helpResultType: typeof help("page"),
+      publicHelp: help("TaskSpace.newPage"),
+      legacyHint: help("click"),
       newTabType: typeof newTab,
-      pageType: typeof page,
-      oldClickType: typeof click,
       helperContextType: typeof helperContext,
       loadAgentHelpersType: typeof loadAgentHelpers
     }));
@@ -285,12 +299,22 @@ test("cli e2e exposes the unified helperContext surface (help present, internals
   );
 
   assert.equal(result.exitCode, 0);
-  assert.deepEqual(firstJsonLine(result.stdout), {
+  const lines = result.stdout.trim().split(/\r?\n/);
+  assert.deepEqual(lines.slice(0, -1), [
+    "TaskSpace.newPage",
+    "",
+    "Create and durably label a blank Page.",
+    "",
+    "await task.newPage()",
+    'Legacy helper hidden from default help: click. Use help("legacy", "click").',
+  ]);
+  assert.deepEqual(JSON.parse(lines.at(-1)), {
     helpType: "function",
-    helpResultType: "string",
+    publicHelp:
+      "TaskSpace.newPage\n\nCreate and durably label a blank Page.\n\nawait task.newPage()",
+    legacyHint:
+      'Legacy helper hidden from default help: click. Use help("legacy", "click").',
     newTabType: "undefined",
-    pageType: "object",
-    oldClickType: "undefined",
     helperContextType: "undefined",
     loadAgentHelpersType: "undefined",
   });
@@ -308,7 +332,7 @@ test("taskspace e2e rejects explicit use of a user-owned task space", async () =
   ]);
 
   await assert.rejects(
-    () => runTaskspaceScript(ego, `await taskSpaces.switch("checkout-flow")`),
+    () => runTaskspaceScript(ego, `await switchTaskSpace("checkout-flow")`),
     /switchTaskSpace requires an agent-owned task space/,
   );
   assert.deepEqual(ego.calls, [["listTaskSpaces"]]);
@@ -326,7 +350,7 @@ test("taskspace e2e rejects unknown task space ownership", async () => {
 
   await assert.rejects(
     () =>
-      runTaskspaceScript(ego, `await taskSpaces.useOrCreate("checkout-flow")`),
+      runTaskspaceScript(ego, `await useOrCreateTaskSpace("checkout-flow")`),
     /ownership "shared"/,
   );
   assert.deepEqual(ego.calls, [["listTaskSpaces"]]);
@@ -343,7 +367,7 @@ test("taskspace e2e surfaces newTaskSpace binding errors", async () => {
   ]);
 
   await assert.rejects(
-    () => runTaskspaceScript(ego, `await taskSpaces.new("checkout-flow")`),
+    () => runTaskspaceScript(ego, `await newTaskSpace("checkout-flow")`),
     /newTaskSpace: Task space already exists: checkout-flow/,
   );
   assert.deepEqual(ego.calls, [["createTaskSpace", "checkout-flow"]]);

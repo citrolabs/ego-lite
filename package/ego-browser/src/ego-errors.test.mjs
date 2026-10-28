@@ -2,12 +2,125 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  assertNoEgoError,
   egoErrorCode,
+  invokeEgo,
   isEgoErrorCode,
   isEgoUserControlError,
+  probeAgentControl,
   resolveEgoError,
 } from "../dist/src/ego-errors.js";
+
+test("probeAgentControl treats both native user-control shapes as waiting", async () => {
+  assert.equal(
+    await probeAgentControl(async () => ({
+      error: "manual_takeover",
+      error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
+    })),
+    false,
+  );
+  assert.equal(
+    await probeAgentControl(async () => {
+      throw Object.assign(new Error("manual_takeover"), {
+        error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
+      });
+    }),
+    false,
+  );
+});
+
+test("probeAgentControl propagates non-user-control native errors", async () => {
+  await assert.rejects(
+    () =>
+      probeAgentControl(async () => ({
+        error: "renderer failed",
+        error_code: "EGO_SNAPSHOT_FAILED",
+      })),
+    /renderer failed/,
+  );
+});
+
+test("invokeEgo recognizes a permission reason from a resolved native error", async () => {
+  await assert.rejects(
+    () =>
+      invokeEgo("task.listTabs", () =>
+        Promise.resolve({
+          error: "location",
+          error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
+        }),
+      ),
+    (error) => {
+      assert.equal(error.error_code, "EGO_TASK_SPACE_USER_IN_CONTROL");
+      assert.match(
+        error.message,
+        /^task\.listTabs: A browser permission prompt/,
+      );
+      assert.match(error.message, /location access/);
+      assert.match(error.message, /takeOverTaskSpace\(spaceId\)/);
+      return true;
+    },
+  );
+});
+
+test("invokeEgo recognizes a permission reason from a rejected native call", async () => {
+  const nativeError = Object.assign(new Error("camera"), {
+    error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
+  });
+  await assert.rejects(
+    () => invokeEgo("snapshot", () => Promise.reject(nativeError)),
+    (error) => {
+      assert.equal(error.error_code, "EGO_TASK_SPACE_USER_IN_CONTROL");
+      assert.match(error.message, /^snapshot: A browser permission prompt/);
+      assert.match(error.message, /camera access/);
+      return true;
+    },
+  );
+});
+
+test("user-control reason lookup ignores inherited object properties", () => {
+  const { message } = resolveEgoError({
+    error: "constructor",
+    error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
+  });
+  assert.match(message, /Control of this task space is with the user/);
+  assert.doesNotMatch(message, /constructor/);
+});
+
+test("unknown user-control reasons fall back without exposing the raw key", () => {
+  const { message } = resolveEgoError({
+    error: "future_permission_reason",
+    error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
+  });
+  assert.match(message, /Control of this task space is with the user/);
+  assert.doesNotMatch(message, /future_permission_reason/);
+});
+
+test("the retired site-dialog handoff reason uses generic user-control guidance", () => {
+  const { message } = resolveEgoError({
+    error: "fallback_site_dialog_required_notice",
+    error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
+  });
+  assert.match(message, /Control of this task space is with the user/);
+  assert.doesNotMatch(message, /dialog that requires review/);
+  assert.doesNotMatch(message, /fallback_site_dialog_required_notice/);
+});
+
+test("invokeEgo preserves non-user-control native failures", async () => {
+  await assert.rejects(
+    () =>
+      invokeEgo("snapshot", () =>
+        Promise.reject(
+          Object.assign(new Error("snapshot renderer failed"), {
+            error_code: "EGO_SNAPSHOT_FAILED",
+          }),
+        ),
+      ),
+    (error) => {
+      assert.equal(error.error_code, "EGO_SNAPSHOT_FAILED");
+      assert.equal(error.message, "snapshot: snapshot renderer failed");
+      return true;
+    },
+  );
+});
 
 test("egoErrorCode extracts the code from every error shape", () => {
   // resolved { error, error_code } object
@@ -48,8 +161,25 @@ test("resolveEgoError overrides the native error message with the owned wording 
   });
   assert.equal(code, "EGO_TASK_SPACE_INACTIVE");
   // Owned id-less guidance replaces the native "Task space 7 ..." text.
-  assert.match(message, /taskSpaces\.claim\(id\)/);
+  assert.match(message, /claimTaskSpace\(spaceId\)/);
   assert.doesNotMatch(message, /\b7\b/);
+});
+
+test("inactive guidance does not attribute an agent-finished task to the user", () => {
+  // task.finish({ keep: [...] }) leaves the space user-owned; a later
+  // takeOverTaskSpace() gets this code without any user action.
+  const { message } = resolveEgoError("EGO_TASK_SPACE_INACTIVE");
+  assert.doesNotMatch(message, /user has taken control/i);
+  assert.match(message, /task\.finish\(\)/);
+  assert.match(message, /takeOverTaskSpace\(\) cannot resume/);
+  assert.match(message, /claimTaskSpace\(spaceId\)/);
+});
+
+test("user-control guidance names both the agent handoff and a browser takeover", () => {
+  const { message } = resolveEgoError("EGO_TASK_SPACE_USER_IN_CONTROL");
+  assert.doesNotMatch(message, /user has taken control/i);
+  assert.match(message, /task\.handOff\(\)/);
+  assert.match(message, /takeover in the browser/);
 });
 
 test("resolveEgoError keeps the native error message for an unknown future code", () => {
@@ -92,8 +222,8 @@ test("resolveEgoError falls back to the raw code for a bare non-owned code", () 
 test("resolveEgoError uses the id-less guidance block for a bare user-control code", () => {
   const { code, message } = resolveEgoError("EGO_TASK_SPACE_USER_IN_CONTROL");
   assert.equal(code, "EGO_TASK_SPACE_USER_IN_CONTROL");
-  assert.match(message, /taken control of this task space/);
-  assert.match(message, /taskSpaces\.takeOver\(\)/);
+  assert.match(message, /Control of this task space is with the user/);
+  assert.match(message, /takeOverTaskSpace\(spaceId\)/);
   assert.doesNotMatch(message, /<id>/);
 });
 
@@ -128,39 +258,39 @@ test("isEgoUserControlError keys on the stable code, not wording", () => {
   );
 });
 
-test("assertNoEgoError resolves the message via the code and attaches error_code", () => {
-  try {
-    assertNoEgoError(
-      {
+test("invokeEgo resolves native error objects and attaches error_code", async () => {
+  await assert.rejects(
+    () =>
+      invokeEgo("listTabs", () => ({
         error: "Task space not selected",
         error_code: "EGO_TASK_SPACE_NOT_SELECTED",
-      },
-      "listTabs",
-    );
-    assert.fail("expected assertNoEgoError to throw");
-  } catch (err) {
-    assert.equal(err.message, "listTabs: Task space not selected");
-    assert.equal(err.error_code, "EGO_TASK_SPACE_NOT_SELECTED");
-  }
+      })),
+    (error) => {
+      assert.equal(error.message, "listTabs: Task space not selected");
+      assert.equal(error.error_code, "EGO_TASK_SPACE_NOT_SELECTED");
+      return true;
+    },
+  );
 });
 
-test("assertNoEgoError omits the prefix when no op is given", () => {
-  try {
-    assertNoEgoError({
-      error: "The task space is inactive: 10",
-      error_code: "EGO_TASK_SPACE_INACTIVE",
-    });
-    assert.fail("expected assertNoEgoError to throw");
-  } catch (err) {
-    // No op given, so no "<op>: " prefix — the owned block starts the message.
-    assert.match(err.message, /^The user has taken control/);
-    assert.match(err.message, /taskSpaces\.claim\(id\)/);
-    assert.doesNotMatch(err.message, /\b10\b/);
-    assert.equal(err.error_code, "EGO_TASK_SPACE_INACTIVE");
-  }
+test("invokeEgo normalizes synchronous native throws", async () => {
+  const nativeError = Object.assign(new Error("native setup failed"), {
+    error_code: "EGO_OPERATION_FAILED",
+  });
+  await assert.rejects(
+    () =>
+      invokeEgo("createTab", () => {
+        throw nativeError;
+      }),
+    (error) => {
+      assert.equal(error.message, "createTab: native setup failed");
+      assert.equal(error.error_code, "EGO_OPERATION_FAILED");
+      return true;
+    },
+  );
 });
 
-test("assertNoEgoError passes through results with no error", () => {
+test("invokeEgo passes through successful results", async () => {
   const ok = { tabs: [] };
-  assert.equal(assertNoEgoError(ok, "listTabs"), ok);
+  assert.equal(await invokeEgo("listTabs", () => ok), ok);
 });

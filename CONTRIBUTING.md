@@ -1,347 +1,236 @@
-# Contributing Guide
+# Contributing to ego-browser
 
-Thanks for your interest in contributing to **ego-browser (ego-lite)**! This guide is aimed at developers who want to build on top of the project or submit patches upstream. It covers the architecture, local development workflow, code conventions, and PR process.
+Thanks for contributing! This repository contains the **JavaScript SDK and agent
+Skill** used by ego lite. The browser application and its native bindings are
+provided separately by the installed ego lite app.
 
-> For the project vision, see [`README.md`](./README.md). For the agent-facing runbook, see [`skills/ego-browser/SKILL.md`](./skills/ego-browser/SKILL.md) (or [`SKILL.zh.md`](./skills/ego-browser/SKILL.zh.md)). For repo-level guidance, see [`AGENTS.md`](./AGENTS.md).
+![ego lite architecture: AI agents, the Skill, the Node.js runtime, and isolated task spaces](docs/assets/ego-lite-architecture.png)
 
----
+For the product overview, see [README.md](README.md). For the agent-facing API,
+read the [usage guide](package/ego-browser/skill-body/SKILL.md) and `help()`.
+Repository conventions live
+in [AGENTS.md](AGENTS.md).
 
-## Table of Contents
+## Set up and build
 
-- [1. What This Project Is](#1-what-this-project-is)
-- [2. Repository Layout](#2-repository-layout)
-- [3. Tech Stack & Runtime](#3-tech-stack--runtime)
-- [4. Local Development Setup](#4-local-development-setup)
-- [5. Architecture Overview](#5-architecture-overview)
-- [6. Key Modules](#6-key-modules)
-- [7. Site Learnings](#7-site-learnings)
-- [8. Testing & Quality](#8-testing--quality)
-- [9. Code Style & Conventions](#9-code-style--conventions)
-- [10. Commit & PR Process](#10-commit--pr-process)
-- [11. Release & CI](#11-release--ci)
-- [12. Design Principles (The Four Principles)](#12-design-principles-the-four-principles)
+Install Node.js **22 or later** and npm. Real-browser development also requires
+ego lite with onboarding complete and its `ego-browser` CLI available on `PATH`.
 
----
-
-## 1. What This Project Is
-
-`ego-browser` is a Chromium browser designed for collaboration between humans and AI agents. This repository (`ego-lite`) provides the **Node.js helper runtime** and **agent skill package** that run on top of that browser.
-
-- **This repo does not ship the browser binary**; the browser must be installed separately.
-- Agents invoke the CLI by running `ego-browser nodejs <<'EOF' ... EOF` from inside the browser. Each heredoc runs in a fresh Node process with all helpers injected into scope.
-- State (task spaces, tabs, login sessions) lives on the browser side, not in the Node process.
-
----
-
-## 2. Repository Layout
-
-```
-ego-lite/
-├── package/ego-browser/        # The runnable npm package (TypeScript)
-│   ├── src/                    # Core source
-│   │   ├── index.ts            # SDK / CLI bootstrap
-│   │   ├── run.ts              # stdin executor, CLI entry
-│   │   ├── helpers.ts          # Public helper surface composition
-│   │   ├── browser-runtime.ts  # CDP transport and session cache
-│   │   ├── element-resolver.ts # @eN / CSS / XPath / ARIA resolution
-│   │   ├── cdp-eval.ts         # cdp() / js() helpers
-│   │   ├── state.ts            # Shared mutable runtime state (singleton)
-│   │   ├── env.ts              # Environment variables
-│   │   ├── driver/             # Capability-scoped driver modules
-│   │   │   ├── pointer.ts      # Click / hover / drag / scroll
-│   │   │   ├── keyboard.ts     # Typing / key dispatch
-│   │   │   ├── nav.ts          # Page and tab navigation
-│   │   │   ├── observe.ts      # Snapshot / screenshot / events
-│   │   │   ├── waits.ts        # Wait primitives
-│   │   │   └── files.ts        # File upload
-│   │   └── learning/           # Site skill loading and validation
-│   ├── scripts/
-│   │   ├── build.mjs           # esbuild + rollup bundler
-│   │   └── validate-site-skills.ts
-│   ├── test/                   # node --test suites
-│   ├── artifacts/              # Build output (published to GitHub Release by CI)
-│   ├── dist/                   # tsc output (gitignored)
-│   ├── package.json
-│   └── tsconfig.json
-├── skills/ego-browser/         # Agent skill package
-│   ├── SKILL.md / SKILL.zh.md  # Agent usage guide
-│   └── learnings/<site>/       # Per-site knowledge packs (github / google / x-com ...)
-├── spec/                       # Spec references
-├── public/                     # Demo assets
-├── .github/workflows/ci.yml    # CI (test + release)
-├── .claude-plugin/             # Claude Code plugin marketplace manifest
-├── AGENTS.md                   # Repo-level agent / contributor guidance
-└── README.md
-```
-
----
-
-## 3. Tech Stack & Runtime
-
-| Item | Choice |
-| --- | --- |
-| Language | TypeScript (`tsc --noEmit` for typecheck only) |
-| Runtime | Node.js **>= 22**, ESM only (`"type": "module"`) |
-| Package manager | npm (commit `package-lock.json`) |
-| Bundler | esbuild + rollup (output: `artifacts/ego-browser/index.js`) |
-| Tests | Node built-in `node --test` + `node:assert/strict` |
-| Runtime deps | Only `acorn` (lightweight parsing) |
-| Browser transport | Chrome DevTools Protocol (CDP) directly — **no Puppeteer / Playwright** |
-
----
-
-## 4. Local Development Setup
-
-> All commands run from `package/ego-browser/`.
+From the repository root:
 
 ```bash
-# 1. Install dependencies
 cd package/ego-browser
 npm ci
-
-# 2. Build (produces dist/ and artifacts/ego-browser/index.js)
 npm run build
-
-# 3. Typecheck
-npm run typecheck
-
-# 4. Run tests (automatically includes build + typecheck)
-npm test
-
-# 5. Validate site learnings
-npm run validate:site-skills    # alias: validate:learnings
 ```
 
-**Calling the CLI directly** (for local debugging):
+Unless stated otherwise, the commands below run from `package/ego-browser/`.
+Local dependency installation also installs the Git hooks configured in
+[lefthook.yml](lefthook.yml).
+
+## Understand the build output
+
+`npm run build` regenerates `package/ego-browser/dist/`:
+
+| Output                   | Purpose                                                                                                                    |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `dist/out/index.js`      | The single-file ESM SDK loaded by the ego lite CLI or embedded host. Use this file for browser debugging and distribution. |
+| `dist/out/ego-browser/`  | The matching usage guide `SKILL.md`, printed by `ego-browser skill`.                                                       |
+| `dist/out/agent-skills/` | The entry Skill and site `learnings/` the browser installs into `~/.agents/skills/ego-browser`.                            |
+| `dist/src/`              | Compiled runtime modules used by the repository's unit tests.                                                              |
+| `dist/scripts/`          | Compiled TypeScript maintenance scripts, including the site-learning validator.                                            |
+
+The release payload is the contents of `dist/out/`: `index.js`, the adjacent
+`ego-browser/` guide, and `agent-skills/` with the learnings. Keep them together when
+copying a standalone payload so `ego-browser skill` prints the guide that matches
+the SDK. See [the `ego-browser skill` contract](docs/ego-browser-skill-command.md). `dist/src/index.js` is not the
+single-file release entry point.
+
+Edit source files under `src/`, `scripts/`, `skill-body/`, or `skills/ego-browser/`, then rebuild.
+Build output is generated and must not be committed. The build replaces `dist/`
+and uses `.build.lock` to prevent concurrent builds.
+
+## Run the SDK in ego lite
+
+### Load a build for one command
+
+Pass the absolute bundle path to the installed CLI:
 
 ```bash
-node artifacts/ego-browser/index.js <<'JS'
-await waitForLoadState()
-console.log(await pageInfo())
-JS
+ego-browser nodejs --sdk-path "$PWD/dist/out/index.js" <<'EOF'
+help();
+EOF
 ```
 
-**CLI debug flags** (see `src/run.ts`):
+Use the same invocation for a browser script written against the current
+TaskSpace/Page API. The installed CLI supplies the native `globalThis.ego`
+bindings; the repository supplies the SDK. `--sdk-path` applies to that command,
+so repeat it for each invocation that should use this build.
 
-- `--help` / `-h`: print usage
-- `--doctor`: check browser and connection state
-- `--reload`: force-rebuild the CDP connection on next call
-- `--debug-clicks`: equivalent to `EGO_BROWSER_DEBUG_CLICKS=1`
-
-**Key environment variables**:
-
-| Variable | Purpose |
-| --- | --- |
-| `EGO_BROWSER_AGENT_WORKSPACE` | Override skill workspace root (defaults to `skills/ego-browser` inside the repo) |
-| `EGO_BROWSER_NAME` | Browser instance name (default `default`) |
-| `EGO_BROWSER_DEBUG_CLICKS` | Enable click debug logging |
-
----
-
-## 5. Architecture Overview
-
-```
-       ┌────────────────────────────────────────────────┐
-       │  stdin (JS code inside the heredoc)            │
-       └──────────────────┬─────────────────────────────┘
-                          │
-                          ▼
-               ┌──────────────────────┐
-               │ run.ts  runMain()    │  wraps stdin in AsyncFunction, injects helpers
-               └──────────┬───────────┘
-                          │
-                          ▼
-           ┌──────────────────────────────┐
-           │ helpers.ts (public API)      │
-           │  ├─ task-space helpers       │
-           │  ├─ driver/* capabilities    │
-           │  ├─ cdp() / js()             │
-           │  └─ learning helpers         │
-           └──────────────┬───────────────┘
-                          │
-                          ▼
-           ┌──────────────────────────────┐
-           │ browser-runtime.ts           │
-           │  CDP transport / sessions /  │
-           │  events                      │
-           └──────────────┬───────────────┘
-                          │  Chrome DevTools Protocol
-                          ▼
-                  ┌──────────────┐
-                  │ ego-browser  │  browser holds tabs / task spaces / login state
-                  └──────────────┘
-```
-
-**Core data flow**:
-
-```
-stdin JS → runMain() → injected helpers → CDP / DOM / AX resolution → optional Site Skill
-```
-
-### Task Space Model
-
-A `Task Space` is an isolated browsing context provided by ego-browser: it owns its own tab set but inherits the user's login state.
-Because every heredoc runs in a fresh Node process, **the agent must call `useOrCreateTaskSpace(name)` at the start of every heredoc to re-attach to the same task space**, and end with `completeTaskSpace(name, { keep })` in the final round.
-
-Control (`agent` ↔ `user`) is handed off via the `handOffTaskSpace` / `takeOverTaskSpace` / `waitForAgentControl` protocol — for example, when the user needs to log in manually or solve a CAPTCHA.
-
----
-
-## 6. Key Modules
-
-| File | Responsibility |
-| --- | --- |
-| `src/index.ts` | SDK injection (`installEgoSdk`); decides whether to run as CLI or be imported as a library |
-| `src/run.ts` | Reads stdin, builds an `AsyncFunction`, and invokes it with helpers as named arguments |
-| `src/helpers.ts` | Composes and exports the helper set exposed to heredocs |
-| `src/browser-runtime.ts` | Maintains the CDP connection, session cache, and event buffer for the browser's ego runtime |
-| `src/element-resolver.ts` | Resolves `@eN` refs, CSS, XPath, and ARIA/role to backend nodeIds |
-| `src/cdp-eval.ts` | `cdp()` raw CDP calls + `js()` in-page evaluation |
-| `src/state.ts` | Shared mutable state singleton (`send`, `platform`, `agentWorkspace`, session caches). Tests can inject stubs via `setOverrides()` |
-| `src/driver/*` | Minimal-dependency primitives per capability; only call into `cdp()` |
-| `src/learning/index.ts` | Discovers and loads `learnings/<site>/`, exposes `runSiteTool` / `runSiteBrowserTool` |
-| `src/learning/validate-learning-format.ts` | Site manifest validator |
-| `scripts/build.mjs` | Uses `.build.lock` to prevent concurrent builds; esbuild transform + rollup bundle into a single file |
-
-> Historical note: the repo is migrating from `.js` to `.ts`. If `AGENTS.md` still mentions `.js` files, defer to the current `src/*.ts`.
-
----
-
-## 7. Site Learnings
-
-Each site learning pack lives under `skills/ego-browser/learnings/<site>/`, with this shape:
-
-```
-learnings/<site>/
-├── manifest.json        # Site metadata, domain matching, declared tools and parameter schemas
-├── notes/*.md           # Entry points, structure, edge cases — human-readable notes
-├── tools/*.js           # Node-side tools (run inside the CLI process)
-└── browser-tools/*.js   # Browser-side tools (injected and run in the page)
-```
-
-**Adding a new site learning pack**:
-
-1. Copy the structure from an existing pack (recommend `learnings/github/`).
-2. Write `manifest.json` with `id`, `name`, `domains[]`, `notes[]`, `nodeTools{}`, `browserTools{}`, and parameter schemas.
-3. Implement `tools/*.js` and `browser-tools/*.js`.
-4. Validate:
-   ```bash
-   cd package/ego-browser
-   npm run validate:site-skills
-   ```
-5. Add at least one behavior test in the `test/site-skills.test.js` style.
-
-**Hard constraints for learning packs**:
-
-- Use **stable URLs** and **stable selectors** (CSS / ARIA / text) only
-- Never write **pixel coordinates**, **secrets/tokens**, or **task narration**
-- Capture the *shape* of the site, not your task — a "map", not a "diary"
-
----
-
-## 8. Testing & Quality
-
-- Test framework: `node --test` with `node:assert/strict`
-- Test files: `package/ego-browser/test/*.test.js`, split by responsibility (runtime / helpers / resolver / nav-driver / site-skills / build / state ...)
-- Style: behavior-driven, using **temp workspaces + `setOverrides()`** for stub injection — no real browser launches
-
-**Minimum pre-submit bar**:
+For inspecting the SDK without connecting to the browser, the repository's
+standalone CLI reads JavaScript directly from stdin:
 
 ```bash
-cd package/ego-browser
-npm test                       # must pass
-npm run validate:site-skills   # if learnings changed
+node dist/out/index.js <<'EOF'
+help();
+EOF
 ```
 
-**When to add/extend tests**:
+Browser actions still require the native environment provided by ego lite. The
+standalone repository CLI does not take the installed CLI's `nodejs` subcommand.
 
-- Changes to session / connection handling → add cases in `browser-runtime.test.js` / `session-injection.test.js`
-- Changes to the resolver → `element-resolver.test.js`
-- New helper → `helpers.test.js` or the matching driver test
-- Changes to learning loading → `site-skills.test.js` / `validate-site-skills.test.js`
+### Use the macOS debug SDK path
 
----
+For repeated local debugging, ego lite can load the SDK from:
 
-## 9. Code Style & Conventions
+```text
+~/Library/Application Support/Citro Labs/debug/index.js
+```
 
-- **ESM only**: `import` paths use the `.js` extension (NodeNext resolution)
-- **Node 22+**
-- **All public helpers are camelCase** — do not provide `snake_case` aliases
-- **Async helpers start with a verb**: `runMain`, `ensureSession`, `siteSkillsForUrl`, `runSiteTool`, ...
-- **TypeScript non-strict mode**: `strict: false`, but keep explicit type signatures
-- **Shared state goes through the `state.ts` singleton** — do not thread `connection` / `send` through function parameters
-- **Helpers are injected, not imported**: agent scripts do not `import`; all helpers are placed in scope by `run.ts`
-- **Snapshot refs (`@eN`) are short-lived**: re-snapshot after any DOM mutation; for long-lived values use `loc=...` or stable CSS / ARIA
-- **No lint / prettier**: style is enforced by convention and code review. When editing, blend in with the surrounding code instead of introducing a new style
+Link this path to the build output. Preserve any existing debug file or symlink
+before setting up a different checkout. For a new debug entry:
 
----
+```bash
+ego_debug_dir="$HOME/Library/Application Support/Citro Labs/debug"
+mkdir -p "$ego_debug_dir"
+ln -s "$PWD/dist/out/index.js" "$ego_debug_dir/index.js"
+```
 
-## 10. Commit & PR Process
+Use the absolute source path and quote the destination because it contains
+spaces. The link lets a new CLI invocation use the latest build without copying
+the SDK after every edit:
 
-### Branches and commits
+```bash
+npm run build
+ego-browser nodejs <<'EOF'
+help();
+EOF
+```
 
-- Branch from latest `main`: `git checkout -b <type>/<short-description>`
-- Follow [Conventional Commits](https://www.conventionalcommits.org/); see recent history for tone:
-  ```
-  fix(ego-browser): format object-shaped ego errors with message/JSON
-  test(ego-browser): expand e2e coverage for handoff and control probing
-  ```
-- Common `type`s: `feat` / `fix` / `refactor` / `test` / `docs` / `chore` / `ci`
-- `scope` is usually `ego-browser` or the learning pack name (e.g. `learnings/github`)
+Start a new invocation after rebuilding; an already running Node context does
+not reload its imported SDK. Keep the checkout at the linked location. To inspect
+the selected link or explicitly load the debug entry:
 
-### Pull Request
+```bash
+readlink "$HOME/Library/Application Support/Citro Labs/debug/index.js"
+ego-browser nodejs \
+  --sdk-path "$HOME/Library/Application Support/Citro Labs/debug/index.js" <<'EOF'
+help();
+EOF
+```
 
-A PR description should include at minimum:
+If you prefer a copy instead of a symlink, copy the contents of `dist/out/`,
+including `ego-browser/`, into the debug directory. Refresh that copy after every
+build. Have your agent read the Skill from the same checkout or build as the SDK;
+copying or linking JavaScript does not update the Skill already loaded in an
+agent conversation.
 
-1. **What** — one-sentence summary of the change
-2. **Why** — motivation / linked issue
-3. **How to verify** — repro / verification steps; attach screenshots or heredoc examples for UI behavior
-4. Impact callout (does it touch the helper surface? does the agent side need updates?)
+When finished, remove the symlink you created to stop using this checkout:
 
-Add at least one release-note label so generated releases are grouped correctly:
-`feat` / `fix` / `docs` / `chore` / `ci` / `refactor`.
+```bash
+rm "$HOME/Library/Application Support/Citro Labs/debug/index.js"
+```
 
-### Review Checklist
+Restore a previous debug entry if you backed one up. Removing the symlink leaves
+the build output intact. The debug override affects normal CLI invocations, so
+use `--sdk-path` when a command needs to select a particular bundle explicitly.
 
-- [ ] `npm test` is green
-- [ ] Typecheck passes (`npm run typecheck`)
-- [ ] If learnings changed, `npm run validate:site-skills` passes
-- [ ] Change is "minimal surgical edit" (see §12)
-- [ ] No undeclared runtime dependencies introduced
-- [ ] Public helper names / docs are kept in sync (update both `SKILL.md` and `SKILL.zh.md`)
+For additional CLI setup and troubleshooting, see
+[local runtime development](docs/local-runtime-development.md).
 
----
+## Verify a change
 
-## 11. Release & CI
+| Command                        | What it checks                                                                                                          |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
+| `npm test`                     | Builds the SDK, checks any local Skill translation, typechecks, then runs `src/**/*.test.mjs` with Node's test runner.  |
+| `npm run style:check`          | Checks formatting of runtime source, build scripts, and package documentation.                                          |
+| `npm run validate:site-skills` | Builds and validates the site-learning packs. Run this when changing their manifests, tools, notes, or validation code. |
+| `npm run e2e`                  | Builds the current checkout and runs the complete real-browser suite with its SDK.                                      |
 
-- CI config: `.github/workflows/ci.yml`
-  - Every push / PR: on Node 22 + ubuntu-latest, runs `npm ci` → `npm test` → `npm run validate:site-skills`
-  - Tags matching `vX.Y.Z-beta.N`: build a beta prerelease
-  - Tags matching `vX.Y.Z`: build a stable release and mark it as latest
-- Release notes are generated automatically from merged PRs and grouped by `.github/release.yml` labels: Features, Fixes, Documentation, Maintenance, and Other Changes.
-- Normal flow: merge features into `dev`, cut beta tags from `dev`, then merge `dev` to `main` and cut stable `vX.Y.Z` tags from `main`.
-- The build script `scripts/build.mjs` uses `.build.lock` to prevent concurrent builds.
+Tests live next to the runtime source and use `node:assert/strict`, injected
+service overrides, or fake native bindings. Add a regression that demonstrates a
+bug before changing its implementation, and verify the behavior after the fix.
 
----
+Run the real-browser suite for changes to browser behavior, sessions, targeting,
+or task-space lifecycle. It starts a local fixture server, creates a unique
+temporary task space, loads the current build through `--sdk-path`, and cleans up.
+It does not depend on the debug override above. Do not manually switch its task
+space, take control, or change the SDK while it is running. On macOS it selects
+the ego lite app's CLI; use `EGO_BROWSER_REAL_E2E_CLI` to select another installed
+ego lite CLI explicitly.
 
-## 12. Design Principles (The Four Principles)
+## Find the code to change
 
-This repo strongly endorses the four principles below (see [`AGENTS.md`](./AGENTS.md)). Both human contributors and AI agents should apply them on every change:
+| Location                                                                                | Responsibility                                                                     |
+| --------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `package/ego-browser/src/index.ts`, `run.ts`, `helpers.ts`                              | SDK installation, script execution, and injected helpers.                          |
+| `package/ego-browser/src/page-model.ts`                                                 | TaskSpace/Page lifecycle and the agent-facing operations.                          |
+| `package/ego-browser/src/public-api-schema.ts`                                          | Public API validation and help definitions.                                        |
+| `package/ego-browser/src/browser-runtime.ts`                                            | Native CDP transport, sessions, events, and dialogs.                               |
+| `package/ego-browser/src/element-resolver.ts`, `page-ref-registry.ts`, `page-ledger.ts` | Element resolution and durable Page/ref identity.                                  |
+| `package/ego-browser/src/driver/`                                                       | Browser action, input, observation, and wait implementations.                      |
+| `package/ego-browser/scripts/real-browser-e2e/`                                         | Real-browser fixtures and regression cases.                                        |
+| `package/ego-browser/skill-body/`                                                       | The canonical usage guide printed by `ego-browser skill`.                          |
+| `skills/ego-browser/`                                                                   | The thin entry Skill, installation guide, installation script, and site learnings. |
 
-| Principle | Meaning |
-| --- | --- |
-| **Think Before Coding** | Don't assume, don't paper over confusion; surface trade-offs explicitly and push back when needed |
-| **Simplicity First** | The smallest amount of code that solves the problem; no speculative abstractions or configuration |
-| **Surgical Changes** | Change only what needs to change; preserve the existing style; do not opportunistically "improve" unrelated code |
-| **Goal-Driven Execution** | Translate the task into a verifiable goal; write the check first, then iterate until it passes |
+Keep changes focused and match the surrounding style. Runtime code uses ESM,
+TypeScript, and `.js` import extensions. Classify element-resolution failures
+honestly as transient or permanent because retry behavior depends on them.
 
-> "Every changed line should trace back to the requirement of this task."
+When changing a public API, update its schema, implementation, regression tests,
+and the usage guide together.
 
----
+Keep reusable site behavior in `skills/ego-browser/learnings/<site>/`. Start from
+an existing pack, declare its tools in `manifest.json`, and use stable URLs and
+selectors. Do not put credentials or one-off task history in learning packs.
 
-## Feedback & Contact
+## Submit a pull request
 
-- Issues / discussions: <https://github.com/CitroLabs/ego-lite/issues>
-- License: MIT © 2026 CitroLabs
+Start from the latest branch you intend to target. Current v2 work targets
+`2.0.0-beta-dev`; feature and fix branches should use a descriptive name such as
+`fix/page-ref-lifetime` or `docs/local-sdk-setup`.
 
-Issues, PRs, and new site learnings are all welcome — make ego-browser smarter with your next contribution.
+Use a focused commit message such as `fix(ego-browser): preserve refs across
+input actions`. In the PR, explain the problem, the resulting behavior, and how
+you verified it. Call out public API or Skill changes, and add an appropriate
+release-note label such as `fix`, `feat`, `docs`, or `ci`.
+
+The pre-commit hooks select checks based on the staged files. Their freshness
+check currently compares against `origin/dev`. For a beta-targeted PR, verify
+that the latest `origin/2.0.0-beta-dev` is an ancestor of your branch; if the dev
+check is inapplicable, exclude only `branch-up-to-date` with
+`LEFTHOOK_EXCLUDE=branch-up-to-date` for that commit. Keep the other checks enabled.
+
+## CI and releases
+
+[CI](.github/workflows/ci.yml) runs on pull requests, pushes to `dev` and `main`,
+and version tags. It installs dependencies, checks formatting and dependency
+vulnerabilities, runs `npm test`, and validates site learnings. The real-browser
+E2E suite is a local gate and is not run by this GitHub-hosted workflow.
+
+The current release behavior is:
+
+| Trigger                                       | Result                                                                                              |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Push a `vX.Y.Z-beta.N` tag                    | Creates a beta prerelease **Draft**.                                                                |
+| Push a `vX.Y.Z` tag                           | Publishes a stable release and marks it as Latest. The tagged commit must be reachable from `main`. |
+| Push to `dev` or `main` without a version tag | Runs CI without creating a release.                                                                 |
+
+Pull requests into `main` must come from `dev` or from a `release/*` branch whose
+head commit is already on `dev`. To release a specific dev commit, cut a release
+branch from it, merge that branch into `main` with a merge commit, then tag the
+merge commit:
+
+```bash
+git switch -c release/vX.Y.Z <dev-commit>
+git push -u origin release/vX.Y.Z
+gh pr create --base main --head release/vX.Y.Z --title "release: vX.Y.Z"
+# after merging with a merge commit
+git fetch origin && git tag -a vX.Y.Z origin/main -m "Release vX.Y.Z"
+git push origin vX.Y.Z
+```
+
+Release jobs reuse the tested build and package `dist/out/` into
+`ego-browser-<tag>.zip`. Notes are generated from merged PRs using
+[release categories](.github/release.yml). The workflow publishes the SDK and
+Skill payload, not the ego lite browser application or its installer.
