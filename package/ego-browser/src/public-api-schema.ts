@@ -221,7 +221,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: "Page.reload",
     signature: "await page.reload({ timeout?, waitUntil? })",
-    summary: "Reload this Page and wait for the selected navigation state.",
+    summary:
+      "Reload this Page and wait for the selected navigation state. A reload that has not committed by the timeout is stopped so the Page stays usable on its previous document.",
     options: {
       timeout,
       waitUntil: option(
