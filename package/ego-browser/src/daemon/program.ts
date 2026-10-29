@@ -212,6 +212,10 @@ export function wrapProgram(
     ? `var ${program.hoisted.join(", ")};\n`
     : "";
   const marker = JSON.stringify(`${RESULT_MARKER}${options.requestId}:`);
+  // Spill files are named after the id; keep it a plain basename whatever the
+  // caller sent (the daemon validates ids, this is the second line).
+  const spillBase =
+    options.requestId.replace(/[^A-Za-z0-9_-]/g, "_") || "result";
   return `${header}await (async () => {
   const __ego = { t0: performance.now(), timeoutMs: ${options.timeoutMs}, spillDir: ${JSON.stringify(options.spillDir)}, inlineLimit: ${options.inlineLimit}, logs: [] };
   const __exit = process.exit, __console = globalThis.console, __flush = globalThis.__egoBrowserFlushRound;
@@ -246,7 +250,7 @@ ${program.body}
       try {
         const fs = await import("node:fs/promises"), path = await import("node:path");
         await fs.mkdir(__ego.spillDir, { recursive: true });
-        const base = path.join(__ego.spillDir, ${JSON.stringify(options.requestId)});
+        const base = path.join(__ego.spillDir, ${JSON.stringify(spillBase)});
         // Logs first: a program that only logs a lot must not spill its value.
         if (__result.logs.length > __ego.inlineLimit / 2) {
           const file = base + ".logs.txt", tail = __result.logs.slice(-65536);

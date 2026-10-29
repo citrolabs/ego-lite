@@ -109,6 +109,17 @@ test("the wrapper itself parses as a REPL cell with top-level await", async () =
   );
 });
 
+test("spill files never take a path from the request id", () => {
+  const cell = wrapProgram(rewriteProgram("1"), {
+    requestId: "../../evil/../id",
+    timeoutMs: 1,
+    spillDir: "/s",
+    inlineLimit: 1,
+  });
+  assert.doesNotMatch(cell, /path\.join\(__ego\.spillDir, "\.\./);
+  assert.match(cell, /path\.join\(__ego\.spillDir, "______evil____id"\)/);
+});
+
 test("extractResult finds the marked line and returns the rest as stray output", () => {
   const line = `${RESULT_MARKER}req-1:${JSON.stringify({ ok: true, value: 2, logs: "", ms: 1 })}`;
   const output = `repl> some noise\r\n${line}\r\nrepl> `;

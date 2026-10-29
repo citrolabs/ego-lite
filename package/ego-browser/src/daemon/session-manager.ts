@@ -14,6 +14,8 @@ import {
   type ExecRequest,
   type ExecResponse,
   type SessionInfo,
+  isValidRequestId,
+  REQUEST_ID_PATTERN,
 } from "./protocol.js";
 import { rewriteProgram, wrapProgram } from "./program.js";
 import {
@@ -114,6 +116,12 @@ export class SessionManager {
       throw new ProtocolError(
         ErrorCodes.BAD_REQUEST,
         `invalid session id ${JSON.stringify(request.session)}: use 1-64 characters of [a-z0-9-], starting with a letter or digit`,
+      );
+    }
+    if (!isValidRequestId(requestId)) {
+      throw new ProtocolError(
+        ErrorCodes.BAD_REQUEST,
+        `request id must match ${REQUEST_ID_PATTERN}`,
       );
     }
     if (typeof request.program !== "string") {

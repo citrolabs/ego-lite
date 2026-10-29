@@ -117,6 +117,14 @@ test("exec round-trips through the socket with token and protocol checks", async
   assert.equal(badVersion.error.code, "EGO_RUN_VERSION_MISMATCH");
   const garbage = await rawReply("not an object");
   assert.equal(garbage.error.code, "EGO_RUN_BAD_REQUEST");
+  const escaping = await rawReply({
+    v: PROTOCOL_VERSION,
+    token,
+    id: "../../etc/evil",
+    cmd: "status",
+  });
+  assert.equal(escaping.error.code, "EGO_RUN_BAD_REQUEST");
+  assert.match(escaping.error.message, /request id must match/);
 
   const closed = await request(paths, {
     cmd: "session.close",

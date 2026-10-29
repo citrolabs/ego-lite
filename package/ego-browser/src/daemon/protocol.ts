@@ -16,6 +16,8 @@ export const DAEMON_IDLE_MS = 30 * 60_000;
 export const INLINE_RESULT_LIMIT = 1_000_000;
 
 export const SESSION_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+/** Request ids name spill files and result markers: no separators or quotes. */
+export const REQUEST_ID_PATTERN = /^[A-Za-z0-9._-]{1,80}$/;
 
 export type ExecRequest = {
   cmd: "exec";
@@ -149,6 +151,10 @@ export function serializeError(error: unknown): SerializedError {
 
 export function isValidSessionId(id: unknown): id is string {
   return typeof id === "string" && SESSION_ID_PATTERN.test(id);
+}
+
+export function isValidRequestId(id: unknown): id is string {
+  return typeof id === "string" && REQUEST_ID_PATTERN.test(id);
 }
 
 export function clampTimeout(value: unknown): number {

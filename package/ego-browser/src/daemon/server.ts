@@ -28,6 +28,8 @@ import {
   serializeError,
   type Request,
   type Response,
+  isValidRequestId,
+  REQUEST_ID_PATTERN,
 } from "./protocol.js";
 import {
   SessionManager,
@@ -237,6 +239,17 @@ export class Daemon {
         new ProtocolError(
           ErrorCodes.BAD_REQUEST,
           `unreadable request: ${(error as Error).message}`,
+        ),
+      );
+    }
+    // The id becomes a result-marker and a spill-file basename, so a client
+    // may not pick arbitrary text for it (`../x` would escape the spill dir).
+    if (request?.id !== undefined && !isValidRequestId(request.id)) {
+      return failure(
+        "?",
+        new ProtocolError(
+          ErrorCodes.BAD_REQUEST,
+          `request id must match ${REQUEST_ID_PATTERN}`,
         ),
       );
     }
