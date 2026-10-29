@@ -286,6 +286,7 @@ export async function clickInPage(
       actionability: options.force ? "enabled" : "pointer-enabled",
     },
   );
+  let postClickMove: Promise<void> | undefined;
   try {
     // One page round trip computes the action point and verifies that the
     // element is visible, enabled, and (unless forced) the hit target there.
@@ -399,9 +400,10 @@ export async function clickInPage(
     }
     if (!hover) {
       // The press carried the coordinates; bring the pointer (and the visible
-      // agent cursor) there afterwards without waiting for the frame-aligned
-      // acknowledgement.
-      void dispatchMouseEvent(
+      // agent cursor) there afterwards. The move is awaited before the action
+      // returns (overlapping the object release below) so the next action or
+      // the program-end cleanup cannot reorder pointer events around it.
+      postClickMove = dispatchMouseEvent(
         services,
         target.sessionId,
         {
@@ -416,7 +418,10 @@ export async function clickInPage(
       ).catch(() => {});
     }
   } finally {
-    await releaseObject(services, target.sessionId, target.objectId);
+    await Promise.all([
+      postClickMove,
+      releaseObject(services, target.sessionId, target.objectId),
+    ]);
   }
 }
 

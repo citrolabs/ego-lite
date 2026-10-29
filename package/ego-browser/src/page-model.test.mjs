@@ -55,6 +55,8 @@ function createFixture(rootDir) {
   let systemFileChooserOpened = false;
   const documentEpochs = new Map();
   let timeoutNextMouseDispatch = false;
+  let delayNextMouseMoveMs = 0;
+  let mouseMovesCompleted = 0;
   let loseSessionOnNextMouseRelease = false;
   let loseFrameOnNextResolution = null;
   let dialogOnNextClick = null;
@@ -699,6 +701,14 @@ function createFixture(rootDir) {
           timeoutNextMouseDispatch = false;
           throw new Error("CDP request timed out: Input.dispatchMouseEvent");
         }
+        if (params.type === "mouseMoved") {
+          if (delayNextMouseMoveMs) {
+            const delay = delayNextMouseMoveMs;
+            delayNextMouseMoveMs = 0;
+            await new Promise((resolve) => setTimeout(resolve, delay));
+          }
+          mouseMovesCompleted += 1;
+        }
         if (params.type === "mouseReleased") {
           if (loseSessionOnNextMouseRelease) {
             loseSessionOnNextMouseRelease = false;
@@ -929,6 +939,10 @@ function createFixture(rootDir) {
     expireFileChooserGuard() {
       activeFileChooserWaiter = null;
     },
+    delayNextMouseMove(ms) {
+      delayNextMouseMoveMs = ms;
+    },
+    mouseMovesCompleted: () => mouseMovesCompleted,
     timeoutNextMouseDispatch() {
       timeoutNextMouseDispatch = true;
     },
@@ -5054,6 +5068,32 @@ test("task.newPage() makes the next action on the earlier Page activate it again
     await task.newPage();
     await page.click("#open-upload");
     assert.equal(activations(), before + 1, "the new tab took the foreground");
+  });
+});
+
+test("click({ hover: false }) returns only after its trailing pointer move landed", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/upload-guard");
+    fixture.calls.length = 0;
+    fixture.delayNextMouseMove(40);
+
+    await page.click("#open-upload", { hover: false });
+
+    assert.deepEqual(
+      fixture.calls
+        .filter(
+          ([kind, method]) =>
+            kind === "cdp" && method === "Input.dispatchMouseEvent",
+        )
+        .map(([, , params]) => params.type),
+      ["mousePressed", "mouseReleased", "mouseMoved"],
+    );
+    assert.equal(
+      fixture.mouseMovesCompleted(),
+      1,
+      "the move landed before click() resolved",
+    );
   });
 });
 
