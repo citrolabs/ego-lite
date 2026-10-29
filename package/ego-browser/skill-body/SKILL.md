@@ -21,8 +21,10 @@ Pass the script to `ego-browser nodejs`.
 <!-- mode: ego-run -->
 
 Pass the script to `ego-run --session <id>`. Use one session id per user goal
-(lowercase letters, digits, and dashes, up to 64 characters; the task space name
-is a good id) for every script of that goal.
+(lowercase letters, digits, dashes, up to 64 characters; the task space name is
+a good id) for every script of that goal. The user starts the daemon once with
+`ego-run daemon start --detach`; on `EGO_RUN_DAEMON_UNAVAILABLE` ask them to,
+do not start it yourself.
 Scripts of one session share one Node.js context and run one at a time:
 top-level `const`/`let` declarations, functions, and Page handles from earlier
 scripts stay defined, so use `task`, `page`, or a popup handle directly instead
@@ -94,8 +96,8 @@ ego-run --session inspect-example -e 'await page.click("@3"); await page.snapsho
 A popup caught in one script (`const preview = await popupPromise`) is used as
 `preview` in later scripts, without `task.page()`.
 
-When a sandbox blocks heredoc input, use `-e` (single quotes around the code,
-double quotes for JavaScript strings) or `--file` with an absolute path.
+When a sandbox blocks heredoc input, use `-e` (single quotes outside, double
+quotes inside) or `--file` with an absolute path.
 
 <!-- /mode -->
 
@@ -174,7 +176,7 @@ editing the previous one, which would replay old steps.
 
 The session keeps earlier rounds' variables. Write a new file with only the
 next steps for every round (`round-01.mjs`, `round-02.mjs`, ...) instead of
-editing the previous one, which would replay old steps.
+editing the previous one.
 
 <!-- /mode -->
 
@@ -252,10 +254,10 @@ stop and ask the user.
 - The session context is rebuilt when a script exceeds its deadline
   (`--timeout-ms`, default 60000) or blocks the event loop; `ego-run` then
   prints `[ego-run] session ... was rebuilt`, and the next script gets its
-  handles again with `taskSpace(name)` and `task.page(label)`. Task spaces,
-  tabs, and Page labels persist either way.
-- Keep a whole loop (paging, polling) in one script and raise its deadline with
-  `--timeout-ms <ms>` (max 180000) instead of splitting it across scripts.
+  handles again with `taskSpace(name)` and `task.page(label)`. Spaces, tabs,
+  and labels persist.
+- Keep a whole loop (paging, polling) in one script; raise its deadline with
+  `--timeout-ms <ms>` (max 180000).
 
 <!-- /mode -->
 

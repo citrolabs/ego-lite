@@ -27,6 +27,7 @@ const FRAME_LIFECYCLE_EVENT = (method: string) =>
   method === "Target.detachedFromTarget" ||
   method === "Target.targetCreated" ||
   method === "Target.targetDestroyed" ||
+  method === "Target.targetCrashed" ||
   method === "Target.targetInfoChanged" ||
   method === "Page.frameAttached" ||
   method === "Page.frameDetached" ||
