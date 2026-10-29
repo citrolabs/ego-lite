@@ -49,6 +49,8 @@ class Session {
   pendingReason: string | null = "new session";
   busy = false;
   queued = 0;
+  /** Set by close(): queued programs must fail instead of reopening a REPL. */
+  closed = false;
   chain: Promise<unknown> = Promise.resolve();
 
   constructor(id: string, sdkPath: string | null, now: number) {
@@ -137,12 +139,18 @@ export class SessionManager {
       session.busy = true;
       const queueMs = this.#now() - queuedAt;
       try {
+        this.#assertOpen(session);
         let fresh = false;
         let rebuiltReason: string | undefined;
         if (!session.connection) {
           fresh = true;
           rebuiltReason = session.pendingReason ?? undefined;
           await this.#open(session);
+          if (session.closed) {
+            // close() ran while the REPL was starting: do not leave it behind.
+            this.#discard(session, "closed");
+            this.#assertOpen(session);
+          }
         }
         const connection = session.connection!;
         const cell = wrapProgram(rewritten, {
@@ -203,6 +211,15 @@ export class SessionManager {
     const result = session.chain.then(run, run);
     session.chain = result.catch(() => {});
     return result;
+  }
+
+  #assertOpen(session: Session) {
+    if (session.closed) {
+      throw new ProtocolError(
+        ErrorCodes.SESSION_LOST,
+        `session ${session.id} was closed while this program was queued`,
+      );
+    }
   }
 
   #acquire(id: string, sdkPath: string | null): Session {
@@ -299,6 +316,7 @@ export class SessionManager {
     const session = this.#sessions.get(id);
     if (!session) return false;
     this.#sessions.delete(id);
+    session.closed = true;
     this.#discard(session, "closed");
     return true;
   }
@@ -308,6 +326,7 @@ export class SessionManager {
     for (const id of [...this.#sessions.keys()]) {
       const session = this.#sessions.get(id)!;
       this.#sessions.delete(id);
+      session.closed = true;
       this.#discard(session, reason);
       count += 1;
     }

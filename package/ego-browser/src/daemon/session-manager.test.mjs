@@ -192,6 +192,53 @@ test("a REPL that exits mid-program surfaces SESSION_LOST", async () => {
   assert.equal(next.session.fresh, true);
 });
 
+test("closing a busy session fails its queued programs instead of reopening a REPL", async () => {
+  const { sessions, transports } = manager({
+    behavior: { program: (cell, id) => (id === "req-1" ? "hang" : null) },
+  });
+  const running = sessions.exec(
+    {
+      cmd: "exec",
+      session: "s",
+      program: "await new Promise(() => {})",
+      timeoutMs: 5000,
+    },
+    "req-1",
+  );
+  const queued = sessions.exec(
+    { cmd: "exec", session: "s", program: "2" },
+    "req-2",
+  );
+  // Let req-1 open its REPL and start running before closing the session.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(sessions.list()[0].queued, 1);
+  assert.equal(sessions.close("s"), true);
+  await assert.rejects(
+    running,
+    (error) => error.code === "EGO_RUN_SESSION_LOST",
+  );
+  await assert.rejects(
+    queued,
+    (error) =>
+      error.code === "EGO_RUN_SESSION_LOST" &&
+      /closed while this program was queued/.test(error.message),
+  );
+  assert.equal(
+    transports.length,
+    1,
+    "the queued program did not reopen a REPL",
+  );
+  assert.equal(transports[0].killed, true);
+  assert.equal(sessions.has("s"), false);
+  // The id is free again: a later call starts a brand-new session.
+  const next = await sessions.exec(
+    { cmd: "exec", session: "s", program: "3" },
+    "req-3",
+  );
+  assert.equal(next.session.fresh, true);
+  assert.equal(transports.length, 2);
+});
+
 test("syntax errors never open a REPL", async () => {
   const { sessions, transports } = manager();
   await assert.rejects(
