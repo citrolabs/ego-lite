@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -158,6 +164,11 @@ test("a live socket is not unlinked when the lock file is missing", async (t) =>
   rmSync(paths.lockFile); // a lost lock must not make the socket look stale
   const second = new Daemon(options);
   await assert.rejects(second.start(), /already listening/);
+  assert.equal(
+    existsSync(paths.lockFile),
+    false,
+    "the refused daemon left the lock file as it found it",
+  );
   // The live daemon still answers on its socket.
   assert.equal((await request(paths, { cmd: "status" })).pid, process.pid);
   await live.stop();

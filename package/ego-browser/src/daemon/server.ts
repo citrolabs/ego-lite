@@ -101,16 +101,13 @@ export class Daemon {
   async start(): Promise<void> {
     mkdirSync(this.paths.stateDir, { recursive: true, mode: 0o700 });
     mkdirSync(this.paths.spillDir, { recursive: true, mode: 0o700 });
-    this.#acquireLock();
+    // Order matters: refuse on a live lock, then on a live socket (the lock
+    // file can be missing or unreadable while a daemon still owns the
+    // socket), and only then write our own lock, so another daemon's files
+    // are never touched on the way out.
+    this.#checkLock();
     if (process.platform !== "win32" && existsSync(this.paths.endpoint)) {
-      // The lock file can be missing or unreadable while a daemon still owns
-      // the socket, so probe the endpoint before treating it as stale.
       if (await endpointAlive(this.paths.endpoint)) {
-        try {
-          unlinkSync(this.paths.lockFile); // we took a lock that is not ours
-        } catch {
-          // best effort
-        }
         throw new ProtocolError(
           ErrorCodes.BAD_REQUEST,
           `an ego-run daemon is already listening on ${this.paths.endpoint}`,
@@ -118,6 +115,7 @@ export class Daemon {
       }
       unlinkSync(this.paths.endpoint); // stale socket from a crashed daemon
     }
+    this.#writeLock();
     this.#token = this.#loadOrCreateToken();
     this.#server = createServer((socket) => this.#serve(socket));
     await new Promise<void>((resolve, reject) => {
@@ -174,7 +172,8 @@ export class Daemon {
     return this.#stopping;
   }
 
-  #acquireLock() {
+  /** Throw when the lock file names a live process other than this one. */
+  #checkLock() {
     try {
       const pid = Number(readFileSync(this.paths.lockFile, "utf8").trim());
       if (pid && pid !== process.pid && processAlive(pid)) {
@@ -185,8 +184,11 @@ export class Daemon {
       }
     } catch (error) {
       if (error instanceof ProtocolError) throw error;
-      // no lock, or an unreadable one: take it
+      // no lock, or an unreadable one
     }
+  }
+
+  #writeLock() {
     writeFileSync(this.paths.lockFile, `${process.pid}\n`, { mode: 0o600 });
   }
 
