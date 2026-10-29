@@ -1,15 +1,12 @@
-import { randomUUID } from "node:crypto";
 import {
   mkdir,
   readFile,
   readdir,
-  rename,
   rm,
   stat,
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import { runtimeStateDir } from "./env.js";
 import {
   validatePageRefState,
@@ -45,56 +42,25 @@ type PageLedgerStoreOptions = {
   browserInstanceId?: string | (() => string | Promise<string>);
   staleAfterMs?: number;
   now?: () => number;
-  /** Test seam for the final rename of an atomic ledger write. */
-  rename?: RenameWithRetryOptions;
+  /** Test seam for removing superseded ledger versions. */
+  remove?: (path: string) => Promise<void>;
 };
 
 const DEFAULT_STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_WRITE_CONFLICTS = 8;
+const LEDGER_FILE_PATTERN = /^space-\d+(@[A-Za-z0-9_-]+)?(\.\d+)?\.json$/;
 
 /**
- * Windows reports a sharing violation as EPERM/EACCES/EBUSY when a rename
- * replaces a file that another handle (an antivirus scan, the search indexer,
- * a concurrent reader) still holds open. The condition clears within
- * milliseconds, so the replacement is retried briefly instead of aborting
- * the caller's script.
+ * Codes under which a ledger version cannot be opened right now. Windows
+ * reports a file that another process holds without delete sharing, or that
+ * is pending deletion, as EPERM/EACCES/EBUSY rather than ENOENT.
  */
-const RETRYABLE_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
-const RENAME_RETRY_ATTEMPTS = 10;
-const RENAME_RETRY_BASE_MS = 20;
-const RENAME_RETRY_MAX_MS = 250;
+const UNREADABLE_CODES = new Set(["ENOENT", "EPERM", "EACCES", "EBUSY"]);
 
-type RenameWithRetryOptions = {
-  rename?: (from: string, to: string) => Promise<void>;
-  sleep?: (ms: number) => Promise<unknown>;
-  attempts?: number;
-};
+/** A version with the next sequence number appeared between load and write. */
+class LedgerWriteConflict extends Error {}
 
-/** Rename over an existing file, retrying transient sharing violations. */
-export async function renameWithRetry(
-  from: string,
-  to: string,
-  options: RenameWithRetryOptions = {},
-): Promise<void> {
-  const doRename = options.rename || rename;
-  const wait = options.sleep || sleep;
-  const attempts = options.attempts ?? RENAME_RETRY_ATTEMPTS;
-  for (let attempt = 0; ; attempt++) {
-    try {
-      await doRename(from, to);
-      return;
-    } catch (error) {
-      if (
-        !RETRYABLE_RENAME_CODES.has((error as { code?: string })?.code ?? "") ||
-        attempt >= attempts
-      ) {
-        throw error;
-      }
-      await wait(
-        Math.min(RENAME_RETRY_BASE_MS * 2 ** attempt, RENAME_RETRY_MAX_MS),
-      );
-    }
-  }
-}
+type LedgerFile = { seq: number; path: string };
 
 /** Stable across Agent rounds and Node-service restarts in one Ego Lite run. */
 export function runtimeInstanceId(parentPid = process.ppid): string {
@@ -114,18 +80,24 @@ type ReconcileOptions = {
 /**
  * Stores durable page labels in one JSON document per task space and browser
  * instance. Space ids restart at 1 in every Ego Lite instance, so concurrent
- * instances sharing the state directory must not share a file. Each update
- * replaces the complete document with an atomic rename so readers never see a
- * partially written ledger.
+ * instances sharing the state directory must not share a file.
+ *
+ * Every write creates a new numbered version (`space-<id>@<instance>.<n>.json`)
+ * and the highest version that parses is the current ledger. No file is ever
+ * renamed over or truncated in place: on Windows, replacing a file that
+ * another process (an antivirus scan, the search indexer, a concurrent
+ * reader) holds open fails with EPERM for as long as that handle stays open,
+ * which used to abort the caller's script. Superseded versions are removed
+ * best-effort after each write, so one that is still held open is simply
+ * left for a later write. Readers skip a version they cannot open or parse
+ * yet, so a write in progress is invisible until it is complete.
  */
 export class PageLedgerStore {
   readonly rootDir: string;
-  readonly #writeToken = randomUUID();
   readonly #browserInstanceId?: string | (() => string | Promise<string>);
   readonly #staleAfterMs: number;
   readonly #now: () => number;
-  readonly #renameOptions: RenameWithRetryOptions;
-  #temporarySequence = 0;
+  readonly #remove: (path: string) => Promise<void>;
   #resolvedBrowserInstanceId?: Promise<string | undefined>;
   #cleanup?: Promise<void>;
 
@@ -137,7 +109,7 @@ export class PageLedgerStore {
         ? DEFAULT_STALE_AFTER_MS
         : options.staleAfterMs;
     this.#now = options.now || Date.now;
-    this.#renameOptions = options.rename || {};
+    this.#remove = options.remove || ((path) => rm(path, { force: true }));
     if (!Number.isFinite(this.#staleAfterMs) || this.#staleAfterMs < 0) {
       throw new TypeError("staleAfterMs must be a non-negative number");
     }
@@ -164,15 +136,19 @@ export class PageLedgerStore {
     ledger.initialized = true;
     ledger.usedLabels.push(label);
     ledger.pages[label] = entry;
-    await this.#writeAtomic(spaceId, ledger);
+    await this.#writeLatest(spaceId, ledger);
     return { label, ...entry };
   }
 
-  /** Remove all Page-model state after its task space is finished or closed. */
+  /**
+   * Remove all Page-model state after its task space is finished or closed.
+   * A version that another process still holds open stays behind; it is
+   * expired like any other stale ledger.
+   */
   async discard(spaceId: number): Promise<void> {
     assertSpaceId(spaceId);
     const browserInstanceId = await this.#currentBrowserInstanceId();
-    await rm(this.#path(spaceId, browserInstanceId), { force: true });
+    await this.#removeAll(await this.#listVersions(spaceId, browserInstanceId));
   }
 
   async getPage(spaceId: number, label: string): Promise<ManagedPage> {
@@ -405,39 +381,153 @@ export class PageLedgerStore {
     mutate: (ledger: PageLedger) => void,
   ): Promise<PageLedger> {
     assertSpaceId(spaceId);
-    const next = await this.#readCurrent(spaceId);
-    mutate(next);
-    await this.#writeAtomic(spaceId, next);
-    return cloneLedger(next);
+    for (let conflicts = 0; ; conflicts++) {
+      const { ledger, files } = await this.#load(spaceId);
+      mutate(ledger);
+      try {
+        await this.#write(spaceId, ledger, files);
+        return cloneLedger(ledger);
+      } catch (error) {
+        if (
+          !(error instanceof LedgerWriteConflict) ||
+          conflicts >= MAX_WRITE_CONFLICTS
+        ) {
+          throw error;
+        }
+      }
+    }
   }
 
   async #readCurrent(spaceId: number): Promise<PageLedger> {
+    return (await this.#load(spaceId)).ledger;
+  }
+
+  /** The current ledger plus every version file it was chosen from. */
+  async #load(
+    spaceId: number,
+  ): Promise<{ ledger: PageLedger; files: LedgerFile[] }> {
     const browserInstanceId = await this.#currentBrowserInstanceId();
     await this.#cleanupExpiredLedgers(browserInstanceId);
-    const path = this.#path(spaceId, browserInstanceId);
-    const stored = await readLedgerJson(path);
-    if (stored !== undefined) {
-      return (
-        ownedLedger(stored, spaceId, path, browserInstanceId) ||
-        emptyLedger(spaceId, browserInstanceId)
-      );
+    const files = await this.#listVersions(spaceId, browserInstanceId);
+    for (const file of files) {
+      const stored = await readLedgerJson(file.path);
+      if (stored === undefined) continue;
+      return {
+        ledger:
+          ownedLedger(stored, spaceId, file.path, browserInstanceId) ||
+          emptyLedger(spaceId, browserInstanceId),
+        files,
+      };
     }
-    if (browserInstanceId === undefined) return emptyLedger(spaceId);
+    if (browserInstanceId === undefined || files.length > 0) {
+      return { ledger: emptyLedger(spaceId, browserInstanceId), files };
+    }
 
     // Earlier SDKs wrote every instance's ledger to the shared space file.
     // Move this instance's ledger (or one from before instance ids existed)
     // so an SDK upgrade does not discard live Page labels.
-    const legacyPath = this.#path(spaceId);
+    const legacyPath = this.#legacyPath(spaceId);
     const legacy = await readLedgerJson(legacyPath);
     const ledger =
       legacy === undefined
         ? undefined
         : ownedLedger(legacy, spaceId, legacyPath, browserInstanceId);
-    if (!ledger) return emptyLedger(spaceId, browserInstanceId);
+    if (!ledger) {
+      return { ledger: emptyLedger(spaceId, browserInstanceId), files };
+    }
     ledger.browserInstanceId = browserInstanceId;
-    await this.#writeAtomic(spaceId, ledger);
-    await rm(legacyPath, { force: true });
-    return ledger;
+    const written = await this.#writeLatest(spaceId, ledger);
+    await this.#remove(legacyPath).catch(() => {});
+    return { ledger, files: written };
+  }
+
+  /** Write `ledger` as the next version, whatever versions exist right now. */
+  async #writeLatest(
+    spaceId: number,
+    ledger: PageLedger,
+  ): Promise<LedgerFile[]> {
+    const browserInstanceId = await this.#currentBrowserInstanceId();
+    for (let conflicts = 0; ; conflicts++) {
+      const files = await this.#listVersions(spaceId, browserInstanceId);
+      try {
+        return await this.#write(spaceId, ledger, files);
+      } catch (error) {
+        if (
+          !(error instanceof LedgerWriteConflict) ||
+          conflicts >= MAX_WRITE_CONFLICTS
+        ) {
+          throw error;
+        }
+      }
+    }
+  }
+
+  /**
+   * Create the version after `files` (the listing the ledger was loaded
+   * from), then remove those superseded versions. Another writer that got
+   * there first raises LedgerWriteConflict so the caller reloads instead of
+   * overwriting its update.
+   */
+  async #write(
+    spaceId: number,
+    ledger: PageLedger,
+    files: LedgerFile[],
+  ): Promise<LedgerFile[]> {
+    await mkdir(this.rootDir, { recursive: true, mode: 0o700 });
+    const seq = (files[0]?.seq ?? 0) + 1;
+    const path = `${this.#base(spaceId, await this.#currentBrowserInstanceId())}.${seq}.json`;
+    try {
+      await writeFile(path, `${JSON.stringify(ledger, null, 2)}\n`, {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+      });
+    } catch (error) {
+      if ((error as { code?: string })?.code === "EEXIST") {
+        throw new LedgerWriteConflict(
+          `page ledger ${path} was written concurrently`,
+        );
+      }
+      throw error;
+    }
+    await this.#removeAll(files);
+    return [{ seq, path }];
+  }
+
+  /** Best-effort removal: a version held open elsewhere is left behind. */
+  async #removeAll(files: LedgerFile[]): Promise<void> {
+    await Promise.all(
+      files.map((file) => this.#remove(file.path).catch(() => {})),
+    );
+  }
+
+  /** Every version of one space's ledger, newest first; the unnumbered legacy file is version 0. */
+  async #listVersions(
+    spaceId: number,
+    browserInstanceId: string | undefined,
+  ): Promise<LedgerFile[]> {
+    let names: string[];
+    try {
+      names = await readdir(this.rootDir);
+    } catch (error) {
+      if (error?.code === "ENOENT") return [];
+      throw error;
+    }
+    // The base holds only digits and a sanitized [A-Za-z0-9_-] scope.
+    const base = `space-${spaceId}${scopeSuffix(browserInstanceId)}`;
+    const pattern = new RegExp(`^${base}(?:\\.(\\d+))?\\.json$`);
+    return names
+      .flatMap((name) => {
+        const match = pattern.exec(name);
+        if (!match) return [];
+        return [
+          {
+            seq: match[1] ? Number(match[1]) : 0,
+            path: join(this.rootDir, name),
+          },
+        ];
+      })
+      .sort((a, b) => b.seq - a.seq);
   }
 
   async #currentBrowserInstanceId(): Promise<string | undefined> {
@@ -473,7 +563,7 @@ export class PageLedgerStore {
     }
     await Promise.all(
       names
-        .filter((name) => /^space-\d+(@[A-Za-z0-9_-]+)?\.json$/.test(name))
+        .filter((name) => LEDGER_FILE_PATTERN.test(name))
         .map(async (name) => {
           const path = join(this.rootDir, name);
           const metadata = await stat(path).catch(() => undefined);
@@ -498,42 +588,43 @@ export class PageLedgerStore {
     );
   }
 
-  async #writeAtomic(spaceId: number, ledger: PageLedger): Promise<void> {
-    await mkdir(this.rootDir, { recursive: true, mode: 0o700 });
-    const path = this.#path(spaceId, await this.#currentBrowserInstanceId());
-    const temporary = `${path}.${process.pid}.${this.#writeToken}.${++this.#temporarySequence}.tmp`;
-    try {
-      await writeFile(temporary, `${JSON.stringify(ledger, null, 2)}\n`, {
-        encoding: "utf8",
-        mode: 0o600,
-      });
-      await renameWithRetry(temporary, path, this.#renameOptions);
-    } finally {
-      await rm(temporary, { force: true }).catch(() => {});
-    }
+  #base(spaceId: number, browserInstanceId?: string): string {
+    return join(
+      this.rootDir,
+      `space-${spaceId}${scopeSuffix(browserInstanceId)}`,
+    );
   }
 
-  #path(spaceId: number, browserInstanceId?: string): string {
-    const scope =
-      browserInstanceId === undefined
-        ? ""
-        : `@${browserInstanceId.replace(/[^A-Za-z0-9_-]/g, "-")}`;
-    return join(this.rootDir, `space-${spaceId}${scope}.json`);
+  /** The shared, unnumbered file that SDKs before instance ids wrote. */
+  #legacyPath(spaceId: number): string {
+    return `${this.#base(spaceId)}.json`;
   }
 }
 
+function scopeSuffix(browserInstanceId: string | undefined): string {
+  return browserInstanceId === undefined
+    ? ""
+    : `@${browserInstanceId.replace(/[^A-Za-z0-9_-]/g, "-")}`;
+}
+
+/**
+ * Read one ledger document. Returns undefined when the file is missing, cannot
+ * be opened right now, or does not parse: a version another process is still
+ * writing, or one left truncated by a crash, must not shadow the version
+ * before it.
+ */
 async function readLedgerJson(path: string): Promise<unknown> {
   let raw: string;
   try {
     raw = await readFile(path, "utf8");
   } catch (error) {
-    if (error?.code === "ENOENT") return undefined;
+    if (UNREADABLE_CODES.has(error?.code)) return undefined;
     throw error;
   }
   try {
     return JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`invalid page ledger ${path}: ${error.message}`);
+  } catch {
+    return undefined;
   }
 }
 

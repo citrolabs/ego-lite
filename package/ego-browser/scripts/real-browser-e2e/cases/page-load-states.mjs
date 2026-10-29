@@ -351,8 +351,7 @@ export function pageLoadStatesCase() {
       });
       document.body.append(button);
     }, baseUrl + "/secondary?page-load-states=delayed-popup");
-    const ledgerPath = await pageLedgerPath(task.spaceId);
-    const beforeLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
+    const beforeLedger = await readPageLedger(task.spaceId);
     const beforeTargets = new Set(
       Object.values(beforeLedger.pages).map((entry) => entry.targetId)
     );
@@ -363,7 +362,7 @@ export function pageLoadStatesCase() {
       "the popup is created after the action receipt window"
     );
     await page.waitForTimeout(1_000);
-    const afterLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
+    const afterLedger = await readPageLedger(task.spaceId);
     const delayedPopup = Object.entries(afterLedger.pages).find(
       ([, entry]) => !beforeTargets.has(entry.targetId)
     );
