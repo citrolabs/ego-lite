@@ -55,11 +55,14 @@ function fakeTransport(behavior = {}) {
       for (const listener of listeners.exit) listener({ exitCode });
     },
   };
-  setTimeout(
-    () =>
-      transport.emit("ego-browser nodejs REPL. Type .exit to quit\r\nrepl> "),
-    2,
-  );
+  setTimeout(() => {
+    if (behavior.startup === "exit") {
+      transport.emit("ego-browser: cannot connect to the browser\r\n");
+      transport.emitExit(1);
+      return;
+    }
+    transport.emit("ego-browser nodejs REPL. Type .exit to quit\r\nrepl> ");
+  }, 2);
   return transport;
 }
 
@@ -237,6 +240,22 @@ test("closing a busy session fails its queued programs instead of reopening a RE
   );
   assert.equal(next.session.fresh, true);
   assert.equal(transports.length, 2);
+});
+
+test("a REPL that exits before its banner fails startup promptly", async () => {
+  const { sessions } = manager({ behavior: { startup: "exit" } });
+  const started = Date.now();
+  await assert.rejects(
+    sessions.exec({ cmd: "exec", session: "s", program: "1" }, "req-1"),
+    (error) =>
+      error.code === "EGO_RUN_SESSION_START_FAILED" &&
+      /exited before entering the REPL \(code 1\)/.test(error.message) &&
+      /cannot connect/.test(error.message),
+  );
+  assert.ok(
+    Date.now() - started < 2000,
+    "startup failure must not wait out the 20 s banner timeout",
+  );
 });
 
 test("syntax errors never open a REPL", async () => {

@@ -128,7 +128,8 @@ export class ReplConnection {
   /** Resolve once the REPL prints its banner; reject when the CLI exits first. */
   async waitForBanner(timeoutMs = BANNER_TIMEOUT_MS): Promise<void> {
     const ready = () => /ego-browser nodejs REPL|repl> /.test(this.#output);
-    await this.#waitUntil(ready, timeoutMs);
+    // An early exit must not wait out the banner timeout.
+    await this.#waitUntil(() => ready() || !this.alive, timeoutMs);
     if (!this.alive) {
       throw new ProtocolError(
         ErrorCodes.SESSION_START_FAILED,
