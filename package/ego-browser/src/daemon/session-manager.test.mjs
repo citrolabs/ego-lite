@@ -66,6 +66,7 @@ function fakeTransport(behavior = {}) {
     },
   };
   setTimeout(() => {
+    if (behavior.startup === "silent") return; // alive, never enters the REPL
     if (behavior.startup === "exit") {
       transport.emit("ego-browser: cannot connect to the browser\r\n");
       transport.emitExit(1);
@@ -307,6 +308,21 @@ test("a program whose client disconnected while queued is skipped", async () => 
     "the orphaned program was not sent",
   );
   assert.equal(transports[0].killed, false);
+});
+
+test("a live REPL that never prints its banner is killed, not leaked", async () => {
+  const { sessions, transports } = manager({
+    behavior: { startup: "silent" },
+    manager: { bannerTimeoutMs: 200 },
+  });
+  await assert.rejects(
+    sessions.exec({ cmd: "exec", session: "s", program: "1" }, "req-1"),
+    (error) =>
+      error.code === "EGO_RUN_SESSION_START_FAILED" &&
+      /did not enter the REPL within 200 ms/.test(error.message),
+  );
+  assert.equal(transports.length, 1);
+  assert.equal(transports[0].killed, true, "the silent process was killed");
 });
 
 test("a REPL that exits before its banner fails startup promptly", async () => {

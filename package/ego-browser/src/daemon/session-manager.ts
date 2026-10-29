@@ -37,6 +37,8 @@ export type SessionManagerOptions = {
   now?: () => number;
   /** Test seam: build a connection without a real pty. */
   connect?: (options: SpawnReplOptions) => Promise<ReplConnection>;
+  /** How long a new REPL may take to print its banner (tests shorten it). */
+  bannerTimeoutMs?: number;
 };
 
 class Session {
@@ -282,11 +284,13 @@ export class SessionManager {
       (async (options: SpawnReplOptions) =>
         new ReplConnection(await spawnReplTransport(options)));
     const started = this.#now();
-    let connection: ReplConnection;
+    let connection: ReplConnection | undefined;
     try {
       connection = await connect(spawnOptions);
-      await connection.waitForBanner();
+      await connection.waitForBanner(this.#options.bannerTimeoutMs);
     } catch (error) {
+      // A process that is alive but never entered the REPL must not linger.
+      connection?.kill();
       this.#log(`open ${session.id} failed: ${(error as Error).message}`);
       throw error instanceof ProtocolError
         ? error
