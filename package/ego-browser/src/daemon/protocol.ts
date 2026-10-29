@@ -67,6 +67,8 @@ export type ExecResponse = {
   value?: unknown;
   /** Absolute path of the spilled result when it exceeded the inline limit. */
   valueFile?: string;
+  /** Absolute path of the full output when the logs exceeded the limit. */
+  logsFile?: string;
   /** Everything the program logged (console.*, cliLog, help(), notices). */
   logs: string;
   error?: SerializedError;

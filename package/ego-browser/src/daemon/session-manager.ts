@@ -108,6 +108,7 @@ export class SessionManager {
   async exec(
     request: ExecRequest,
     requestId = `req-${++this.#requestSeq}`,
+    { signal }: { signal?: AbortSignal } = {},
   ): Promise<ExecResponse> {
     if (!isValidSessionId(request.session)) {
       throw new ProtocolError(
@@ -140,6 +141,23 @@ export class SessionManager {
       const queueMs = this.#now() - queuedAt;
       try {
         this.#assertOpen(session);
+        // The client is gone: nobody would see the result, and a program that
+        // runs unseen still mutates the context. Skip it; the session is intact.
+        if (signal?.aborted) {
+          throw new ProtocolError(
+            ErrorCodes.BAD_REQUEST,
+            `client disconnected after waiting ${queueMs} ms for session ${session.id}; the program did not start`,
+          );
+        }
+        // Queue time counts against the deadline, so the client never waits
+        // longer than its own timeout for a program that has not started.
+        const remainingMs = timeoutMs - queueMs;
+        if (remainingMs <= 0) {
+          throw new ProtocolError(
+            ErrorCodes.DEADLINE,
+            `the ${timeoutMs} ms deadline passed while waiting ${queueMs} ms for session ${session.id}; the program did not start`,
+          );
+        }
         let fresh = false;
         let rebuiltReason: string | undefined;
         if (!session.connection) {
@@ -155,14 +173,14 @@ export class SessionManager {
         const connection = session.connection!;
         const cell = wrapProgram(rewritten, {
           requestId,
-          timeoutMs,
+          timeoutMs: remainingMs,
           spillDir: this.#options.spillDir,
           inlineLimit: this.#options.inlineLimit,
         });
         const started = this.#now();
         let outcome;
         try {
-          outcome = await connection.exec(cell, requestId, timeoutMs);
+          outcome = await connection.exec(cell, requestId, remainingMs);
         } catch (error) {
           const code = (error as ProtocolError).code;
           this.#discard(
@@ -187,6 +205,7 @@ export class SessionManager {
           ok: envelope.ok,
           value: envelope.value,
           valueFile: envelope.valueFile,
+          logsFile: envelope.logsFile,
           logs: envelope.logs ?? "",
           error: envelope.error,
           ms: envelope.ms,

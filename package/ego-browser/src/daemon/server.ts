@@ -206,6 +206,10 @@ export class Daemon {
 
   #serve(socket: Socket) {
     let buffer = "";
+    // Aborted when the client goes away, so a program still waiting in its
+    // session queue is skipped instead of running unseen.
+    const gone = new AbortController();
+    socket.once("close", () => gone.abort());
     socket.setEncoding("utf8");
     socket.on("data", (chunk: string) => {
       buffer += chunk;
@@ -214,8 +218,8 @@ export class Daemon {
       const line = buffer.slice(0, newline);
       buffer = "";
       socket.removeAllListeners("data");
-      void this.#handleLine(line).then((response) => {
-        socket.end(`${JSON.stringify(response)}\n`);
+      void this.#handleLine(line, gone.signal).then((response) => {
+        if (!socket.destroyed) socket.end(`${JSON.stringify(response)}\n`);
       });
     });
     socket.on("error", () => {
@@ -223,7 +227,7 @@ export class Daemon {
     });
   }
 
-  async #handleLine(line: string): Promise<Response> {
+  async #handleLine(line: string, signal?: AbortSignal): Promise<Response> {
     let request: Request;
     try {
       request = JSON.parse(line);
@@ -263,16 +267,20 @@ export class Daemon {
     }
     this.#lastActivity = Date.now();
     try {
-      return await this.#dispatch(request, id);
+      return await this.#dispatch(request, id, signal);
     } catch (error) {
       return failure(id, error);
     }
   }
 
-  async #dispatch(request: Request, id: string): Promise<Response> {
+  async #dispatch(
+    request: Request,
+    id: string,
+    signal?: AbortSignal,
+  ): Promise<Response> {
     switch (request.cmd) {
       case "exec":
-        return this.sessions.exec(request, id);
+        return this.sessions.exec(request, id, { signal });
       case "session.new":
         return { id, ok: true, session: this.sessions.newId(request.prefix) };
       case "session.list":

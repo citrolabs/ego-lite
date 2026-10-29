@@ -96,6 +96,13 @@ session's lifetime; `EGO_BROWSER_BIN` picks the executable the daemon starts.
 - Sessions idle for 10 minutes are closed; the daemon exits after 30 minutes
   without sessions. `ego-browser --version` is checked every minute and a
   version change closes every session.
+- A program's deadline counts the time it waited in the session queue, so a
+  caller never waits longer than its own timeout; a program whose client has
+  disconnected while it was queued is skipped and leaves the context untouched.
+- Programs run inside the browser's Node Service, exactly like a direct
+  `ego-browser nodejs` script. Neither the daemon's nor the client's working
+  directory applies to the script (the guide requires absolute paths), so the
+  REPL's `cwd` is not part of a session's identity.
 - `process.exit()` inside a program is refused (it would kill the runtime).
 - The protocol carries a version; a mismatch tells the agent to restart the
   daemon after a plugin upgrade.
@@ -108,9 +115,12 @@ The SDK now treats one agent script as a *program* (`beginProgram()` /
 the daemon wrapper calls both around every call. Inside a program:
 
 - a Page is activated once, and again only when the script switches Pages or
-  after a new tab was created (a popup, a new Page): the new tab takes the
-  foreground, and a hidden tab does not answer input or animation-frame waits,
-  so the next action on the earlier Page would hang without re-activation;
+  after a new tab was created (a popup, `task.newPage()`): the new tab takes
+  the foreground, and a hidden tab does not answer input or animation-frame
+  waits, so the next action on the earlier Page would hang without
+  re-activation. The SDK invalidates its activation cache itself whenever it
+  creates or adopts a tab, so this holds even when `Target.targetCreated`
+  events are unavailable;
 - the file chooser safety interception is armed on the first guarded action
   and released at the end, instead of on and off around every action; when
   the runtime drops it (timer expiry, session loss) the next action re-arms
@@ -118,9 +128,11 @@ the daemon wrapper calls both around every call. Inside a program:
   timer is `unref`'d (`keepAlive: false`): the direct CLI releases the guard
   from `beforeExit`, which only fires once the event loop has drained, so a
   ref'd timer would keep every script with a click alive for 30 minutes;
-- the file-input probe is installed once per document (`documentEpoch()`), and
-  reading it after an input action is the one renderer round trip that also
-  orders popup events ahead of the receipt;
+- the file-input probe is installed once per program and document
+  (`documentEpoch()`) and removed when the program ends, so pages do not see
+  its prototype wrappers between programs; reading it after an input action is
+  the one renderer round trip that also orders popup events ahead of the
+  receipt;
 - frame discovery (`Target.getTargets` + `Page.getFrameTree`) is answered from a
   cache until a Target or Page frame lifecycle event invalidates it;
 - the click point settle waits two frames only when something may be moving

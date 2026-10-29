@@ -25,6 +25,16 @@ function fakeTransport(behavior = {}) {
       const id = /@@EGO-RUN:([^:"]+):/.exec(cell)[1];
       const program = behavior.program ? behavior.program(cell, id) : null;
       if (program === "hang") return;
+      if (program && typeof program === "object" && program.delayMs) {
+        setTimeout(
+          () =>
+            this.emit(
+              `${RESULT_MARKER}${id}:${JSON.stringify({ ok: true, value: id, logs: "", ms: program.delayMs })}\nrepl> `,
+            ),
+          program.delayMs,
+        );
+        return;
+      }
       if (program === "exit") {
         setTimeout(() => this.emitExit(1), 5);
         return;
@@ -240,6 +250,63 @@ test("closing a busy session fails its queued programs instead of reopening a RE
   );
   assert.equal(next.session.fresh, true);
   assert.equal(transports.length, 2);
+});
+
+test("queue time counts against the deadline and a late program never starts", async () => {
+  const { sessions, transports } = manager({
+    behavior: {
+      program: (cell, id) => (id === "req-1" ? { delayMs: 1300 } : null),
+    },
+  });
+  const first = sessions.exec(
+    { cmd: "exec", session: "s", program: "1", timeoutMs: 5000 },
+    "req-1",
+  );
+  await assert.rejects(
+    sessions.exec(
+      { cmd: "exec", session: "s", program: "2", timeoutMs: 1000 },
+      "req-2",
+    ),
+    (error) =>
+      error.code === "EGO_RUN_DEADLINE" && /did not start/.test(error.message),
+  );
+  assert.equal((await first).ok, true);
+  assert.equal(transports[0].cells.length, 1, "req-2 was never sent");
+  assert.equal(transports[0].killed, false, "the session is intact");
+  const next = await sessions.exec(
+    { cmd: "exec", session: "s", program: "3" },
+    "req-3",
+  );
+  assert.equal(next.session.fresh, false);
+});
+
+test("a program whose client disconnected while queued is skipped", async () => {
+  const { sessions, transports } = manager({
+    behavior: {
+      program: (cell, id) => (id === "req-1" ? { delayMs: 100 } : null),
+    },
+  });
+  const gone = new AbortController();
+  const first = sessions.exec(
+    { cmd: "exec", session: "s", program: "1" },
+    "req-1",
+  );
+  const queued = sessions.exec(
+    { cmd: "exec", session: "s", program: "2" },
+    "req-2",
+    { signal: gone.signal },
+  );
+  gone.abort();
+  await assert.rejects(queued, (error) =>
+    /client disconnected/.test(error.message),
+  );
+  assert.equal((await first).ok, true);
+  assert.equal(
+    transports[0].cells.length,
+    1,
+    "the orphaned program was not sent",
+  );
+  assert.equal(transports[0].killed, false);
 });
 
 test("a REPL that exits before its banner fails startup promptly", async () => {

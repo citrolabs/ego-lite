@@ -246,10 +246,21 @@ ${program.body}
       try {
         const fs = await import("node:fs/promises"), path = await import("node:path");
         await fs.mkdir(__ego.spillDir, { recursive: true });
-        const file = path.join(__ego.spillDir, ${JSON.stringify(options.requestId)} + ".json");
-        await fs.writeFile(file, JSON.stringify(__result.value, __egoRunReplacer()));
-        __result.valueFile = file; __result.valueBytes = json.length; delete __result.value;
-        json = JSON.stringify(__result, __egoRunReplacer());
+        const base = path.join(__ego.spillDir, ${JSON.stringify(options.requestId)});
+        // Logs first: a program that only logs a lot must not spill its value.
+        if (__result.logs.length > __ego.inlineLimit / 2) {
+          const file = base + ".logs.txt", tail = __result.logs.slice(-65536);
+          await fs.writeFile(file, __result.logs);
+          __result.logsFile = file; __result.logsBytes = __result.logs.length;
+          __result.logs = "[ego-run] " + __result.logsBytes + " bytes of output written to " + file + "; the last 64 KB follow\\n" + tail;
+          json = JSON.stringify(__result, __egoRunReplacer());
+        }
+        if (json.length > __ego.inlineLimit) {
+          const file = base + ".json";
+          await fs.writeFile(file, JSON.stringify(__result.value, __egoRunReplacer()));
+          __result.valueFile = file; __result.valueBytes = json.length; delete __result.value;
+          json = JSON.stringify(__result, __egoRunReplacer());
+        }
       } catch (error) { __result.value = undefined; __result.error = { name: "Error", message: "result too large and could not be spilled: " + (error?.message ?? error) }; json = JSON.stringify(__result, __egoRunReplacer()); }
     }
     process.stdout.write(${marker} + json + "\\n");
@@ -282,6 +293,9 @@ export type ResultEnvelope = {
   value?: unknown;
   valueFile?: string;
   valueBytes?: number;
+  /** Absolute path of the full output when the logs exceeded the limit. */
+  logsFile?: string;
+  logsBytes?: number;
   logs: string;
   error?: { name: string; message: string; stack?: string; code?: string };
   ms: number;

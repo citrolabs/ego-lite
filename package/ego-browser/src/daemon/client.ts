@@ -9,6 +9,7 @@ import type { DaemonPaths } from "./paths.js";
 import {
   ErrorCodes,
   MAX_TIMEOUT_MS,
+  clampTimeout,
   PROTOCOL_VERSION,
   ProtocolError,
   type Response,
@@ -30,10 +31,19 @@ export function readToken(paths: DaemonPaths): string | null {
 }
 
 /** Send one request and return the daemon's response line. */
+/** Room for the daemon to start a REPL before the program's own deadline runs. */
+const REPL_START_MARGIN_MS = 30_000;
+
 export function request(
   paths: DaemonPaths,
   body: Record<string, unknown>,
-  { timeoutMs = MAX_TIMEOUT_MS + 15_000 }: { timeoutMs?: number } = {},
+  {
+    // The daemon answers an exec within its deadline (queue time included),
+    // plus the time to start a REPL; other commands are quick.
+    timeoutMs = body.cmd === "exec"
+      ? clampTimeout(body.timeoutMs) + REPL_START_MARGIN_MS
+      : 30_000,
+  }: { timeoutMs?: number } = {},
 ): Promise<Response> {
   const token = readToken(paths);
   if (!token) {
