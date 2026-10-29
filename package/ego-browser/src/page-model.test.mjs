@@ -2295,6 +2295,66 @@ test("Page.goto names a pending navigation it could not stop", async () => {
   });
 });
 
+test("Page.goto reports a navigation that commits while it is being stopped", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let nowMs = 0;
+    let held = false;
+    let loaderId = "loader-old";
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.navigate") {
+          const response = await baseCdp(method, params, sessionId, timeoutMs);
+          if (params.url !== "https://example.test/held") return response;
+          held = true;
+          nowMs += timeoutMs;
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Page.stopLoading") {
+          // The response arrived just before the stop: the new document is
+          // in place by the time the Page answers again.
+          held = false;
+          loaderId = "loader-new";
+          return {};
+        }
+        if (method === "Page.getFrameTree") {
+          if (held)
+            throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+          return {
+            result: { frameTree: { frame: { id: "frame-1", loaderId } } },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+      now: () => nowMs,
+      async sleep(ms) {
+        nowMs += ms;
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    nowMs = 0;
+
+    await assert.rejects(
+      () =>
+        page.goto("https://example.test/held", {
+          timeout: 100,
+          waitUntil: "load",
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_NAVIGATION_TIMEOUT");
+        assert.equal(error.committed, true);
+        assert.equal(error.stopped, true);
+        assert.match(
+          error.message,
+          /navigation committed at "https:\/\/example\.test\/held".*but its loading was stopped at the deadline\. Call page\.reload\(\{ timeout \}\)/,
+        );
+        assert.doesNotMatch(error.message, /previous document/);
+        return true;
+      },
+    );
+  });
+});
+
 test("Page.goto timeout on a responsive Page does not stop anything", async () => {
   await withFixture(async (fixture) => {
     const baseCdp = fixture.services.cdp;
