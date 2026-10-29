@@ -109,6 +109,59 @@ test("the wrapper itself parses as a REPL cell with top-level await", async () =
   );
 });
 
+async function runCell(cell, requestId) {
+  const write = process.stdout.write.bind(process.stdout);
+  let out = "";
+  process.stdout.write = (chunk) => {
+    out += String(chunk);
+    return true;
+  };
+  try {
+    const AsyncFunction = Object.getPrototypeOf(
+      async function () {},
+    ).constructor;
+    await new AsyncFunction(cell)();
+  } finally {
+    process.stdout.write = write;
+  }
+  return extractResult(out, requestId).envelope;
+}
+
+test("wrapper bookkeeping never collides with the program's own names", async () => {
+  const program = [
+    "const value = 1;",
+    "const __ego = 2;",
+    "let __result = 3;",
+    "var __timer = 4;",
+    "let error = 5;",
+    "const __egoRun_s = 6;",
+    "function __egoRunInspect() { return 7; }",
+    "({ value, __ego, __result, __timer, error, __egoRun_s, i: __egoRunInspect() })",
+  ].join("\n");
+  const cell = wrapProgram(rewriteProgram(program), {
+    requestId: "collide",
+    timeoutMs: 5000,
+    spillDir: "/s",
+    inlineLimit: 1_000_000,
+  });
+  assert.match(
+    cell,
+    /__egoRun1_s = \{ t0:/,
+    "the prefix skips names used by the program",
+  );
+  const envelope = await runCell(cell, "collide");
+  assert.equal(envelope.ok, true, envelope.error?.message);
+  assert.deepEqual(envelope.value, {
+    value: 1,
+    __ego: 2,
+    __result: 3,
+    __timer: 4,
+    error: 5,
+    __egoRun_s: 6,
+    i: 7,
+  });
+});
+
 test("spill files never take a path from the request id", () => {
   const cell = wrapProgram(rewriteProgram("1"), {
     requestId: "../../evil/../id",
@@ -116,8 +169,8 @@ test("spill files never take a path from the request id", () => {
     spillDir: "/s",
     inlineLimit: 1,
   });
-  assert.doesNotMatch(cell, /path\.join\(__ego\.spillDir, "\.\./);
-  assert.match(cell, /path\.join\(__ego\.spillDir, "______evil____id"\)/);
+  assert.doesNotMatch(cell, /spillDir, "\.\./);
+  assert.match(cell, /spillDir, "______evil____id"\)/);
 });
 
 test("extractResult finds the marked line and returns the rest as stray output", () => {

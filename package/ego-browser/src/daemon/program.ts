@@ -212,65 +212,72 @@ export function wrapProgram(
     ? `var ${program.hoisted.join(", ")};\n`
     : "";
   const marker = JSON.stringify(`${RESULT_MARKER}${options.requestId}:`);
+  // Wrapper bookkeeping lives in the same scopes as the rewritten program, so
+  // its identifiers must not occur anywhere in the program text (a user
+  // `const value` would otherwise be assigned while the wrapper's own binding
+  // is in its temporal dead zone).
+  const text = `${program.body}\n${program.hoisted.join(" ")}`;
+  let P = "__egoRun_";
+  for (let i = 1; text.includes(P); i += 1) P = `__egoRun${i}_`;
   // Spill files are named after the id; keep it a plain basename whatever the
   // caller sent (the daemon validates ids, this is the second line).
   const spillBase =
     options.requestId.replace(/[^A-Za-z0-9_-]/g, "_") || "result";
   return `${header}await (async () => {
-  const __ego = { t0: performance.now(), timeoutMs: ${options.timeoutMs}, spillDir: ${JSON.stringify(options.spillDir)}, inlineLimit: ${options.inlineLimit}, logs: [] };
-  const __exit = process.exit, __console = globalThis.console, __flush = globalThis.__egoBrowserFlushRound;
-  const __sink = { write: (chunk) => { __ego.logs.push(String(chunk)); return true; } };
+  const ${P}s = { t0: performance.now(), timeoutMs: ${options.timeoutMs}, spillDir: ${JSON.stringify(options.spillDir)}, inlineLimit: ${options.inlineLimit}, logs: [] };
+  const ${P}exit = process.exit, ${P}console = globalThis.console, ${P}flush = globalThis.__egoBrowserFlushRound;
+  const ${P}sink = { write: (chunk) => { ${P}s.logs.push(String(chunk)); return true; } };
   process.exit = () => { throw Object.assign(new Error("process.exit() is not available inside ego-run; let the program end instead"), { code: "EGO_RUN_NO_EXIT" }); };
-  if (typeof __flush !== "function") {
-    const capture = (prefix) => (...args) => __ego.logs.push(prefix + args.map((a) => typeof a === "string" ? a : __egoRunInspect(a)).join(" ") + "\\n");
-    globalThis.console = { ...__console, log: capture(""), info: capture(""), warn: capture("[warn] "), error: capture("[error] ") };
+  if (typeof ${P}flush !== "function") {
+    const capture = (prefix) => (...args) => ${P}s.logs.push(prefix + args.map((a) => typeof a === "string" ? a : ${P}inspect(a)).join(" ") + "\\n");
+    globalThis.console = { ...${P}console, log: capture(""), info: capture(""), warn: capture("[warn] "), error: capture("[error] ") };
   }
-  let __timer, __result;
+  let ${P}timer, ${P}result;
   try {
     if (typeof globalThis.__egoBeginProgram === "function") globalThis.__egoBeginProgram();
-    const value = await Promise.race([
+    const ${P}value = await Promise.race([
       (async () => {
 ${program.body}
       })(),
-      new Promise((_, reject) => { __timer = setTimeout(() => reject(Object.assign(new Error("EGO_RUN_DEADLINE: the program ran longer than " + __ego.timeoutMs + " ms; the session will be rebuilt"), { code: "EGO_RUN_DEADLINE" })), __ego.timeoutMs); }),
+      new Promise((_, reject) => { ${P}timer = setTimeout(() => reject(Object.assign(new Error("EGO_RUN_DEADLINE: the program ran longer than " + ${P}s.timeoutMs + " ms; the session will be rebuilt"), { code: "EGO_RUN_DEADLINE" })), ${P}s.timeoutMs); }),
     ]);
-    __result = { ok: true, value, ms: performance.now() - __ego.t0 };
+    ${P}result = { ok: true, value: ${P}value, ms: performance.now() - ${P}s.t0 };
   } catch (error) {
-    __result = { ok: false, error: { name: String(error?.name ?? "Error"), message: String(error?.message ?? error), stack: typeof error?.stack === "string" ? error.stack : undefined, code: typeof error?.code === "string" ? error.code : undefined }, ms: performance.now() - __ego.t0 };
+    ${P}result = { ok: false, error: { name: String(error?.name ?? "Error"), message: String(error?.message ?? error), stack: typeof error?.stack === "string" ? error.stack : undefined, code: typeof error?.code === "string" ? error.code : undefined }, ms: performance.now() - ${P}s.t0 };
   } finally {
-    clearTimeout(__timer);
-    process.exit = __exit;
-    globalThis.console = __console;
+    clearTimeout(${P}timer);
+    process.exit = ${P}exit;
+    globalThis.console = ${P}console;
     try { if (typeof globalThis.__egoEndProgram === "function") await Promise.race([globalThis.__egoEndProgram(), new Promise((resolve) => setTimeout(resolve, 2000))]); } catch {}
-    try { if (typeof __flush === "function") __flush(__sink, !__result.ok); } catch (error) { __ego.logs.push("[ego-run] flush failed: " + (error?.message ?? error) + "\\n"); }
-    __result.logs = __ego.logs.join("");
+    try { if (typeof ${P}flush === "function") ${P}flush(${P}sink, !${P}result.ok); } catch (error) { ${P}s.logs.push("[ego-run] flush failed: " + (error?.message ?? error) + "\\n"); }
+    ${P}result.logs = ${P}s.logs.join("");
     let json;
-    try { json = JSON.stringify(__result, __egoRunReplacer()); } catch (error) { __result.value = undefined; __result.error = __result.error ?? { name: "TypeError", message: "result is not serializable: " + (error?.message ?? error) }; json = JSON.stringify(__result, __egoRunReplacer()); }
-    if (json.length > __ego.inlineLimit) {
+    try { json = JSON.stringify(${P}result, ${P}replacer()); } catch (error) { ${P}result.value = undefined; ${P}result.error = ${P}result.error ?? { name: "TypeError", message: "result is not serializable: " + (error?.message ?? error) }; json = JSON.stringify(${P}result, ${P}replacer()); }
+    if (json.length > ${P}s.inlineLimit) {
       try {
         const fs = await import("node:fs/promises"), path = await import("node:path");
-        await fs.mkdir(__ego.spillDir, { recursive: true });
-        const base = path.join(__ego.spillDir, ${JSON.stringify(spillBase)});
+        await fs.mkdir(${P}s.spillDir, { recursive: true });
+        const base = path.join(${P}s.spillDir, ${JSON.stringify(spillBase)});
         // Logs first: a program that only logs a lot must not spill its value.
-        if (__result.logs.length > __ego.inlineLimit / 2) {
-          const file = base + ".logs.txt", tail = __result.logs.slice(-65536);
-          await fs.writeFile(file, __result.logs);
-          __result.logsFile = file; __result.logsBytes = __result.logs.length;
-          __result.logs = "[ego-run] " + __result.logsBytes + " bytes of output written to " + file + "; the last 64 KB follow\\n" + tail;
-          json = JSON.stringify(__result, __egoRunReplacer());
+        if (${P}result.logs.length > ${P}s.inlineLimit / 2) {
+          const file = base + ".logs.txt", tail = ${P}result.logs.slice(-65536);
+          await fs.writeFile(file, ${P}result.logs);
+          ${P}result.logsFile = file; ${P}result.logsBytes = ${P}result.logs.length;
+          ${P}result.logs = "[ego-run] " + ${P}result.logsBytes + " bytes of output written to " + file + "; the last 64 KB follow\\n" + tail;
+          json = JSON.stringify(${P}result, ${P}replacer());
         }
-        if (json.length > __ego.inlineLimit) {
+        if (json.length > ${P}s.inlineLimit) {
           const file = base + ".json";
-          await fs.writeFile(file, JSON.stringify(__result.value, __egoRunReplacer()));
-          __result.valueFile = file; __result.valueBytes = json.length; delete __result.value;
-          json = JSON.stringify(__result, __egoRunReplacer());
+          await fs.writeFile(file, JSON.stringify(${P}result.value, ${P}replacer()));
+          ${P}result.valueFile = file; ${P}result.valueBytes = json.length; delete ${P}result.value;
+          json = JSON.stringify(${P}result, ${P}replacer());
         }
-      } catch (error) { __result.value = undefined; __result.error = { name: "Error", message: "result too large and could not be spilled: " + (error?.message ?? error) }; json = JSON.stringify(__result, __egoRunReplacer()); }
+      } catch (error) { ${P}result.value = undefined; ${P}result.error = { name: "Error", message: "result too large and could not be spilled: " + (error?.message ?? error) }; json = JSON.stringify(${P}result, ${P}replacer()); }
     }
     process.stdout.write(${marker} + json + "\\n");
   }
 })();
-function __egoRunReplacer() {
+function ${P}replacer() {
   const seen = new WeakSet();
   return function (key, value) {
     if (typeof value === "bigint") return value.toString() + "n";
@@ -286,8 +293,8 @@ function __egoRunReplacer() {
     return value;
   };
 }
-function __egoRunInspect(value) {
-  try { return JSON.stringify(value, __egoRunReplacer()) ?? String(value); } catch { return String(value); }
+function ${P}inspect(value) {
+  try { return JSON.stringify(value, ${P}replacer()) ?? String(value); } catch { return String(value); }
 }
 `;
 }
