@@ -2052,7 +2052,11 @@ test("Page.goto commit waits for this navigation without waiting for the DOM", a
       waitUntil: "commit",
     });
 
-    assert.equal(commitChecks, 2);
+    assert.equal(
+      commitChecks,
+      3,
+      "one frame check records the previous document, two wait for the commit",
+    );
     assert.equal(
       fixture.calls
         .slice(callsBeforeGoto)
@@ -2153,6 +2157,300 @@ test("Page.goto timeout reports when no new document committed", async () => {
         return true;
       },
     );
+  });
+});
+
+test("Page.goto stops a navigation that has not committed by its timeout", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let nowMs = 0;
+    let held = false;
+    const stops = [];
+    let frameChecksAfterStop = 0;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.navigate") {
+          const response = await baseCdp(method, params, sessionId, timeoutMs);
+          if (params.url !== "https://example.test/held") return response;
+          // Chromium answers Page.navigate only once the response arrives.
+          held = true;
+          nowMs += timeoutMs;
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Page.stopLoading") {
+          stops.push({ sessionId, timeoutMs });
+          held = false;
+          return {};
+        }
+        if (method === "Page.getFrameTree") {
+          if (held)
+            throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+          if (stops.length > 0) frameChecksAfterStop += 1;
+          return {
+            result: {
+              frameTree: { frame: { id: "frame-1", loaderId: "loader-old" } },
+            },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+      now: () => nowMs,
+      async sleep(ms) {
+        nowMs += ms;
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    nowMs = 0;
+
+    await assert.rejects(
+      () =>
+        page.goto("https://example.test/held", {
+          timeout: 100,
+          waitUntil: "load",
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_NAVIGATION_TIMEOUT");
+        assert.equal(error.committed, false);
+        assert.equal(error.stopped, true);
+        assert.equal(error.url, undefined);
+        assert.match(
+          error.message,
+          /^page\.goto timed out after 100ms waiting for load; the navigation to "https:\/\/example\.test\/held" had not committed and was stopped, so the Page still shows its previous document\./,
+        );
+        assert.match(error.message, /Retry page\.goto\(url, \{ timeout \}\)/);
+        assert.match(error.message, /task\.newPage\(\)/);
+        return true;
+      },
+    );
+    assert.equal(stops.length, 1, "the pending navigation is stopped once");
+    assert.equal(typeof stops[0].sessionId, "string");
+    assert.equal(
+      stops[0].timeoutMs,
+      1_000,
+      "stopping never waits a transport timeout",
+    );
+    assert.equal(
+      frameChecksAfterStop,
+      1,
+      "the Page is confirmed responsive after the navigation stops",
+    );
+  });
+});
+
+test("Page.goto names a pending navigation it could not stop", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let nowMs = 0;
+    let held = false;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.navigate") {
+          const response = await baseCdp(method, params, sessionId, timeoutMs);
+          if (params.url !== "https://example.test/held") return response;
+          held = true;
+          nowMs += timeoutMs;
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Page.stopLoading") {
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Page.getFrameTree") {
+          if (held)
+            throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+          return {
+            result: {
+              frameTree: { frame: { id: "frame-1", loaderId: "loader-old" } },
+            },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+      now: () => nowMs,
+      async sleep(ms) {
+        nowMs += ms;
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    nowMs = 0;
+
+    await assert.rejects(
+      () =>
+        page.goto("https://example.test/held", {
+          timeout: 100,
+          waitUntil: "load",
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_NAVIGATION_TIMEOUT");
+        assert.equal(error.committed, false);
+        assert.equal(error.stopped, false);
+        assert.match(
+          error.message,
+          /the navigation to "https:\/\/example\.test\/held" has not committed and the Page did not answer even after Page\.stopLoading, so its renderer is probably hung/,
+        );
+        assert.match(error.message, /task\.newPage\(\)/);
+        assert.doesNotMatch(error.message, /was stopped/);
+        return true;
+      },
+    );
+  });
+});
+
+test("Page.goto reports a navigation that commits while it is being stopped", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let nowMs = 0;
+    let held = false;
+    let loaderId = "loader-old";
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.navigate") {
+          const response = await baseCdp(method, params, sessionId, timeoutMs);
+          if (params.url !== "https://example.test/held") return response;
+          held = true;
+          nowMs += timeoutMs;
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Page.stopLoading") {
+          // The response arrived just before the stop: the new document is
+          // in place by the time the Page answers again.
+          held = false;
+          loaderId = "loader-new";
+          return {};
+        }
+        if (method === "Page.getFrameTree") {
+          if (held)
+            throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+          return {
+            result: { frameTree: { frame: { id: "frame-1", loaderId } } },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+      now: () => nowMs,
+      async sleep(ms) {
+        nowMs += ms;
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    nowMs = 0;
+
+    await assert.rejects(
+      () =>
+        page.goto("https://example.test/held", {
+          timeout: 100,
+          waitUntil: "load",
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_NAVIGATION_TIMEOUT");
+        assert.equal(error.committed, true);
+        assert.equal(error.stopped, true);
+        assert.match(
+          error.message,
+          /navigation committed at "https:\/\/example\.test\/held".*but its loading was stopped at the deadline\. Call page\.reload\(\{ timeout \}\)/,
+        );
+        assert.doesNotMatch(error.message, /previous document/);
+        return true;
+      },
+    );
+  });
+});
+
+test("Page.goto does not stop anything when its budget ends before Page.navigate", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let nowMs = 0;
+    let stops = 0;
+    let navigates = 0;
+    let armed = false;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.getFrameTree" && armed) {
+          // The pre-navigation probe is the last thing the budget covers.
+          nowMs += timeoutMs;
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Page.navigate" && armed) navigates += 1;
+        if (method === "Page.stopLoading") stops += 1;
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+      now: () => nowMs,
+      async sleep(ms) {
+        nowMs += ms;
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    nowMs = 0;
+    armed = true;
+
+    await assert.rejects(
+      () =>
+        page.goto("https://example.test/never-sent", {
+          timeout: 100,
+          waitUntil: "load",
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_NAVIGATION_TIMEOUT");
+        assert.equal(error.committed, false);
+        assert.equal(error.stopped, false);
+        assert.doesNotMatch(error.message, /pending|stopped|hung/);
+        return true;
+      },
+    );
+    assert.equal(navigates, 0, "Page.navigate was never dispatched");
+    assert.equal(stops, 0, "nothing in flight belongs to this call");
+  });
+});
+
+test("Page.goto timeout on a responsive Page does not stop anything", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let nowMs = 0;
+    let stops = 0;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.navigate") {
+          const response = await baseCdp(method, params, sessionId, timeoutMs);
+          if (params.url !== "https://example.test/answering") return response;
+          return {
+            result: { frameId: "frame-1", loaderId: "loader-new" },
+          };
+        }
+        if (method === "Page.stopLoading") {
+          stops += 1;
+          return {};
+        }
+        if (method === "Page.getFrameTree") {
+          return {
+            result: {
+              frameTree: { frame: { id: "frame-1", loaderId: "loader-old" } },
+            },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+      now: () => nowMs,
+      async sleep(ms) {
+        nowMs += ms;
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    nowMs = 0;
+
+    await assert.rejects(
+      () =>
+        page.goto("https://example.test/answering", {
+          timeout: 100,
+          waitUntil: "load",
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_NAVIGATION_TIMEOUT");
+        assert.equal(error.committed, false);
+        assert.equal(error.stopped, false);
+        assert.doesNotMatch(error.message, /pending|stopped/);
+        return true;
+      },
+    );
+    assert.equal(stops, 0, "a Page that answers has nothing to stop");
   });
 });
 
@@ -2259,13 +2557,17 @@ test("Page.reload reloads the current document and waits for the requested state
   });
 });
 
-test("Page.reload times out when no new document commits", async () => {
+test("Page.reload stops a reload that has not committed by its timeout", async () => {
   await withFixture(async (fixture) => {
     const baseCdp = fixture.services.cdp;
     let nowMs = 0;
+    let held = false;
+    let stops = 0;
     const task = taskForRound(fixture, "round-a", {
       async cdp(method, params, sessionId, timeoutMs) {
         if (method === "Page.getFrameTree") {
+          if (held)
+            throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
           return {
             result: {
               frameTree: {
@@ -2274,7 +2576,15 @@ test("Page.reload times out when no new document commits", async () => {
             },
           };
         }
-        if (method === "Page.reload") return {};
+        if (method === "Page.reload") {
+          held = true;
+          return {};
+        }
+        if (method === "Page.stopLoading") {
+          stops += 1;
+          held = false;
+          return {};
+        }
         return baseCdp(method, params, sessionId, timeoutMs);
       },
       now: () => nowMs,
@@ -2286,8 +2596,9 @@ test("Page.reload times out when no new document commits", async () => {
 
     await assert.rejects(
       () => page.reload({ timeout: 100, waitUntil: "commit" }),
-      /page\.reload timed out after 100ms waiting for commit/,
+      /page\.reload timed out after 100ms waiting for commit; the reload had not committed and was stopped, so the Page still shows its previous document\. Retry page\.reload\(\{ timeout \}\)/,
     );
+    assert.equal(stops, 1, "the pending reload is stopped");
   });
 });
 

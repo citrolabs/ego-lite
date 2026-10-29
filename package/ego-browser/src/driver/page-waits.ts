@@ -89,6 +89,13 @@ export type PageWaitForURLHooks = {
 export class PageNavigationTimeoutError extends Error {
   readonly code = "EGO_NAVIGATION_TIMEOUT";
   readonly committed: boolean;
+  /**
+   * The Page did not answer at the deadline, so the harness sent
+   * Page.stopLoading and the Page answered again: with `committed` false it
+   * still shows its previous document, with `committed` true the navigation
+   * landed at the deadline and only its remaining loading was stopped.
+   */
+  readonly stopped: boolean;
   readonly url?: string;
   readonly readyState?: string;
   readonly waitUntil: PageGotoWaitUntil;
@@ -98,6 +105,7 @@ export class PageNavigationTimeoutError extends Error {
     message: string,
     details: {
       committed: boolean;
+      stopped?: boolean;
       url?: string;
       readyState?: string;
       waitUntil: PageGotoWaitUntil;
@@ -107,12 +115,24 @@ export class PageNavigationTimeoutError extends Error {
     super(message);
     this.name = "PageNavigationTimeoutError";
     this.committed = details.committed;
+    this.stopped = details.stopped === true;
     this.url = details.url;
     this.readyState = details.readyState;
     this.waitUntil = details.waitUntil;
     this.timeoutMs = details.timeoutMs;
   }
 }
+
+// Page.stopLoading is answered by the browser process, so a pending
+// navigation cannot stall it; the frame-tree probe afterwards confirms the
+// renderer answers again. Both stay short: they run after the caller's
+// deadline has already passed.
+const STOP_PENDING_NAVIGATION_TIMEOUT_MS = 1_000;
+// A responsive Page answers Page.getFrameTree within milliseconds. The probe
+// before Page.navigate only records the current document; the probe at the
+// deadline decides whether the navigation is still pending.
+const PREVIOUS_DOCUMENT_PROBE_TIMEOUT_MS = 500;
+const NAVIGATION_DEADLINE_PROBE_TIMEOUT_MS = 250;
 
 const VISIBILITY_FUNCTION =
   "function(){if(typeof this.checkVisibility==='function')return this.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});const s=getComputedStyle(this);const r=this.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0'&&r.width>0&&r.height>0;}";
@@ -435,6 +455,8 @@ export async function navigateInPage(
   const { timeoutMs, waitUntil, referer } = options;
   const deadline = options.deadline ?? services.now() + timeoutMs;
   let committed = false;
+  let navigateSent = false;
+  let previousFrame: MainFrame = {};
   let navigation: {
     frameId?: string;
     loaderId?: string;
@@ -450,6 +472,27 @@ export async function navigateInPage(
         navigationTimeRemaining(services, deadline, timeoutMs, waitUntil),
       );
     }
+    // Chromium answers Page.navigate only once the navigation is ready to
+    // commit or has failed, so a held response leaves this call without a
+    // loaderId. The document in place before the request is the reference
+    // the deadline probe compares against instead.
+    previousFrame = await mainFrameIfResponsive(
+      services,
+      sessionId,
+      Math.min(
+        PREVIOUS_DOCUMENT_PROBE_TIMEOUT_MS,
+        navigationTimeRemaining(services, deadline, timeoutMs, waitUntil),
+      ),
+    );
+    // The budget check can throw at the deadline; only a request that was
+    // actually dispatched may be stopped later.
+    const navigateBudgetMs = navigationTimeRemaining(
+      services,
+      deadline,
+      timeoutMs,
+      waitUntil,
+    );
+    navigateSent = true;
     const response = await services.cdp(
       "Page.navigate",
       {
@@ -457,7 +500,7 @@ export async function navigateInPage(
         ...(referer === undefined ? {} : { referrer: referer }),
       },
       sessionId,
-      navigationTimeRemaining(services, deadline, timeoutMs, waitUntil),
+      navigateBudgetMs,
     );
     navigation = response?.result || response || {};
     if (navigation.errorText) {
@@ -488,24 +531,168 @@ export async function navigateInPage(
     });
   } catch (error) {
     if (services.now() >= deadline || isLoadStateTimeout(error)) {
-      if (!committed && navigation.loaderId) {
-        committed = await navigationMatchesCurrentFrame(
+      let probe: NavigationProbe = committed ? "committed" : "not-committed";
+      if (!committed && navigateSent) {
+        probe = await probeNavigation(
           services,
           sessionId,
           navigation,
-          250,
+          previousFrame,
         );
       }
+      // Chromium suspends every renderer-bound command while a main-frame
+      // navigation has started but not committed, so leaving it pending would
+      // hand back a Page that stalls each later call for a full transport
+      // timeout. The caller asked for a bounded wait: stop the navigation and
+      // leave the Page usable on its previous document. A hung renderer looks
+      // the same from here and cannot be told apart without an answer from
+      // it; stopping is still safe then, because the navigation this call
+      // itself started is the only load in flight that the caller asked for,
+      // and the frame read after the stop reports what is actually in place.
+      let stopped = false;
+      if (probe === "unresponsive") {
+        const outcome = await stopPendingNavigation(
+          services,
+          sessionId,
+          navigation,
+          previousFrame,
+        );
+        stopped = outcome !== "unresponsive";
+        if (outcome === "committed") probe = "committed";
+      }
+      committed = probe === "committed";
       const state = committed
         ? await currentDocumentState(services, sessionId)
         : {};
       throw navigationTimeout(timeoutMs, waitUntil, {
         committed,
         ...state,
+        stopped,
+        pending: probe === "unresponsive",
+        requestedUrl: url,
       });
     }
     throw error;
   }
+}
+
+type NavigationProbe = "committed" | "not-committed" | "unresponsive";
+
+/**
+ * Whether the main frame shows the document a navigation was for: the
+ * loaderId Page.navigate reported when there is one, otherwise any change
+ * from the document that was in place before the request.
+ */
+function frameShowsNavigation(
+  frame: MainFrame,
+  navigation: { frameId?: string; loaderId?: string },
+  previousFrame: MainFrame,
+): boolean {
+  if (navigation.loaderId) {
+    return (
+      frame.loaderId === navigation.loaderId &&
+      (!navigation.frameId || frame.id === navigation.frameId)
+    );
+  }
+  return Boolean(
+    previousFrame.loaderId &&
+    frame.loaderId &&
+    frame.loaderId !== previousFrame.loaderId,
+  );
+}
+
+/**
+ * One short frame-tree probe at a navigation deadline. A Page that answers
+ * has no main-frame navigation pending: either the requested document is in
+ * place or nothing replaced the previous one. A Page that does not answer
+ * still has the navigation pending.
+ */
+async function probeNavigation(
+  services: PageWaitServices,
+  sessionId: string,
+  navigation: { frameId?: string; loaderId?: string },
+  previousFrame: MainFrame,
+): Promise<NavigationProbe> {
+  let frame: MainFrame;
+  try {
+    frame = await mainFrame(
+      services,
+      sessionId,
+      NAVIGATION_DEADLINE_PROBE_TIMEOUT_MS,
+    );
+  } catch (error) {
+    if (isCdpTimeout(error, "Page.getFrameTree")) return "unresponsive";
+    // Any other failure is not evidence of a pending navigation.
+    return "not-committed";
+  }
+  return frameShowsNavigation(frame, navigation, previousFrame)
+    ? "committed"
+    : "not-committed";
+}
+
+/** The main frame, or an empty record when the Page does not answer in time. */
+async function mainFrameIfResponsive(
+  services: PageWaitServices,
+  sessionId: string,
+  timeoutMs: number,
+): Promise<MainFrame> {
+  try {
+    return await mainFrame(services, sessionId, timeoutMs);
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Stop a navigation that has not committed and read the main frame once the
+ * Page answers again. The navigation may commit between the deadline probe
+ * and the stop taking effect, so the frame read afterwards decides whether
+ * the previous document is still in place ("stopped") or the new one is
+ * ("committed", with its loading stopped). A hung renderer answers neither.
+ */
+async function stopPendingNavigation(
+  services: PageWaitServices,
+  sessionId: string,
+  navigation: { frameId?: string; loaderId?: string },
+  previousFrame: MainFrame,
+): Promise<"stopped" | "committed" | "unresponsive"> {
+  try {
+    await services.cdp(
+      "Page.stopLoading",
+      {},
+      sessionId,
+      STOP_PENDING_NAVIGATION_TIMEOUT_MS,
+    );
+    const frame = await mainFrame(
+      services,
+      sessionId,
+      STOP_PENDING_NAVIGATION_TIMEOUT_MS,
+    );
+    return frameShowsNavigation(frame, navigation, previousFrame)
+      ? "committed"
+      : "stopped";
+  } catch {
+    return "unresponsive";
+  }
+}
+
+/**
+ * The sentence a timeout error adds when the navigation it waited for is
+ * still pending or was stopped, so the agent knows which document the Page
+ * shows and what to do next.
+ */
+function pendingNavigationNote(
+  what: string,
+  outcome: "stopped" | "committed" | "unresponsive",
+  retry: string,
+): string {
+  if (outcome === "stopped") {
+    return `; ${what} had not committed and was stopped, so the Page still shows its previous document. Retry ${retry} with a longer timeout, or continue on a new Page from task.newPage().`;
+  }
+  if (outcome === "committed") {
+    return `; ${what} committed at the deadline but its loading was stopped. Call page.reload({ timeout }) if the rest of the document is required.`;
+  }
+  return `; ${what} has not committed and the Page did not answer even after Page.stopLoading, so its renderer is probably hung. Continue on a new Page from task.newPage(), or close this Page and open it again.`;
 }
 
 /** Reload one Page and wait for the selected state of the new document. */
@@ -516,8 +703,11 @@ export async function reloadInPage(
 ): Promise<void> {
   const { timeoutMs, waitUntil } = options;
   const deadline = options.deadline ?? services.now() + timeoutMs;
+  let reloadSent = false;
+  let committed = false;
+  let previousFrame: MainFrame = {};
   try {
-    const previousFrame = await mainFrame(
+    previousFrame = await mainFrame(
       services,
       sessionId,
       reloadTimeRemaining(services, deadline, timeoutMs, waitUntil),
@@ -536,6 +726,7 @@ export async function reloadInPage(
       sessionId,
       reloadTimeRemaining(services, deadline, timeoutMs, waitUntil),
     );
+    reloadSent = true;
     await waitForReloadCommit(
       services,
       sessionId,
@@ -544,13 +735,36 @@ export async function reloadInPage(
       timeoutMs,
       waitUntil,
     );
+    committed = true;
     if (waitUntil === "commit") return;
     await waitForLoadStateInPage(services, sessionId, waitUntil, {
       timeout: reloadTimeRemaining(services, deadline, timeoutMs, waitUntil),
     });
   } catch (error) {
     if (services.now() >= deadline || isLoadStateTimeout(error)) {
-      throw reloadTimeout(timeoutMs, waitUntil);
+      // Same as page.goto: a reload that has not committed stalls every later
+      // call on this Page, so stop it before reporting the timeout.
+      const pending =
+        !committed &&
+        reloadSent &&
+        (await probeNavigation(services, sessionId, {}, previousFrame)) ===
+          "unresponsive";
+      throw reloadTimeout(
+        timeoutMs,
+        waitUntil,
+        pending
+          ? pendingNavigationNote(
+              "the reload",
+              await stopPendingNavigation(
+                services,
+                sessionId,
+                {},
+                previousFrame,
+              ),
+              "page.reload({ timeout })",
+            )
+          : "",
+      );
     }
     throw error;
   }
@@ -621,9 +835,13 @@ function reloadTimeRemaining(
   return remaining;
 }
 
-function reloadTimeout(timeoutMs: number, waitUntil: PageGotoWaitUntil): Error {
+function reloadTimeout(
+  timeoutMs: number,
+  waitUntil: PageGotoWaitUntil,
+  note = "",
+): Error {
   return new Error(
-    `page.reload timed out after ${timeoutMs}ms waiting for ${waitUntil}`,
+    `page.reload timed out after ${timeoutMs}ms waiting for ${waitUntil}${note}`,
   );
 }
 
@@ -672,32 +890,6 @@ async function waitForNavigationCommit(
   throw navigationTimeout(timeoutMs, waitUntil);
 }
 
-async function navigationMatchesCurrentFrame(
-  services: PageWaitServices,
-  sessionId: string,
-  navigation: { frameId?: string; loaderId?: string },
-  timeoutMs: number,
-): Promise<boolean> {
-  try {
-    const response = await services.cdp(
-      "Page.getFrameTree",
-      {},
-      sessionId,
-      timeoutMs,
-    );
-    const frame =
-      response?.result?.frameTree?.frame || response?.frameTree?.frame;
-    return (
-      Boolean(navigation.loaderId) &&
-      frame?.loaderId === navigation.loaderId &&
-      (!navigation.frameId || frame?.id === navigation.frameId)
-    );
-  } catch {
-    // This is a best-effort timeout diagnostic, not a second navigation path.
-    return false;
-  }
-}
-
 function navigationTimeRemaining(
   services: PageWaitServices,
   deadline: number,
@@ -712,17 +904,37 @@ function navigationTimeRemaining(
 function navigationTimeout(
   timeoutMs: number,
   waitUntil: PageGotoWaitUntil,
-  details: { committed?: boolean; url?: string; readyState?: string } = {},
+  details: {
+    committed?: boolean;
+    /** The harness sent Page.stopLoading and the Page answered afterwards. */
+    stopped?: boolean;
+    url?: string;
+    readyState?: string;
+    /** The navigation is still pending; the Page did not answer. */
+    pending?: boolean;
+    requestedUrl?: string;
+  } = {},
 ): PageNavigationTimeoutError {
   const committed = details.committed === true;
-  const nextStep = navigationTimeoutNextStep(waitUntil);
-  const state = committed
-    ? `; navigation committed${details.url ? ` at ${JSON.stringify(details.url)}` : ""}${details.readyState ? ` with document.readyState=${JSON.stringify(details.readyState)}` : ""}. ${nextStep}`
-    : "";
+  const stopped = details.stopped === true;
+  let state = "";
+  if (committed) {
+    const where = `${details.url ? ` at ${JSON.stringify(details.url)}` : ""}${details.readyState ? ` with document.readyState=${JSON.stringify(details.readyState)}` : ""}`;
+    state = stopped
+      ? `; navigation committed${where}, but its loading was stopped at the deadline. Call page.reload({ timeout }) if the rest of the document is required.`
+      : `; navigation committed${where}. ${navigationTimeoutNextStep(waitUntil)}`;
+  } else if (stopped || details.pending) {
+    state = pendingNavigationNote(
+      `the navigation${details.requestedUrl ? ` to ${JSON.stringify(details.requestedUrl)}` : ""}`,
+      stopped ? "stopped" : "unresponsive",
+      "page.goto(url, { timeout })",
+    );
+  }
   return new PageNavigationTimeoutError(
     `page.goto timed out after ${timeoutMs}ms waiting for ${waitUntil}${state}`,
     {
       committed,
+      stopped,
       url: details.url,
       readyState: details.readyState,
       waitUntil,
