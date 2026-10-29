@@ -42,7 +42,9 @@ root. The GitHub Copilot ZIP carries its marketplace file the same way, because
 Copilot CLI deprecates installing a plugin directly from a local path.
 
 The three npm packages have separate names and exports so their adapters cannot
-be confused by package caches. All ten packages contain real Skill files;
+be confused by package caches. They are versioned apart from the plugin:
+`npmVersion` in `package.json` sets their version, while the archive names and
+the Pi gallery image follow the plugin version. All ten packages contain real Skill files;
 none depends on the source checkout.
 
 Every host that reads a plugin logo uses the Skill's

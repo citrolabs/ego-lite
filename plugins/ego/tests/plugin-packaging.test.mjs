@@ -67,7 +67,7 @@ function writeJson(path, value) {
   write(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function addPlugin(root, name, version, skillName, npmPackages) {
+function addPlugin(root, name, version, skillName, npmPackages, npmVersion) {
   const pluginRoot = join(root, "plugins", name);
   const manifest = {
     name,
@@ -103,6 +103,7 @@ function addPlugin(root, name, version, skillName, npmPackages) {
     },
     dsh: { bundle: { patch: "./cordis.patch.yml" } },
     npmPackages,
+    npmVersion,
     keywords: ["agent-plugin"],
   });
   write(join(pluginRoot, "index.js"), "export default async () => ({});\n");
@@ -140,7 +141,7 @@ function createFixture() {
     join(repositoryRoot, "plugins", "scripts", "package-plugins.mjs"),
     join(root, "plugins", "scripts", "package-plugins.mjs"),
   );
-  addPlugin(root, "ego", "1.3.1", "ego-browser", npmNames);
+  addPlugin(root, "ego", "1.3.1", "ego-browser", npmNames, "1.0.0");
   addPlugin(root, "sample", "2.4.0", "sample-skill");
   return root;
 }
@@ -262,7 +263,12 @@ function assertArtifacts(root, output, name, version, skillName) {
           "only ego names its npm packages; other plugins derive theirs",
         );
         assert.equal(pkg.npmPackages, undefined);
-        assert.equal(pkg.version, version);
+        assert.equal(pkg.npmVersion, undefined);
+        assert.equal(
+          pkg.version,
+          sourcePackage.npmVersion ?? version,
+          "npm packages take npmVersion when the plugin sets one",
+        );
         assert.equal(
           pkg.scripts,
           undefined,
@@ -286,7 +292,7 @@ function assertArtifacts(root, output, name, version, skillName) {
           assert.equal(
             pkg.pi.image,
             `https://raw.githubusercontent.com/citrolabs/ego-lite/v${sourcePackage.version}/skills/ego-browser/assets/logo.png`,
-            "the gallery image is pinned to the release tag",
+            "the gallery image is pinned to the plugin's release tag",
           );
         } else {
           assert.deepEqual(pkg.exports, {
