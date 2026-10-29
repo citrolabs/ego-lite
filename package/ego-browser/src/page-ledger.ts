@@ -7,6 +7,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { runtimeStateDir } from "./env.js";
 import {
   validatePageRefState,
@@ -44,6 +45,10 @@ type PageLedgerStoreOptions = {
   now?: () => number;
   /** Test seam for removing superseded ledger versions. */
   remove?: (path: string) => Promise<void>;
+  /** Test seam for reading one ledger version. */
+  read?: (path: string) => Promise<string>;
+  /** Test seam for pacing retries of a locked ledger version. */
+  sleep?: (ms: number) => Promise<unknown>;
 };
 
 const DEFAULT_STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
@@ -51,14 +56,32 @@ const MAX_WRITE_CONFLICTS = 8;
 const LEDGER_FILE_PATTERN = /^space-\d+(@[A-Za-z0-9_-]+)?(\.\d+)?\.json$/;
 
 /**
- * Codes under which a ledger version cannot be opened right now. Windows
- * reports a file that another process holds without delete sharing, or that
- * is pending deletion, as EPERM/EACCES/EBUSY rather than ENOENT.
+ * Codes under which an existing ledger version cannot be opened right now.
+ * Windows reports a file that another process holds without read sharing as
+ * EPERM/EACCES/EBUSY. The hold normally clears within milliseconds, so the
+ * read is retried briefly (about 1.8 s in total) before it fails. The locked
+ * version is still the current ledger: reading an older version, or an empty
+ * ledger, in its place would let the next write supersede it with stale state
+ * that outlives the lock.
  */
-const UNREADABLE_CODES = new Set(["ENOENT", "EPERM", "EACCES", "EBUSY"]);
+const LOCKED_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
+const LOCKED_READ_ATTEMPTS = 10;
+const LOCKED_READ_BASE_MS = 20;
+const LOCKED_READ_MAX_MS = 250;
 
 /** A version with the next sequence number appeared between load and write. */
 class LedgerWriteConflict extends Error {}
+
+/** The current ledger version is held open by another process. */
+class LedgerLockedError extends Error {
+  constructor(path: string, cause: Error) {
+    super(
+      `cannot read page ledger ${path}: ${cause.message}. Another process holds the file open; the ledger was left unchanged`,
+      { cause },
+    );
+    this.name = "LedgerLockedError";
+  }
+}
 
 type LedgerFile = { seq: number; path: string };
 
@@ -89,8 +112,10 @@ type ReconcileOptions = {
  * reader) holds open fails with EPERM for as long as that handle stays open,
  * which used to abort the caller's script. Superseded versions are removed
  * best-effort after each write, so one that is still held open is simply
- * left for a later write. Readers skip a version they cannot open or parse
- * yet, so a write in progress is invisible until it is complete.
+ * left for a later write. Readers skip a version that is gone or does not
+ * parse yet, so a write in progress is invisible until it is complete; a
+ * version that exists but is locked is retried and then reported, never
+ * replaced.
  */
 export class PageLedgerStore {
   readonly rootDir: string;
@@ -98,6 +123,8 @@ export class PageLedgerStore {
   readonly #staleAfterMs: number;
   readonly #now: () => number;
   readonly #remove: (path: string) => Promise<void>;
+  readonly #read: (path: string) => Promise<string>;
+  readonly #sleep: (ms: number) => Promise<unknown>;
   #resolvedBrowserInstanceId?: Promise<string | undefined>;
   #cleanup?: Promise<void>;
 
@@ -110,6 +137,8 @@ export class PageLedgerStore {
         : options.staleAfterMs;
     this.#now = options.now || Date.now;
     this.#remove = options.remove || ((path) => rm(path, { force: true }));
+    this.#read = options.read || ((path) => readFile(path, "utf8"));
+    this.#sleep = options.sleep || sleep;
     if (!Number.isFinite(this.#staleAfterMs) || this.#staleAfterMs < 0) {
       throw new TypeError("staleAfterMs must be a non-negative number");
     }
@@ -402,15 +431,38 @@ export class PageLedgerStore {
     return (await this.#load(spaceId)).ledger;
   }
 
-  /** The current ledger plus every version file it was chosen from. */
+  /**
+   * The current ledger plus every version file it was chosen from. A version
+   * held open by another process is retried with backoff, then reported.
+   */
   async #load(
+    spaceId: number,
+  ): Promise<{ ledger: PageLedger; files: LedgerFile[] }> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.#loadOnce(spaceId);
+      } catch (error) {
+        if (
+          !(error instanceof LedgerLockedError) ||
+          attempt >= LOCKED_READ_ATTEMPTS
+        ) {
+          throw error;
+        }
+        await this.#sleep(
+          Math.min(LOCKED_READ_BASE_MS * 2 ** attempt, LOCKED_READ_MAX_MS),
+        );
+      }
+    }
+  }
+
+  async #loadOnce(
     spaceId: number,
   ): Promise<{ ledger: PageLedger; files: LedgerFile[] }> {
     const browserInstanceId = await this.#currentBrowserInstanceId();
     await this.#cleanupExpiredLedgers(browserInstanceId);
     const files = await this.#listVersions(spaceId, browserInstanceId);
     for (const file of files) {
-      const stored = await readLedgerJson(file.path);
+      const stored = await this.#readLedgerJson(file.path);
       if (stored === undefined) continue;
       return {
         ledger:
@@ -427,7 +479,7 @@ export class PageLedgerStore {
     // Move this instance's ledger (or one from before instance ids existed)
     // so an SDK upgrade does not discard live Page labels.
     const legacyPath = this.#legacyPath(spaceId);
-    const legacy = await readLedgerJson(legacyPath);
+    const legacy = await this.#readLedgerJson(legacyPath);
     const ledger =
       legacy === undefined
         ? undefined
@@ -588,6 +640,31 @@ export class PageLedgerStore {
     );
   }
 
+  /**
+   * Read one ledger document. Returns undefined when the file is gone or does
+   * not parse: a version another process is still writing, or one left
+   * truncated by a crash, must not shadow the version before it. A file that
+   * exists but cannot be opened is reported instead, so a reader never
+   * mistakes a locked current version for a missing one.
+   */
+  async #readLedgerJson(path: string): Promise<unknown> {
+    let raw: string;
+    try {
+      raw = await this.#read(path);
+    } catch (error) {
+      if (error?.code === "ENOENT") return undefined;
+      if (LOCKED_CODES.has(error?.code)) {
+        throw new LedgerLockedError(path, error);
+      }
+      throw error;
+    }
+    try {
+      return JSON.parse(raw);
+    } catch {
+      return undefined;
+    }
+  }
+
   #base(spaceId: number, browserInstanceId?: string): string {
     return join(
       this.rootDir,
@@ -605,27 +682,6 @@ function scopeSuffix(browserInstanceId: string | undefined): string {
   return browserInstanceId === undefined
     ? ""
     : `@${browserInstanceId.replace(/[^A-Za-z0-9_-]/g, "-")}`;
-}
-
-/**
- * Read one ledger document. Returns undefined when the file is missing, cannot
- * be opened right now, or does not parse: a version another process is still
- * writing, or one left truncated by a crash, must not shadow the version
- * before it.
- */
-async function readLedgerJson(path: string): Promise<unknown> {
-  let raw: string;
-  try {
-    raw = await readFile(path, "utf8");
-  } catch (error) {
-    if (UNREADABLE_CODES.has(error?.code)) return undefined;
-    throw error;
-  }
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
 }
 
 /** Validate a stored ledger, or return undefined when another browser wrote it. */

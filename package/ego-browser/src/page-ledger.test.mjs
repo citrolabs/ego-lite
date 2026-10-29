@@ -413,7 +413,7 @@ test("a superseded version held open by another process is left behind and ignor
   });
 });
 
-test("a version that is unreadable or still being written falls back to the previous one", async () => {
+test("a version that is gone or still being written falls back to the previous one", async () => {
   await withTempLedger(async (rootDir) => {
     const store = new PageLedgerStore({ rootDir });
     await store.addPage(5, "target-a");
@@ -427,6 +427,108 @@ test("a version that is unreadable or still being written falls back to the prev
     const page = await store.addPage(5, "target-b");
     assert.equal(page.label, "p2");
     assert.deepEqual(await readdir(rootDir), ["space-5.3.json"]);
+  });
+});
+
+/** A store whose reads of `locked.path` fail with `code` until `locked.until` attempts. */
+function lockedStore(rootDir, locked, options = {}) {
+  const sleeps = [];
+  const store = new PageLedgerStore({
+    ...options,
+    rootDir,
+    read: async (path) => {
+      if (path === locked.path && locked.attempts++ < locked.until) {
+        throw sharingViolation(locked.code, "open");
+      }
+      return readFile(path, "utf8");
+    },
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+  });
+  return { store, sleeps };
+}
+
+test("a current version held open by another process is reported, never replaced", async () => {
+  await withTempLedger(async (rootDir) => {
+    // Windows refuses to open a file that another process holds without read
+    // sharing (EBUSY/EPERM/EACCES). That version is still the current ledger:
+    // reading past it would lose every Page label, and writing the resulting
+    // empty ledger as the next version would make the loss permanent.
+    const locked = {
+      path: undefined,
+      attempts: 0,
+      until: Infinity,
+      code: "EBUSY",
+    };
+    const { store, sleeps } = lockedStore(rootDir, locked);
+    await store.addPage(5, "target-a");
+    await store.addPage(5, "target-b");
+    locked.path = join(rootDir, "space-5.2.json");
+
+    await assert.rejects(
+      () => store.read(5),
+      /^LedgerLockedError: cannot read page ledger .*space-5\.2\.json: EBUSY: .*Another process holds the file open/,
+    );
+    await assert.rejects(() => store.addPage(5, "target-c"), /EBUSY/);
+    await assert.rejects(() => store.getPage(5, "p1"), /EBUSY/);
+
+    assert.deepEqual(await readdir(rootDir), ["space-5.2.json"]);
+    assert.equal(sleeps.length, 30, "ten retries per load");
+    assert.deepEqual(sleeps.slice(0, 6), [20, 40, 80, 160, 250, 250]);
+
+    locked.until = 0;
+    assert.deepEqual(Object.keys((await store.read(5)).pages), ["p1", "p2"]);
+    assert.equal((await store.addPage(5, "target-c")).label, "p3");
+    assert.deepEqual(await readdir(rootDir), ["space-5.3.json"]);
+  });
+});
+
+test("a current version held open briefly is read once it is released", async () => {
+  await withTempLedger(async (rootDir) => {
+    const locked = { path: undefined, attempts: 0, until: 3, code: "EPERM" };
+    const { store, sleeps } = lockedStore(rootDir, locked);
+    await store.addPage(5, "target-a");
+    locked.path = join(rootDir, "space-5.1.json");
+
+    const page = await store.addPage(5, "target-b");
+
+    assert.equal(page.label, "p2");
+    assert.deepEqual(sleeps, [20, 40, 80]);
+    assert.deepEqual(await readdir(rootDir), ["space-5.2.json"]);
+  });
+});
+
+test("a locked shared-name ledger is not migrated to an empty one", async () => {
+  await withTempLedger(async (rootDir) => {
+    await writeFile(
+      join(rootDir, "space-5.json"),
+      JSON.stringify({
+        browserInstanceId: "browser-a",
+        spaceId: 5,
+        nextLabel: 2,
+        usedLabels: ["p1"],
+        pages: { p1: { targetId: "target-a", openedBy: "agent" } },
+      }),
+    );
+    const locked = {
+      path: join(rootDir, "space-5.json"),
+      attempts: 0,
+      until: Infinity,
+      code: "EACCES",
+    };
+    const { store } = lockedStore(rootDir, locked, {
+      browserInstanceId: "browser-a",
+    });
+
+    await assert.rejects(
+      () => store.read(5),
+      /cannot read page ledger .*EACCES/,
+    );
+
+    assert.deepEqual(await readdir(rootDir), ["space-5.json"]);
+    locked.until = 0;
+    assert.deepEqual(Object.keys((await store.read(5)).pages), ["p1"]);
   });
 });
 
