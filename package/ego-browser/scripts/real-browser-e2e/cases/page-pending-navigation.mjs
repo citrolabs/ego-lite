@@ -1,8 +1,8 @@
 // A main-frame navigation that has started but not committed suspends every
 // renderer-bound CDP command until the new document commits or the navigation
 // stops. These cases pin the harness behavior on such a Page: public calls
-// stay inside one bounded wait, the error names the Page and what to do, and
-// Page.stopLoading recovers it.
+// stay inside one bounded wait, then stop the navigation and say which
+// document the Page shows, so the next call answers at once.
 export function pagePendingNavigationCase() {
   return `
     const task = await taskSpace(taskName);
@@ -57,13 +57,15 @@ export function pagePendingNavigationCase() {
     );
 
     // A navigation that goto did not start (a link click, a script, raw CDP)
-    // can still be left pending; public calls then stay inside one bounded
-    // wait and the error names the Page and what to do. Chromium answers
-    // Page.navigate only once the response arrives, so the raw call is given
-    // up on while the navigation stays pending.
-    await page
-      .cdp("Page.navigate", { url: heldUrl + "&raw=1" }, { timeout: 500 })
-      .catch(() => {});
+    // can still be left pending; a public call then stays inside one bounded
+    // wait, stops that navigation, and says what the Page shows now. Chromium
+    // answers Page.navigate only once the response arrives, so the raw call
+    // is given up on while the navigation stays pending.
+    const leavePending = (suffix) =>
+      page
+        .cdp("Page.navigate", { url: heldUrl + suffix }, { timeout: 500 })
+        .catch(() => {});
+    await leavePending("&raw=1");
     const snapshotStartedAt = Date.now();
     let snapshotError;
     try {
@@ -88,19 +90,41 @@ export function pagePendingNavigationCase() {
       "(" + baseUrl + "/",
       "the error names the Page URL"
     );
+    assertEqual(
+      snapshotError?.stopped,
+      true,
+      "the pending navigation is stopped once the wait ran out"
+    );
     assertIncludes(
       snapshotError?.message,
-      'page.cdp("Page.stopLoading")',
-      "the error tells the agent how to recover"
+      "shows " + baseUrl + "/nav-target",
+      "the error says which document the Page shows now"
+    );
+    assertIncludes(
+      snapshotError?.message,
+      "page.goto(url, { timeout })",
+      "the error tells the agent how to load the pending document"
     );
     assert(
       snapshotElapsed < 20_000,
       "snapshot gives up after one bounded wait, not one per setup command: " +
         snapshotElapsed
     );
+    const afterStopStartedAt = Date.now();
+    assertIncludes(
+      await page.snapshot(),
+      "Navigation target",
+      "the next call answers on the previous document"
+    );
+    assert(
+      Date.now() - afterStopStartedAt < 5_000,
+      "the next call does not wait another full period: " +
+        (Date.now() - afterStopStartedAt)
+    );
 
     // goto on such a Page replaces the pending navigation with its own, times
     // out within its budget, and leaves the Page usable again.
+    await leavePending("&raw=2");
     const secondGotoStartedAt = Date.now();
     let secondGotoError;
     try {
@@ -175,11 +199,21 @@ export function pagePendingNavigationFreshProcessCase() {
         elapsed
     );
 
-    await page.cdp("Page.stopLoading");
+    assertEqual(
+      error?.stopped,
+      true,
+      "the new process stops the pending navigation after its wait"
+    );
+    const recoveredStartedAt = Date.now();
     assertIncludes(
       await page.snapshot(),
       "Navigation target",
       "the Page recovers in the new process as well"
+    );
+    assert(
+      Date.now() - recoveredStartedAt < 5_000,
+      "the next call in the new process answers at once: " +
+        (Date.now() - recoveredStartedAt)
     );
     await page.close();
   `;

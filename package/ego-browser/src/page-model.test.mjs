@@ -7584,6 +7584,102 @@ test("snapshot names the Page and the next step when the Page does not answer", 
   });
 });
 
+test("snapshot stops a pending navigation after its wait and says what the Page shows", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    const stops = [];
+    const task = taskForRound(fixture, "round-a", {
+      async ensureFrameSessions() {
+        throw new PageUnresponsiveError(
+          "Page.getFrameTree",
+          15_000,
+          "target-1",
+          "session-1",
+        );
+      },
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Target.getTargetInfo") {
+          return { targetInfo: { url: "https://example.test/pending" } };
+        }
+        if (method === "Page.stopLoading") {
+          stops.push({ sessionId, timeoutMs });
+          return {};
+        }
+        if (method === "Page.getFrameTree" && stops.length > 0) {
+          return {
+            result: {
+              frameTree: {
+                frame: {
+                  id: "frame-1",
+                  loaderId: "loader-old",
+                  url: "https://example.test/previous",
+                },
+              },
+            },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/previous");
+
+    await assert.rejects(
+      () => page.snapshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_UNRESPONSIVE");
+        assert.equal(error.stopped, true);
+        assert.equal(error.currentUrl, "https://example.test/previous");
+        assert.match(
+          error.message,
+          /^Page p1 \(https:\/\/example\.test\/pending\) did not answer Page\.getFrameTree within 15000ms: a main-frame navigation had started but not committed\. It was stopped once that wait ran out, so the Page answers again and shows https:\/\/example\.test\/previous\./,
+        );
+        assert.match(error.message, /Retry the call/);
+        assert.match(error.message, /page\.goto\(url, \{ timeout \}\)/);
+        assert.doesNotMatch(error.message, /page\.cdp\("Page\.stopLoading"\)/);
+        return true;
+      },
+    );
+    assert.deepEqual(stops, [{ sessionId: "session-1", timeoutMs: 1_000 }]);
+  });
+});
+
+test("snapshot names a probably hung renderer when stopping does not help", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    const task = taskForRound(fixture, "round-a", {
+      async ensureFrameSessions() {
+        throw new PageUnresponsiveError(
+          "Page.getFrameTree",
+          15_000,
+          "target-1",
+          "session-1",
+        );
+      },
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.stopLoading") {
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/hung");
+
+    await assert.rejects(
+      () => page.snapshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_UNRESPONSIVE");
+        assert.equal(error.stopped, false);
+        assert.match(
+          error.message,
+          /did not answer Page\.getFrameTree within 15000ms, and still did not answer after Page\.stopLoading, so its renderer is probably hung\./,
+        );
+        assert.match(error.message, /task\.newPage\(\)/);
+        return true;
+      },
+    );
+  });
+});
+
 test("snapshot describes a Page that stops answering after the first document check", async () => {
   await withFixture(async (fixture) => {
     let calls = 0;
