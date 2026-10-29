@@ -202,7 +202,9 @@ export type WrapOptions = {
  *   `globalThis.__egoBrowserFlushRound` when the SDK provides it, otherwise
  *   captures `console.*` directly,
  * - writes exactly one `RESULT_MARKER<requestId>:<json>` line to stdout, which
- *   the CLI's output poll forwards; nothing is left for the REPL to echo.
+ *   the CLI's output poll forwards; nothing is left for the REPL to echo. The
+ *   daemon passes `<request id>:<random nonce>` as the id, so output written
+ *   by the program itself cannot pass for the result.
  */
 export function wrapProgram(
   program: RewrittenProgram,

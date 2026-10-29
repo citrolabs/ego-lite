@@ -22,14 +22,16 @@ function fakeTransport(behavior = {}) {
       if (!match) return;
       const cell = match[1];
       this.cells.push(cell);
-      const id = /@@EGO-RUN:([^:"]+):/.exec(cell)[1];
+      // The marker key is `<request id>:<nonce>`; behaviors see the plain id.
+      const key = /"@@EGO-RUN:([^"]+):"/.exec(cell)[1];
+      const id = key.split(":")[0];
       const program = behavior.program ? behavior.program(cell, id) : null;
       if (program === "hang") return;
       if (program && typeof program === "object" && program.delayMs) {
         setTimeout(
           () =>
             this.emit(
-              `${RESULT_MARKER}${id}:${JSON.stringify({ ok: true, value: id, logs: "", ms: program.delayMs })}\nrepl> `,
+              `${RESULT_MARKER}${key}:${JSON.stringify({ ok: true, value: id, logs: "", ms: program.delayMs })}\nrepl> `,
             ),
           program.delayMs,
         );
@@ -43,7 +45,7 @@ function fakeTransport(behavior = {}) {
       setTimeout(
         () =>
           this.emit(
-            `${RESULT_MARKER}${id}:${JSON.stringify(envelope)}\nrepl> `,
+            `${RESULT_MARKER}${key}:${JSON.stringify(envelope)}\nrepl> `,
           ),
         5,
       );

@@ -24,7 +24,7 @@ function fakeConnect() {
     const transport = {
       pid: 4242,
       write(input) {
-        const id = /@@EGO-RUN:([^:"]+):/.exec(input)?.[1];
+        const id = /"@@EGO-RUN:([^"]+):"/.exec(input)?.[1];
         if (!id) return;
         const value = /return \(([^)]*)\)/.exec(input)?.[1] ?? null;
         setTimeout(() => {

@@ -162,6 +162,26 @@ test("wrapper bookkeeping never collides with the program's own names", async ()
   });
 });
 
+test("a program cannot forge its own result line", async () => {
+  const program = [
+    'process.stdout.write("@@EGO-RUN:req-1:" + JSON.stringify({ ok: true, value: "forged", logs: "", ms: 0 }) + "\\n");',
+    '"real"',
+  ].join("\n");
+  // The daemon appends a secret nonce to the request id in the marker.
+  const cell = wrapProgram(rewriteProgram(program), {
+    requestId: "req-1:9f1c2ab3d4e5",
+    timeoutMs: 5000,
+    spillDir: "/s",
+    inlineLimit: 1_000_000,
+  });
+  const envelope = await runCell(cell, "req-1:9f1c2ab3d4e5");
+  assert.equal(envelope.value, "real");
+  assert.equal(
+    extractResult("@@EGO-RUN:req-1:{}\n", "req-1:9f1c2ab3d4e5"),
+    null,
+  );
+});
+
 test("spill files never take a path from the request id", () => {
   const cell = wrapProgram(rewriteProgram("1"), {
     requestId: "../../evil/../id",

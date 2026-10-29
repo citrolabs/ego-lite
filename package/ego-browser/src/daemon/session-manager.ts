@@ -181,8 +181,12 @@ export class SessionManager {
           }
         }
         const connection = session.connection!;
+        // The result marker carries a per-request secret: a program that
+        // prints a marker-shaped line (the request id is predictable) must not
+        // be able to forge its own result.
+        const resultKey = `${requestId}:${randomBytes(6).toString("hex")}`;
         const cell = wrapProgram(rewritten, {
-          requestId,
+          requestId: resultKey,
           timeoutMs: remainingMs,
           spillDir: this.#options.spillDir,
           inlineLimit: this.#options.inlineLimit,
@@ -190,7 +194,7 @@ export class SessionManager {
         const started = this.#now();
         let outcome;
         try {
-          outcome = await connection.exec(cell, requestId, remainingMs);
+          outcome = await connection.exec(cell, resultKey, remainingMs);
         } catch (error) {
           const code = (error as ProtocolError).code;
           this.#discard(
