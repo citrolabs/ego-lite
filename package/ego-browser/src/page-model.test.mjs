@@ -2285,9 +2285,9 @@ test("Page.goto names a pending navigation it could not stop", async () => {
         assert.equal(error.stopped, false);
         assert.match(
           error.message,
-          /the navigation to "https:\/\/example\.test\/held" has not committed and is still pending/,
+          /the navigation to "https:\/\/example\.test\/held" has not committed and the Page did not answer even after Page\.stopLoading, so its renderer is probably hung/,
         );
-        assert.match(error.message, /page\.cdp\("Page\.stopLoading"\)/);
+        assert.match(error.message, /task\.newPage\(\)/);
         assert.doesNotMatch(error.message, /was stopped/);
         return true;
       },

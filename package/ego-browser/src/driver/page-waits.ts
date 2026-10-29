@@ -536,7 +536,11 @@ export async function navigateInPage(
       // navigation has started but not committed, so leaving it pending would
       // hand back a Page that stalls each later call for a full transport
       // timeout. The caller asked for a bounded wait: stop the navigation and
-      // leave the Page usable on its previous document.
+      // leave the Page usable on its previous document. A hung renderer looks
+      // the same from here and cannot be told apart without an answer from
+      // it; stopping is still safe then, because the navigation this call
+      // itself started is the only load in flight that the caller asked for,
+      // and the frame read after the stop reports what is actually in place.
       let stopped = false;
       if (probe === "unresponsive") {
         const outcome = await stopPendingNavigation(
@@ -680,7 +684,7 @@ function pendingNavigationNote(
   if (outcome === "committed") {
     return `; ${what} committed at the deadline but its loading was stopped. Call page.reload({ timeout }) if the rest of the document is required.`;
   }
-  return `; ${what} has not committed and is still pending, so the Page answers no renderer command until it commits. Stop it with page.cdp("Page.stopLoading") or continue on a new Page from task.newPage().`;
+  return `; ${what} has not committed and the Page did not answer even after Page.stopLoading, so its renderer is probably hung. Continue on a new Page from task.newPage(), or close this Page and open it again.`;
 }
 
 /** Reload one Page and wait for the selected state of the new document. */
