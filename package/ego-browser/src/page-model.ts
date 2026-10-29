@@ -297,6 +297,13 @@ const FILE_INPUT_PROBE_PEEK = `(() => {
   return document.querySelector("iframe, frame") ? null : false;
 })()`;
 
+// Remove the probe and its prototype wrappers (program end).
+const FILE_INPUT_PROBE_RESTORE = `(() => { /* __egoBrowserFileInputProbeRestore */
+  const probe = window["__egoBrowserFileInputProbe"];
+  if (probe) probe.restore();
+  return true;
+})()`;
+
 const FILE_INPUT_PROBE_READ = `(() => {
   const key = "__egoBrowserFileInputProbe";
   const probe = window[key];
@@ -647,14 +654,18 @@ type ProgramScope = {
   activatedEpoch: number;
   /** Safety interceptions kept armed until the program ends, by session. */
   fileChooserGuards: Map<string, FileChooserInterception>;
+  /** Sessions whose document carries the file-input probe, with its remover. */
+  probeRestorers: Map<string, () => Promise<void>>;
 };
 
 let programScope: ProgramScope = newProgramScope();
 
 /**
- * Document epoch at which the file-input probe was installed, by session. The
- * probe lives in the document, so it outlives programs and is only reinstalled
- * after a navigation (a new epoch) or when a read finds it missing.
+ * Document epoch at which the file-input probe was installed, by session. One
+ * install serves every action of a program; the probe is removed again when
+ * the program ends (it wraps HTMLInputElement.prototype methods, which pages
+ * must not observe between programs), and reinstalled after a navigation (a
+ * new epoch) or when a read finds it missing.
  */
 const fileInputProbes = new Map<string, number>();
 
@@ -663,7 +674,19 @@ function newProgramScope(): ProgramScope {
     activatedTargetId: null,
     activatedEpoch: -1,
     fileChooserGuards: new Map(),
+    probeRestorers: new Map(),
   };
+}
+
+/**
+ * Forget which Page is in the foreground. Called whenever the SDK itself
+ * creates or adopts a tab (task.newPage, a popup), so the next action on the
+ * previously active Page activates it again even when Target.targetCreated
+ * events are unavailable and foregroundEpoch() cannot advance.
+ */
+function invalidateActivation(): void {
+  programScope.activatedTargetId = null;
+  programScope.activatedEpoch = -1;
 }
 
 /** Start a program: nothing from the previous one is trusted. */
@@ -673,12 +696,18 @@ export function beginProgram(): void {
 
 /**
  * End a program: release the file chooser interceptions it armed so the user
- * can use file inputs in the Page again. Idempotent and best-effort.
+ * can use file inputs in the Page again, and remove the file-input probes so
+ * pages see their own prototypes between programs. Idempotent, best-effort.
  */
 export async function endProgram(): Promise<void> {
   const guards = [...programScope.fileChooserGuards.values()];
+  const restorers = [...programScope.probeRestorers.entries()];
   programScope = newProgramScope();
-  await Promise.all(guards.map((guard) => guard.dispose().catch(() => {})));
+  for (const [sessionId] of restorers) fileInputProbes.delete(sessionId);
+  await Promise.all([
+    ...guards.map((guard) => guard.dispose().catch(() => {})),
+    ...restorers.map(([, restore]) => restore().catch(() => {})),
+  ]);
 }
 
 /** How long a program's safety interception stays armed without an action. */
@@ -1562,6 +1591,7 @@ class TaskSpace {
         throw pageBudgetError(this, this.#services.pageBudget, ledger, tabs);
       }
       const targetId = await this.#services.createTab("about:blank");
+      invalidateActivation(); // the new tab took the foreground
       this.#services.setPreferredTarget(targetId);
       const existingManaged = Object.entries(ledger.pages).find(
         ([, page]) => page.targetId === targetId,
@@ -2843,6 +2873,7 @@ class Page {
         // unmanaged tab keeps reconcile from adopting it as a managed Page and
         // lets finish() close it instead of protecting it as a user tab.
         const anchorTargetId = await this.#services.createTab("about:blank");
+        invalidateActivation();
         try {
           await this.#services.ledger.keepUnmanaged(
             this.spaceId,
@@ -3430,6 +3461,8 @@ class Page {
   async #adoptCreatedPopups(
     created: Map<string, string>,
   ): Promise<PopupReceiptEntry[]> {
+    // A popup took the foreground, whether discovery or polling found it.
+    invalidateActivation();
     // Target discovery is browser-wide; the tab list scopes it to this space.
     let tabs = await this.#services.listTabs();
     for (let attempt = 0; attempt < POPUP_TAB_LIST_RETRIES; attempt += 1) {
@@ -3744,7 +3777,21 @@ class Page {
     } else {
       fileInputProbes.delete(sessionId);
     }
+    if (installed) {
+      programScope.probeRestorers.set(sessionId, () =>
+        this.#restoreFileInputProbe(sessionId),
+      );
+    }
     return installed;
+  }
+
+  async #restoreFileInputProbe(sessionId: string): Promise<void> {
+    await this.#services.cdp(
+      "Runtime.evaluate",
+      { expression: FILE_INPUT_PROBE_RESTORE, returnByValue: true },
+      sessionId,
+      POPUP_SYNC_TIMEOUT_MS,
+    );
   }
 
   /** Read and reset the probe (one renderer round trip); null when unknown. */

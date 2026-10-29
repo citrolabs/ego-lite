@@ -53,6 +53,7 @@ function createFixture(rootDir) {
   let fileChooserOnNextClick = null;
   let activeFileChooserWaiter = null;
   let systemFileChooserOpened = false;
+  const documentEpochs = new Map();
   let timeoutNextMouseDispatch = false;
   let loseSessionOnNextMouseRelease = false;
   let loseFrameOnNextResolution = null;
@@ -181,11 +182,16 @@ function createFixture(rootDir) {
         };
       if (method === "Page.navigate") {
         const targetId = targetForSession(sessionId);
+        documentEpochs.set(sessionId, (documentEpochs.get(sessionId) ?? 0) + 1);
         tabs.get(targetId).url = params.url;
         tabs.get(targetId).title = params.url;
         return { frameId: "frame-1" };
       }
       if (method === "Runtime.evaluate") {
+        if (params.expression.includes("__egoBrowserFileInputProbeRestore")) {
+          calls.push(["fileInputProbeRestore", sessionId]);
+          return { result: { type: "boolean", value: true } };
+        }
         if (params.expression.includes("__egoBrowserFileInputProbe")) {
           const reading = params.expression.includes("probe.seen === true");
           calls.push([
@@ -778,6 +784,10 @@ function createFixture(rootDir) {
     },
     pendingDialog(sessionId) {
       return pendingDialogs.get(sessionId) || null;
+    },
+    // Main-document navigation count per session, like browser-runtime's.
+    documentEpoch(sessionId) {
+      return documentEpochs.get(sessionId) ?? 0;
     },
     prepareFileChooser(sessionId, { timeoutMs, cancel, keepAlive }) {
       calls.push([
@@ -4997,6 +5007,53 @@ test("a file chooser guard the runtime dropped is re-armed by the next action", 
       (error) => error.code === "EGO_FILE_CHOOSER_OPENED",
     );
     assert.equal(fixture.systemFileChooserOpened(), false);
+  });
+});
+
+test("the file-input probe is removed when the program ends and reinstalled by the next one", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/upload-guard");
+    const count = (kind) => fixture.calls.filter(([k]) => k === kind).length;
+
+    await page.click("#open-upload");
+    await page.click("#open-upload");
+    assert.equal(count("fileInputProbeInstall"), 1, "one probe per program");
+    assert.equal(count("fileInputProbeRestore"), 0);
+
+    await endProgram();
+    assert.equal(count("fileInputProbeRestore"), 1, "program end removes it");
+
+    beginProgram();
+    await page.click("#open-upload");
+    assert.equal(
+      count("fileInputProbeInstall"),
+      2,
+      "the next program reinstalls it",
+    );
+  });
+});
+
+test("task.newPage() makes the next action on the earlier Page activate it again", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+    const activations = () =>
+      fixture.calls.filter(
+        ([kind, method, params]) =>
+          kind === "cdp" &&
+          method === "Target.activateTarget" &&
+          params.targetId === "target-1",
+      ).length;
+
+    await page.click("#open-upload");
+    await page.click("#open-upload");
+    const before = activations();
+    assert.equal(before, 1, "one activation per program while nothing changed");
+
+    await task.newPage();
+    await page.click("#open-upload");
+    assert.equal(activations(), before + 1, "the new tab took the foreground");
   });
 });
 
