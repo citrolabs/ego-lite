@@ -20,11 +20,13 @@ Pass the script to `ego-browser nodejs`.
 
 <!-- mode: ego-run -->
 
-Pass the script to `ego-run --session <id>`. Pick one session id per user goal
+Pass the script to `ego-run --session <id>`. Use one session id per user goal
 (lowercase letters, digits, and dashes, up to 64 characters; the task space name
-is a good id) and send every script of that goal with the same `--session`.
-Scripts that share a session run one at a time in one Node.js context, so
-variables, functions, and Page handles from earlier scripts stay usable.
+is a good id) for every script of that goal.
+Scripts of one session share one Node.js context and run one at a time:
+top-level `const`/`let` declarations, functions, and Page handles from earlier
+scripts stay defined, so use `task`, `page`, or a popup handle directly instead
+of copying them to `globalThis`.
 
 <!-- /mode -->
 
@@ -50,6 +52,10 @@ console.log(await page.snapshot());
 EOF
 ```
 
+End every script with the observation the next step needs, such as
+`console.log(await page.snapshot())`; do not send a separate script only to look
+at the result.
+
 When a sandbox blocks heredoc input, use `-e` instead. Use single quotes around
 the code and double quotes for JavaScript strings; single quotes within the code
 require shell quoting.
@@ -71,19 +77,22 @@ ego-run --session inspect-example <<'EOF'
 const task = await taskSpace("inspect-example");
 const page = task.page("p1");
 await page.goto("https://example.com");
-
-console.log({ taskSpaceId: task.spaceId, page: page.label });
+console.log(task.spaceId);
 await page.snapshot()
 EOF
 ```
 
-The value of the script's last expression (or of `return`) is printed after its
-`console.log` output, so end a script with the value you want to see. A later
-script continues from where the previous one stopped:
+The script's last expression (or `return` value) is printed after its
+`console.log` output: end every script with the observation the next step needs
+instead of sending a separate script to look. A later script continues with the
+same `page`:
 
 ```bash
 ego-run --session inspect-example -e 'await page.click("@3"); await page.snapshot()'
 ```
+
+A popup caught in one script (`const preview = await popupPromise`) is used as
+`preview` in later scripts, without `task.page()`.
 
 When a sandbox blocks heredoc input, use `-e` (single quotes around the code,
 double quotes for JavaScript strings) or `--file` with an absolute path.
@@ -119,9 +128,8 @@ file: never put it in a `-e` argument.
 ego-run --session <id> --file C:/Users/<name>/ego/task.mjs
 ```
 
-`--file` reads the file as UTF-8 itself, so the whole task belongs in the
-`.mjs` file. Non-ASCII content such as Chinese text must stay inside the file:
-never put it in a `-e` argument.
+`--file` reads the file as UTF-8, so the whole task, including any non-ASCII
+text, belongs in the `.mjs` file; never put it in a `-e` argument.
 
 <!-- /mode -->
 
@@ -164,10 +172,9 @@ editing the previous one, which would replay old steps.
 
 <!-- mode: ego-run -->
 
-Earlier rounds have already run, and the session keeps their variables. Write a
-new file with only the next steps for every round (`round-01.mjs`,
-`round-02.mjs`, ...) instead of editing the previous one, which would replay
-old steps.
+The session keeps earlier rounds' variables. Write a new file with only the
+next steps for every round (`round-01.mjs`, `round-02.mjs`, ...) instead of
+editing the previous one, which would replay old steps.
 
 <!-- /mode -->
 
@@ -187,36 +194,35 @@ file form above.
 
 <!-- /platform -->
 
-The script always runs in Node.js, not in the web Page. Browser helpers and
-Node.js APIs belong in the script; Page globals such as `window`, `document`,
-`location`, and DOM APIs do not. Put browser-side JavaScript inside
-`page.evaluate()`. Do not import Playwright or launch another browser.
+The script always runs in Node.js, not in the web Page: browser helpers and
+Node.js APIs belong in the script, while `window`, `document`, `location`, and
+DOM APIs belong inside `page.evaluate()`. Do not import Playwright or launch
+another browser.
 
-The Node.js runtime uses ESM. When a script needs local files, load built-ins
-with dynamic imports such as `await import("node:fs/promises")`. The script
-does not run in your shell's working directory, so use absolute paths for every
-file it reads or writes. It also does not inherit your shell's environment
-variables: `process.env` will not contain values you set before running
-`ego-browser`, so write every input directly into the script.
+The Node.js runtime uses ESM: load built-ins with dynamic imports such as
+`await import("node:fs/promises")`. The script does not run in your shell's
+working directory, so use absolute paths for every file, and it does not
+inherit your shell's environment variables (`process.env` lacks values set
+before running `ego-browser`), so write every input directly into the script.
 
-Ego-browser deliberately exposes a small custom API. It is not Playwright, even
-where method names and options look similar. Use only the TaskSpace, Page,
-FileChooser, mouse, and keyboard APIs explicitly listed in this Skill. Do not
-infer Playwright methods such as `locator()`, `getByRole()`, `context()`,
-`expect()`, or `route()`. When the listed API does not cover an operation, use
-the documented `page.evaluate()` or `page.cdp()` escape hatches instead of
-guessing another method.
+Ego-browser exposes a small custom API. It is not Playwright, even where method
+names and options look similar: use only the TaskSpace, Page, FileChooser,
+mouse, and keyboard APIs listed in this Skill, and do not infer Playwright
+methods such as `locator()`, `getByRole()`, `context()`, `expect()`, or
+`route()`. When the listed API does not cover an operation, use `page.evaluate()`
+or `page.cdp()` instead of guessing another method.
 
-Only these pointer actions accept an optional `label` option: `click()`,
+Only these pointer actions accept an optional `label` option, a concise 3-6
+word description shown next to the visible agent cursor: `click()`,
 `dblclick()`, `hover()`, `dragAndDrop()`, `mouse.click()`, `mouse.move()`, and
-`mouse.wheel()`. Pass a concise 3-6 word description to keep the action text
-next to the visible agent cursor in sync with the action. Other methods, such
-as `fill()`, `press()`, `focus()`, `selectOption()`, `waitForSelector()`,
-`keyboard.*()`, `mouse.down()`, and `mouse.up()`, reject a `label` option.
-The `label` in `selectOption(selector, { label })` is different: it selects the
-option whose visible text matches. `click()` and `dblclick()` accept
-`hover: false` to skip the pointer move before the press (faster); keep the
-default for controls that only appear on hover.
+`mouse.wheel()`. Other methods, such as `fill()`, `press()`, `focus()`,
+`selectOption()`, `waitForSelector()`, `keyboard.*()`, `mouse.down()`, and
+`mouse.up()`, reject it. The `label` in `selectOption(selector, { label })` is
+different: it selects the option whose visible text matches.
+
+`click()` and `dblclick()` accept `{ hover: false }` to skip the pointer move
+before the press, for example `await page.click("#next", { hover: false })` in
+a paging loop; keep the default for controls that appear or change on hover.
 
 When the user explicitly asks for ego-browser, start with a real browser command
 and diagnose the CLI or installation only if it fails.
@@ -243,12 +249,13 @@ stop and ask the user.
 
 <!-- mode: ego-run -->
 
-- Scripts with the same `--session` share one Node.js context, so later scripts
-  can use `task` and `page` directly. The context is rebuilt when a script
-  exceeds its deadline (`--timeout-ms`, default 60000) or blocks the event
-  loop; `ego-run` then prints `[ego-run] session ... was rebuilt`, and the next
-  script must get its handles again with `taskSpace(name)` and
-  `task.page(label)`. Task spaces, tabs, and Page labels persist either way.
+- The session context is rebuilt when a script exceeds its deadline
+  (`--timeout-ms`, default 60000) or blocks the event loop; `ego-run` then
+  prints `[ego-run] session ... was rebuilt`, and the next script gets its
+  handles again with `taskSpace(name)` and `task.page(label)`. Task spaces,
+  tabs, and Page labels persist either way.
+- Keep a whole loop (paging, polling) in one script and raise its deadline with
+  `--timeout-ms <ms>` (max 180000) instead of splitting it across scripts.
 
 <!-- /mode -->
 
@@ -257,12 +264,16 @@ stop and ask the user.
 - Reuse a Page with `goto()` instead of opening a new Page for every URL.
 - All time values are milliseconds.
 
+<!-- mode: direct -->
+
 ```js
 // Later round: use the space id and Page label printed earlier.
 const resumed = await taskSpace(7);
 const source = resumed.page("p1");
 await source.goto("https://example.com/releases");
 ```
+
+<!-- /mode -->
 
 Do not inspect or select profiles unless the user explicitly requests a
 particular Ego Lite profile. A `profileId` applies only when creating a space;
@@ -668,6 +679,13 @@ intermediate steps do not need to remain open.
 await task.finish({ keep: [] }); // Default: keep no Agent-managed Pages.
 await task.finish({ keep: ["p2"] }); // Exception: keep only the result Page for the user.
 ```
+
+<!-- mode: ego-run -->
+
+The final round is one line:
+`ego-run --session <id> -e 'await task.finish({ keep: [] }); "done"'`.
+
+<!-- /mode -->
 
 User-created and unknown-origin tabs are protected; if any remain, `keep: []`
 does not close the whole space. The blank tab that `page.close()` leaves when it
