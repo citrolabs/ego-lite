@@ -112,7 +112,9 @@ the daemon wrapper calls both around every call. Inside a program:
   foreground, and a hidden tab does not answer input or animation-frame waits,
   so the next action on the earlier Page would hang without re-activation;
 - the file chooser safety interception is armed on the first guarded action
-  and released at the end, instead of on and off around every action. Its
+  and released at the end, instead of on and off around every action; when
+  the runtime drops it (timer expiry, session loss) the next action re-arms
+  it. Its
   timer is `unref`'d (`keepAlive: false`): the direct CLI releases the guard
   from `beforeExit`, which only fires once the event loop has drained, so a
   ref'd timer would keep every script with a click alive for 30 minutes;

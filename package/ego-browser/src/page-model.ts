@@ -3703,7 +3703,10 @@ class Page {
     sessionId: string,
   ): Promise<FileChooserInterception> {
     let guard = programScope.fileChooserGuards.get(sessionId);
-    if (guard) return guard;
+    if (guard?.active()) return guard;
+    // The runtime drops a guard on its own when its timer expires or the
+    // session is lost; a cached but inactive guard must be re-armed.
+    if (guard) programScope.fileChooserGuards.delete(sessionId);
     guard = this.#services.prepareFileChooser(sessionId, {
       timeoutMs: PROGRAM_FILE_CHOOSER_GUARD_MS,
       cancel: true,

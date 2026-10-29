@@ -258,6 +258,8 @@ export type FileChooserInterception = {
   ready: Promise<void>;
   event: Promise<FileChooserOpenedEvent>;
   peek(): FileChooserOpenedEvent | undefined;
+  /** False once the runtime dropped it: timer expiry, session loss, dispose. */
+  active(): boolean;
   dispose(reason?: Error): Promise<void>;
 };
 
@@ -1202,6 +1204,9 @@ export function prepareFileChooser(
     },
     peek() {
       return observed;
+    },
+    active() {
+      return target.fileChooserInterception === interception;
     },
     async dispose(reason?: Error) {
       if (target.fileChooserInterception !== interception) return;

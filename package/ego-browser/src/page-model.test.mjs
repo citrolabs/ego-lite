@@ -798,6 +798,7 @@ function createFixture(rootDir) {
         ready: Promise.resolve(),
         event,
         peek: () => observed,
+        active: () => activeFileChooserWaiter === waiter,
         emit(value) {
           observed = value;
           resolveEvent(value);
@@ -914,6 +915,10 @@ function createFixture(rootDir) {
       };
     },
     systemFileChooserOpened: () => systemFileChooserOpened,
+    /** Simulate the runtime dropping the guard (timer expiry, session loss). */
+    expireFileChooserGuard() {
+      activeFileChooserWaiter = null;
+    },
     timeoutNextMouseDispatch() {
       timeoutNextMouseDispatch = true;
     },
@@ -4966,6 +4971,30 @@ test("unhandled file choosers are cancelled before a system dialog appears", asy
       prepared[2].keepAlive,
       false,
       "the program-wide guard must not hold the process open after the script ends",
+    );
+    assert.equal(fixture.systemFileChooserOpened(), false);
+  });
+});
+
+test("a file chooser guard the runtime dropped is re-armed by the next action", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/upload-guard");
+    const prepared = () =>
+      fixture.calls.filter(([kind]) => kind === "prepareFileChooser").length;
+
+    await page.click("#open-upload");
+    await page.click("#open-upload");
+    assert.equal(prepared(), 1, "one program-wide guard covers both clicks");
+
+    fixture.expireFileChooserGuard();
+    await page.click("#open-upload");
+    assert.equal(prepared(), 2, "an inactive guard is replaced, not reused");
+
+    fixture.openFileChooserOnNextClick();
+    await assert.rejects(
+      () => page.click("#open-upload"),
+      (error) => error.code === "EGO_FILE_CHOOSER_OPENED",
     );
     assert.equal(fixture.systemFileChooserOpened(), false);
   });
