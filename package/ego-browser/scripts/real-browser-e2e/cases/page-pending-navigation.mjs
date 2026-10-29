@@ -12,6 +12,8 @@ export function pagePendingNavigationCase() {
     );
     const heldUrl = baseUrl + "/hold-page?ms=120000";
 
+    // goto bounds its own wait and stops the navigation it could not commit,
+    // so the Page keeps answering on its previous document.
     const gotoStartedAt = Date.now();
     let gotoError;
     try {
@@ -28,7 +30,40 @@ export function pagePendingNavigationCase() {
       Date.now() - gotoStartedAt < 4_000,
       "goto returns close to its own timeout: " + (Date.now() - gotoStartedAt)
     );
+    assertEqual(gotoError?.committed, false, "the held navigation did not commit");
+    assertEqual(gotoError?.stopped, true, "goto stopped the pending navigation");
+    assertIncludes(
+      gotoError?.message,
+      "had not committed and was stopped",
+      "the goto error says the navigation was stopped"
+    );
+    assertIncludes(
+      gotoError?.message,
+      "page.goto(url, { timeout })",
+      "the goto error tells the agent how to retry"
+    );
 
+    const afterGotoStartedAt = Date.now();
+    const afterGoto = await page.snapshot();
+    assert(
+      Date.now() - afterGotoStartedAt < 5_000,
+      "snapshot answers promptly after goto stopped the navigation: " +
+        (Date.now() - afterGotoStartedAt)
+    );
+    assertIncludes(
+      afterGoto,
+      "Navigation target",
+      "the Page still shows the last committed document after goto gave up"
+    );
+
+    // A navigation that goto did not start (a link click, a script, raw CDP)
+    // can still be left pending; public calls then stay inside one bounded
+    // wait and the error names the Page and what to do. Chromium answers
+    // Page.navigate only once the response arrives, so the raw call is given
+    // up on while the navigation stays pending.
+    await page
+      .cdp("Page.navigate", { url: heldUrl + "&raw=1" }, { timeout: 500 })
+      .catch(() => {});
     const snapshotStartedAt = Date.now();
     let snapshotError;
     try {
@@ -64,6 +99,8 @@ export function pagePendingNavigationCase() {
         snapshotElapsed
     );
 
+    // goto on such a Page replaces the pending navigation with its own, times
+    // out within its budget, and leaves the Page usable again.
     const secondGotoStartedAt = Date.now();
     let secondGotoError;
     try {
@@ -81,13 +118,16 @@ export function pagePendingNavigationCase() {
       "goto on an unresponsive Page counts session setup against its timeout: " +
         (Date.now() - secondGotoStartedAt)
     );
-
-    await page.cdp("Page.stopLoading");
+    assertEqual(
+      secondGotoError?.stopped,
+      true,
+      "goto on an unresponsive Page stops the navigation it started"
+    );
     const recoveredStartedAt = Date.now();
     const recovered = await page.snapshot();
     assert(
       Date.now() - recoveredStartedAt < 5_000,
-      "snapshot answers promptly once the pending navigation stops: " +
+      "snapshot answers promptly once goto stopped the pending navigation: " +
         (Date.now() - recoveredStartedAt)
     );
     assertIncludes(
@@ -97,9 +137,9 @@ export function pagePendingNavigationCase() {
     );
 
     // Leave a pending navigation behind for the fresh-process case.
-    try {
-      await page.goto(heldUrl + "&fresh=1", { timeout: 1_000 });
-    } catch {}
+    await page
+      .cdp("Page.navigate", { url: heldUrl + "&fresh=1" }, { timeout: 500 })
+      .catch(() => {});
     await writeFile(
       join(tempDir, "pending-navigation-state.json"),
       JSON.stringify({ label: page.label })

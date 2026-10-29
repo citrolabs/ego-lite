@@ -220,8 +220,11 @@ ego-browser provides the following Page API:
 or Node.js modules from the surrounding script. Define browser-side helpers
 inside the callback or pass one JSON-serializable value as its second argument.
 
-A Page whose navigation has not committed fails with `EGO_PAGE_UNRESPONSIVE`;
-the error says how to recover (`page.cdp("Page.stopLoading")`, a new Page).
+`goto()` and `reload()` stop a navigation that has not committed by their
+timeout, so the Page stays usable on its previous document; retry with a longer
+timeout. A Page whose navigation is pending for any other reason fails with
+`EGO_PAGE_UNRESPONSIVE`; the error says how to recover
+(`page.cdp("Page.stopLoading")`, a new Page).
 
 Work efficiently:
 
