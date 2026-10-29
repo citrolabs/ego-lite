@@ -147,6 +147,6 @@ session mode is adopted.
 - Windows (ConPTY) has not been exercised yet.
 - The 100 ms output poll in the CLI REPL loop is a browser-side constant; it is
   bypassed by the top-level-await trick, not removed.
-- Browser-side follow-ups (runtime reuse keyed by `session_id`, `.abort`, a
-  non-TTY `--repl` flag with JSON lines) would retire the daemon; see the design
+- Browser-side follow-ups (runtime reuse keyed by `session_id`, plus `.abort`
+  to interrupt a running program) would retire the daemon; see the design
   document.
