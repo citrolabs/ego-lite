@@ -86,6 +86,12 @@ export class PageUnresponsiveError extends CdpRequestTimeoutError {
   override readonly code = "EGO_PAGE_UNRESPONSIVE";
   readonly waitedMs: number;
   readonly targetId?: string;
+  /**
+   * The pending navigation was stopped once the wait ran out and the Page
+   * answers again; `currentUrl` is what its main frame showed afterwards.
+   */
+  stopped = false;
+  currentUrl?: string;
 
   constructor(
     method: string,

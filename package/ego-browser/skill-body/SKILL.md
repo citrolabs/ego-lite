@@ -222,9 +222,10 @@ inside the callback or pass one JSON-serializable value as its second argument.
 
 `goto()` and `reload()` stop a navigation that has not committed by their
 timeout, so the Page stays usable on its previous document; retry with a longer
-timeout. A Page whose navigation is pending for any other reason fails with
-`EGO_PAGE_UNRESPONSIVE`; the error says how to recover
-(`page.cdp("Page.stopLoading")`, a new Page).
+timeout. Any other call on a Page whose navigation is pending (after a link
+click, for example) waits one bounded period, then fails with
+`EGO_PAGE_UNRESPONSIVE` and stops that navigation; the error says which
+document the Page shows now and how to load the pending one.
 
 Work efficiently:
 
