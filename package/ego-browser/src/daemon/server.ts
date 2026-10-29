@@ -15,7 +15,7 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { createServer, type Server, type Socket } from "node:net";
+import { connect, createServer, type Server, type Socket } from "node:net";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
@@ -102,10 +102,23 @@ export class Daemon {
     mkdirSync(this.paths.stateDir, { recursive: true, mode: 0o700 });
     mkdirSync(this.paths.spillDir, { recursive: true, mode: 0o700 });
     this.#acquireLock();
-    this.#token = this.#loadOrCreateToken();
     if (process.platform !== "win32" && existsSync(this.paths.endpoint)) {
+      // The lock file can be missing or unreadable while a daemon still owns
+      // the socket, so probe the endpoint before treating it as stale.
+      if (await endpointAlive(this.paths.endpoint)) {
+        try {
+          unlinkSync(this.paths.lockFile); // we took a lock that is not ours
+        } catch {
+          // best effort
+        }
+        throw new ProtocolError(
+          ErrorCodes.BAD_REQUEST,
+          `an ego-run daemon is already listening on ${this.paths.endpoint}`,
+        );
+      }
       unlinkSync(this.paths.endpoint); // stale socket from a crashed daemon
     }
+    this.#token = this.#loadOrCreateToken();
     this.#server = createServer((socket) => this.#serve(socket));
     await new Promise<void>((resolve, reject) => {
       this.#server!.once("error", reject);
@@ -355,6 +368,25 @@ export class Daemon {
 
 function failure(id: string, error: unknown): Response {
   return { id, ok: false, error: serializeError(error) };
+}
+
+/**
+ * True when something accepts connections on the endpoint. A refused or
+ * missing socket is stale; a connection that neither succeeds nor fails
+ * within the timeout is treated as alive so a live daemon is never unlinked.
+ */
+function endpointAlive(endpoint: string, timeoutMs = 500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect(endpoint);
+    const done = (alive: boolean) => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(alive);
+    };
+    const timer = setTimeout(() => done(true), timeoutMs);
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+  });
 }
 
 function processAlive(pid: number): boolean {

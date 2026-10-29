@@ -142,6 +142,28 @@ test("a daemon refuses to start while another live process holds the lock", asyn
   rmSync(stateDir, { recursive: true, force: true });
 });
 
+test("a live socket is not unlinked when the lock file is missing", async (t) => {
+  if (process.platform === "win32")
+    return t.skip("named pipes cannot be stale");
+  const stateDir = mkdtempSync(join(tmpdir(), "ego-run-test-"));
+  const paths = daemonPaths({ EGO_RUN_STATE_DIR: stateDir });
+  const options = {
+    paths,
+    bin: "ego-browser",
+    watchVersion: false,
+    sessions: { connect: fakeConnect() },
+  };
+  const live = new Daemon(options);
+  await live.start();
+  rmSync(paths.lockFile); // a lost lock must not make the socket look stale
+  const second = new Daemon(options);
+  await assert.rejects(second.start(), /already listening/);
+  // The live daemon still answers on its socket.
+  assert.equal((await request(paths, { cmd: "status" })).pid, process.pid);
+  await live.stop();
+  rmSync(stateDir, { recursive: true, force: true });
+});
+
 test("the client reports a missing daemon as DAEMON_UNAVAILABLE", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "ego-run-test-"));
   const paths = daemonPaths({ EGO_RUN_STATE_DIR: stateDir });
