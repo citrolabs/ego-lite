@@ -2355,6 +2355,52 @@ test("Page.goto reports a navigation that commits while it is being stopped", as
   });
 });
 
+test("Page.goto does not stop anything when its budget ends before Page.navigate", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let nowMs = 0;
+    let stops = 0;
+    let navigates = 0;
+    let armed = false;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.getFrameTree" && armed) {
+          // The pre-navigation probe is the last thing the budget covers.
+          nowMs += timeoutMs;
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Page.navigate" && armed) navigates += 1;
+        if (method === "Page.stopLoading") stops += 1;
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+      now: () => nowMs,
+      async sleep(ms) {
+        nowMs += ms;
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    nowMs = 0;
+    armed = true;
+
+    await assert.rejects(
+      () =>
+        page.goto("https://example.test/never-sent", {
+          timeout: 100,
+          waitUntil: "load",
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_NAVIGATION_TIMEOUT");
+        assert.equal(error.committed, false);
+        assert.equal(error.stopped, false);
+        assert.doesNotMatch(error.message, /pending|stopped|hung/);
+        return true;
+      },
+    );
+    assert.equal(navigates, 0, "Page.navigate was never dispatched");
+    assert.equal(stops, 0, "nothing in flight belongs to this call");
+  });
+});
+
 test("Page.goto timeout on a responsive Page does not stop anything", async () => {
   await withFixture(async (fixture) => {
     const baseCdp = fixture.services.cdp;

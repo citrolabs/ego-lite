@@ -484,6 +484,14 @@ export async function navigateInPage(
         navigationTimeRemaining(services, deadline, timeoutMs, waitUntil),
       ),
     );
+    // The budget check can throw at the deadline; only a request that was
+    // actually dispatched may be stopped later.
+    const navigateBudgetMs = navigationTimeRemaining(
+      services,
+      deadline,
+      timeoutMs,
+      waitUntil,
+    );
     navigateSent = true;
     const response = await services.cdp(
       "Page.navigate",
@@ -492,7 +500,7 @@ export async function navigateInPage(
         ...(referer === undefined ? {} : { referrer: referer }),
       },
       sessionId,
-      navigationTimeRemaining(services, deadline, timeoutMs, waitUntil),
+      navigateBudgetMs,
     );
     navigation = response?.result || response || {};
     if (navigation.errorText) {
