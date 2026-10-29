@@ -37,6 +37,7 @@
     "deepseek-harness": "@ego-lite/dsh-plugin",
     "pi": "@ego-lite/pi-plugin"
   },
+  "npmVersion": "1.0.0",
   "keywords": [
     "agent-plugin",
     "browser",

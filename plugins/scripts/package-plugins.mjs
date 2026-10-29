@@ -389,6 +389,8 @@ async function packagePlugin(repositoryRoot, name, outputRoot) {
           name:
             sourcePackage.npmPackages?.[target.id] ??
             `${sourcePackage.name}-${target.id}`,
+          // npm releases may be numbered apart from the plugin.
+          version: sourcePackage.npmVersion ?? sourcePackage.version,
           files: ["LICENSE", "README.md", "skills", ...target.files],
           keywords: [...target.keywords, ...sourcePackage.keywords],
           exports: target.exports,
@@ -396,6 +398,7 @@ async function packagePlugin(repositoryRoot, name, outputRoot) {
         };
         delete pkg.scripts;
         delete pkg.npmPackages;
+        delete pkg.npmVersion;
         if (target.id === "deepseek-harness") {
           const patchPath = join(payloadRoot, "cordis.patch.yml");
           const patch = await readFile(patchPath, "utf8");
