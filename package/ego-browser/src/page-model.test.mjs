@@ -18,6 +18,8 @@ import {
 } from "../dist/src/browser-runtime.js";
 import { PageLedgerStore } from "../dist/src/page-ledger.js";
 import {
+  beginProgram,
+  endProgram,
   captureTaskSpaceUserBoundary,
   createTaskSpaceHandle,
   initializeTaskSpaceHandle,
@@ -30,9 +32,13 @@ import {
 
 async function withFixture(fn) {
   const rootDir = await mkdtemp(join(tmpdir(), "ego-page-model-test-"));
+  // Each fixture is one agent program: once-per-program state (activation,
+  // the file chooser guard, the file-input probe) must not leak between tests.
+  beginProgram();
   try {
     return await fn(createFixture(rootDir));
   } finally {
+    await endProgram();
     await rm(rootDir, { recursive: true, force: true });
   }
 }
@@ -47,7 +53,10 @@ function createFixture(rootDir) {
   let fileChooserOnNextClick = null;
   let activeFileChooserWaiter = null;
   let systemFileChooserOpened = false;
+  const documentEpochs = new Map();
   let timeoutNextMouseDispatch = false;
+  let delayNextMouseMoveMs = 0;
+  let mouseMovesCompleted = 0;
   let loseSessionOnNextMouseRelease = false;
   let loseFrameOnNextResolution = null;
   let dialogOnNextClick = null;
@@ -95,7 +104,14 @@ function createFixture(rootDir) {
   let domActivity = null;
   let fileInputClicked = false;
 
+  let pageTargetsCreated = 0;
   function dispatchBrowserEvent(event) {
+    if (
+      event.method === "Target.targetCreated" &&
+      event.params?.targetInfo?.type === "page"
+    ) {
+      pageTargetsCreated += 1;
+    }
     for (const listener of [...browserEventListeners]) listener(event);
   }
 
@@ -168,11 +184,16 @@ function createFixture(rootDir) {
         };
       if (method === "Page.navigate") {
         const targetId = targetForSession(sessionId);
+        documentEpochs.set(sessionId, (documentEpochs.get(sessionId) ?? 0) + 1);
         tabs.get(targetId).url = params.url;
         tabs.get(targetId).title = params.url;
         return { frameId: "frame-1" };
       }
       if (method === "Runtime.evaluate") {
+        if (params.expression.includes("__egoBrowserFileInputProbeRestore")) {
+          calls.push(["fileInputProbeRestore", sessionId]);
+          return { result: { type: "boolean", value: true } };
+        }
         if (params.expression.includes("__egoBrowserFileInputProbe")) {
           const reading = params.expression.includes("probe.seen === true");
           calls.push([
@@ -680,6 +701,14 @@ function createFixture(rootDir) {
           timeoutNextMouseDispatch = false;
           throw new Error("CDP request timed out: Input.dispatchMouseEvent");
         }
+        if (params.type === "mouseMoved") {
+          if (delayNextMouseMoveMs) {
+            const delay = delayNextMouseMoveMs;
+            delayNextMouseMoveMs = 0;
+            await new Promise((resolve) => setTimeout(resolve, delay));
+          }
+          mouseMovesCompleted += 1;
+        }
         if (params.type === "mouseReleased") {
           if (loseSessionOnNextMouseRelease) {
             loseSessionOnNextMouseRelease = false;
@@ -766,8 +795,18 @@ function createFixture(rootDir) {
     pendingDialog(sessionId) {
       return pendingDialogs.get(sessionId) || null;
     },
-    prepareFileChooser(sessionId, { timeoutMs, cancel }) {
-      calls.push(["prepareFileChooser", sessionId, { timeoutMs, cancel }]);
+    // Main-document navigation count per session, like browser-runtime's.
+    documentEpoch(sessionId) {
+      return documentEpochs.get(sessionId) ?? 0;
+    },
+    prepareFileChooser(sessionId, { timeoutMs, cancel, keepAlive }) {
+      calls.push([
+        "prepareFileChooser",
+        sessionId,
+        keepAlive === undefined
+          ? { timeoutMs, cancel }
+          : { timeoutMs, cancel, keepAlive },
+      ]);
       let observed;
       let resolveEvent;
       let rejectEvent;
@@ -779,6 +818,7 @@ function createFixture(rootDir) {
         ready: Promise.resolve(),
         event,
         peek: () => observed,
+        active: () => activeFileChooserWaiter === waiter,
         emit(value) {
           observed = value;
           resolveEvent(value);
@@ -845,6 +885,7 @@ function createFixture(rootDir) {
       browserEventListeners.add(listener);
       return () => browserEventListeners.delete(listener);
     },
+    foregroundEpoch: () => pageTargetsCreated,
     now: () => nowMs,
     sleep: async (ms) => {
       sleepDurations.push(ms);
@@ -894,6 +935,14 @@ function createFixture(rootDir) {
       };
     },
     systemFileChooserOpened: () => systemFileChooserOpened,
+    /** Simulate the runtime dropping the guard (timer expiry, session loss). */
+    expireFileChooserGuard() {
+      activeFileChooserWaiter = null;
+    },
+    delayNextMouseMove(ms) {
+      delayNextMouseMoveMs = ms;
+    },
+    mouseMovesCompleted: () => mouseMovesCompleted,
     timeoutNextMouseDispatch() {
       timeoutNextMouseDispatch = true;
     },
@@ -1017,9 +1066,7 @@ function createFixture(rootDir) {
       pageEvents.set(sessionId, events);
     },
     emitBrowserEvent(method, params = {}) {
-      for (const listener of [...browserEventListeners]) {
-        listener({ method, params });
-      }
+      dispatchBrowserEvent({ method, params });
     },
   };
 }
@@ -5255,7 +5302,109 @@ test("unhandled file choosers are cancelled before a system dialog appears", asy
       ([kind]) => kind === "prepareFileChooser",
     );
     assert.equal(prepared[2].cancel, true);
+    assert.equal(
+      prepared[2].keepAlive,
+      false,
+      "the program-wide guard must not hold the process open after the script ends",
+    );
     assert.equal(fixture.systemFileChooserOpened(), false);
+  });
+});
+
+test("a file chooser guard the runtime dropped is re-armed by the next action", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/upload-guard");
+    const prepared = () =>
+      fixture.calls.filter(([kind]) => kind === "prepareFileChooser").length;
+
+    await page.click("#open-upload");
+    await page.click("#open-upload");
+    assert.equal(prepared(), 1, "one program-wide guard covers both clicks");
+
+    fixture.expireFileChooserGuard();
+    await page.click("#open-upload");
+    assert.equal(prepared(), 2, "an inactive guard is replaced, not reused");
+
+    fixture.openFileChooserOnNextClick();
+    await assert.rejects(
+      () => page.click("#open-upload"),
+      (error) => error.code === "EGO_FILE_CHOOSER_OPENED",
+    );
+    assert.equal(fixture.systemFileChooserOpened(), false);
+  });
+});
+
+test("the file-input probe is removed when the program ends and reinstalled by the next one", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/upload-guard");
+    const count = (kind) => fixture.calls.filter(([k]) => k === kind).length;
+
+    await page.click("#open-upload");
+    await page.click("#open-upload");
+    assert.equal(count("fileInputProbeInstall"), 1, "one probe per program");
+    assert.equal(count("fileInputProbeRestore"), 0);
+
+    await endProgram();
+    assert.equal(count("fileInputProbeRestore"), 1, "program end removes it");
+
+    beginProgram();
+    await page.click("#open-upload");
+    assert.equal(
+      count("fileInputProbeInstall"),
+      2,
+      "the next program reinstalls it",
+    );
+  });
+});
+
+test("task.newPage() makes the next action on the earlier Page activate it again", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+    const activations = () =>
+      fixture.calls.filter(
+        ([kind, method, params]) =>
+          kind === "cdp" &&
+          method === "Target.activateTarget" &&
+          params.targetId === "target-1",
+      ).length;
+
+    await page.click("#open-upload");
+    await page.click("#open-upload");
+    const before = activations();
+    assert.equal(before, 1, "one activation per program while nothing changed");
+
+    await task.newPage();
+    await page.click("#open-upload");
+    assert.equal(activations(), before + 1, "the new tab took the foreground");
+  });
+});
+
+test("click({ hover: false }) returns only after its trailing pointer move landed", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/upload-guard");
+    fixture.calls.length = 0;
+    fixture.delayNextMouseMove(40);
+
+    await page.click("#open-upload", { hover: false });
+
+    assert.deepEqual(
+      fixture.calls
+        .filter(
+          ([kind, method]) =>
+            kind === "cdp" && method === "Input.dispatchMouseEvent",
+        )
+        .map(([, , params]) => params.type),
+      ["mousePressed", "mouseReleased", "mouseMoved"],
+    );
+    assert.equal(
+      fixture.mouseMovesCompleted(),
+      1,
+      "the move landed before click() resolved",
+    );
   });
 });
 
@@ -7258,13 +7407,16 @@ test("an input action without a popup skips tab polling and settle delays", asyn
       [],
       "the action boundary no longer sleeps to settle the tab list",
     );
+    // The file-input probe read after the input is that round trip; a plain
+    // "0" sync is only sent when no probe is live.
     const syncCalls = fixture.calls
       .slice(callsBefore)
       .filter(
         ([kind, method, params]) =>
-          kind === "cdp" &&
-          method === "Runtime.evaluate" &&
-          params?.expression === "0",
+          (kind === "cdp" &&
+            method === "Runtime.evaluate" &&
+            params?.expression === "0") ||
+          kind === "fileInputProbeRead",
       );
     assert.equal(
       syncCalls.length,
@@ -7291,6 +7443,41 @@ test("a popup reported by Target.targetCreated is adopted without a settle delay
       "the popup Page is usable from the receipt",
     );
     assert.deepEqual(fixture.sleepDurations.slice(sleepsBefore), []);
+  });
+});
+
+test("a Page is activated again after a popup took the foreground", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/source");
+    const activations = () =>
+      fixture.calls.filter(
+        ([kind, method, params]) =>
+          kind === "cdp" &&
+          method === "Target.activateTarget" &&
+          params.targetId === page.targetId,
+      ).length;
+
+    await page.click("#plain-button");
+    const before = activations();
+    await page.click("#plain-button");
+    assert.equal(
+      activations(),
+      before,
+      "actions within one program do not re-activate an active Page",
+    );
+
+    fixture.openPopupOnNextClick("https://example.test/popup");
+    const receipt = await page.click("#open-popup");
+    assert.equal(receipt.popups.length, 1);
+    await page.click("#plain-button");
+    assert.equal(
+      activations(),
+      before + 1,
+      "the popup took the foreground, so the next action brings the Page back",
+    );
+    await page.click("#plain-button");
+    assert.equal(activations(), before + 1, "and only once");
   });
 });
 
@@ -7904,5 +8091,71 @@ test("snapshot describes a Page that stops answering after the first document ch
       },
     );
     assert.equal(calls, 2, "the second frame discovery is the one that failed");
+  });
+});
+
+test("snapshot reports an unresponsive Page when the frame tree read after a cached discovery times out", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    const stops = [];
+    let pending = false;
+    const task = taskForRound(fixture, "round-a", {
+      // Frame discovery answered from its cache: no renderer round trip here,
+      // so the main-frame tree read is the first command the renderer must
+      // answer.
+      async ensureFrameSessions() {
+        return new Map();
+      },
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Target.getTargetInfo") {
+          return { targetInfo: { url: "https://example.test/pending" } };
+        }
+        if (method === "Page.stopLoading") {
+          stops.push({ sessionId, timeoutMs });
+          return {};
+        }
+        if (method === "Page.getFrameTree" && pending) {
+          if (stops.length === 0) {
+            throw new CdpRequestTimeoutError(
+              method,
+              timeoutMs ?? 5_000,
+              sessionId,
+            );
+          }
+          return {
+            result: {
+              frameTree: {
+                frame: {
+                  id: "frame-1",
+                  loaderId: "loader-old",
+                  url: "https://example.test/previous",
+                },
+              },
+            },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/previous");
+    pending = true;
+
+    await assert.rejects(
+      () => page.snapshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_UNRESPONSIVE");
+        assert.equal(error.stopped, true);
+        assert.equal(error.currentUrl, "https://example.test/previous");
+        assert.match(
+          error.message,
+          /^Page p1 \(https:\/\/example\.test\/pending\) did not answer Page\.getFrameTree within \d+ms: a main-frame navigation had started but not committed\. It was stopped once that wait ran out, so the Page answers again and shows https:\/\/example\.test\/previous\./,
+        );
+        assert.match(error.message, /page\.goto\(url, \{ timeout \}\)/);
+        return true;
+      },
+    );
+    assert.deepEqual(stops, [
+      { sessionId: "session:target-1", timeoutMs: 1_000 },
+    ]);
   });
 });

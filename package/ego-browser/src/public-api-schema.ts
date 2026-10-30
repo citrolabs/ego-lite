@@ -45,6 +45,10 @@ const position = option(
   "CSS-pixel offset from the element's top-left corner.",
 );
 const force = option("boolean", "Bypass pointer interception checks.");
+const hover = option(
+  "boolean",
+  "Move the pointer onto the element before pressing (default true). false skips the pre-press move for a faster click; keep the default for hover-only menus.",
+);
 const label = option(
   "nonEmptyString",
   "Concise user-visible action description shown with the native mouse highlight.",
@@ -464,7 +468,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: "Page.click",
     signature:
-      "await page.click(selector, { button?, clickCount?, delay?, position?, force?, timeout?, label? })",
+      "await page.click(selector, { button?, clickCount?, delay?, position?, force?, hover?, timeout?, label? })",
     summary: "Click an element with native CDP input.",
     options: {
       button,
@@ -472,6 +476,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
       delay,
       position,
       force,
+      hover,
       timeout: actionTimeout,
       label,
     },
@@ -479,9 +484,17 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: "Page.dblclick",
     signature:
-      "await page.dblclick(selector, { button?, delay?, position?, force?, timeout?, label? })",
+      "await page.dblclick(selector, { button?, delay?, position?, force?, hover?, timeout?, label? })",
     summary: "Double-click an element with native CDP input.",
-    options: { button, delay, position, force, timeout: actionTimeout, label },
+    options: {
+      button,
+      delay,
+      position,
+      force,
+      hover,
+      timeout: actionTimeout,
+      label,
+    },
   },
   {
     name: "Page.hover",

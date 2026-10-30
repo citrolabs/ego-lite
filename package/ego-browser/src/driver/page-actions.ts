@@ -37,6 +37,13 @@ export type PageClickOptions = {
   delay?: number;
   position?: { x: number; y: number };
   force?: boolean;
+  /**
+   * Move the pointer onto the element before pressing (default). `false`
+   * skips the pre-press move and its frame-aligned round trip, then updates
+   * the cursor after the click; hover-only menus and :hover-gated controls
+   * need the default.
+   */
+  hover?: boolean;
   timeout?: number;
   label?: string;
 };
@@ -224,6 +231,26 @@ type MouseMoveState = PageMouseMoveOptions & {
 };
 
 const INPUT_EVENT_DELAY_MS = 25;
+// Page-side check used before computing a click point: true when the page may
+// still be moving. The scroll listener is installed on first use, so the very
+// first check on a document reports "moving" and takes the two-frame settle.
+const MOTION_PROBE_EXPRESSION = `(() => {
+      const key = "__egoBrowserMotion";
+      let motion = window[key];
+      if (!motion) {
+        motion = { lastScrollAt: performance.now() };
+        Object.defineProperty(window, key, { value: motion, configurable: true });
+        addEventListener("scroll", () => { motion.lastScrollAt = performance.now(); }, { capture: true, passive: true });
+        return true;
+      }
+      if (performance.now() - motion.lastScrollAt < 150) return true;
+      if (typeof document.getAnimations === "function") {
+        for (const animation of document.getAnimations()) {
+          if (animation.playState === "running") return true;
+        }
+      }
+      return false;
+    })()`;
 const FILL_VERIFICATION_ATTEMPTS = 5;
 const FILL_VERIFICATION_INTERVAL_MS = 50;
 const AUTO_SCROLL_ATTEMPTS = 6;
@@ -247,6 +274,7 @@ export async function clickInPage(
   assertPageSelector(selector);
   const button = options.button ?? "left";
   const clickCount = options.clickCount ?? 1;
+  const hover = options.hover !== false;
   const target = await resolveElementObjectId(
     cdpAdapter(services),
     sessionId,
@@ -258,6 +286,7 @@ export async function clickInPage(
       actionability: options.force ? "enabled" : "pointer-enabled",
     },
   );
+  let postClickMove: Promise<void> | undefined;
   try {
     // One page round trip computes the action point and verifies that the
     // element is visible, enabled, and (unless forced) the hit target there.
@@ -287,20 +316,22 @@ export async function clickInPage(
     );
     const buttons = pressedButtons(button);
     showAgentActionLabel(services, options.label ?? "Clicking element");
-    await dispatchMouseEvent(
-      services,
-      target.sessionId,
-      {
-        type: "mouseMoved",
-        x: point.x,
-        y: point.y,
-        button: "none",
-        buttons: 0,
-        modifiers,
-      },
-      cursorPoint,
-    );
-    if (target.frameId && target.sessionId === sessionId) {
+    if (hover) {
+      await dispatchMouseEvent(
+        services,
+        target.sessionId,
+        {
+          type: "mouseMoved",
+          x: point.x,
+          y: point.y,
+          button: "none",
+          buttons: 0,
+          modifiers,
+        },
+        cursorPoint,
+      );
+    }
+    if (hover && target.frameId && target.sessionId === sessionId) {
       // Moving into a same-process iframe can adjust the outer document's
       // scroll position. Translate the frame-local point again before the
       // press so native input uses the post-hover viewport coordinates.
@@ -367,8 +398,30 @@ export async function clickInPage(
         await services.sleep(options.delay);
       }
     }
+    if (!hover) {
+      // The press carried the coordinates; bring the pointer (and the visible
+      // agent cursor) there afterwards. The move is awaited before the action
+      // returns (overlapping the object release below) so the next action or
+      // the program-end cleanup cannot reorder pointer events around it.
+      postClickMove = dispatchMouseEvent(
+        services,
+        target.sessionId,
+        {
+          type: "mouseMoved",
+          x: point.x,
+          y: point.y,
+          button: "none",
+          buttons: 0,
+          modifiers,
+        },
+        cursorPoint,
+      ).catch(() => {});
+    }
   } finally {
-    await releaseObject(services, target.sessionId, target.objectId);
+    await Promise.all([
+      postClickMove,
+      releaseObject(services, target.sessionId, target.objectId),
+    ]);
   }
 }
 
@@ -1364,10 +1417,7 @@ async function resolveElementPoint(
   const pointExpression = position
     ? "({x:rect.x+position.x,y:rect.y+position.y})"
     : "actionPointForElement(this)";
-  const settleExpression =
-    stability === "none"
-      ? ""
-      : `await new Promise((resolve) => {
+  const twoFrameSettle = `await new Promise((resolve) => {
       let settled = false;
       const finish = () => {
         if (settled) return;
@@ -1377,7 +1427,17 @@ async function resolveElementPoint(
       };
       const timer = setTimeout(finish, 100);
       requestAnimationFrame(() => requestAnimationFrame(finish));
-    });
+    });`;
+  // "recompute" only needs a safe point: wait the two frames when something
+  // may still be moving (a running animation or transition, a scroll in the
+  // last 150 ms, or no scroll history yet), otherwise read the rectangle now.
+  const settleExpression =
+    stability === "none"
+      ? ""
+      : stability === "recompute"
+        ? `if (${MOTION_PROBE_EXPRESSION}) { ${twoFrameSettle} }
+    rect = this.getBoundingClientRect();`
+        : `${twoFrameSettle}
     rect = this.getBoundingClientRect();`;
   const strictStabilityExpression =
     stability === "strict"

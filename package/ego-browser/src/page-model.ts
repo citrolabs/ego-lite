@@ -8,6 +8,8 @@ import {
   ensureNetworkTracking,
   ensureSession,
   ensureFrameSessions,
+  documentEpoch,
+  foregroundEpoch,
   responseTimeoutMs,
   invalidateSession,
   isCdpRequestTimeoutError,
@@ -183,7 +185,7 @@ function isNoMatchResolutionError(error: unknown): error is Error {
 type PopupReceiptEntry = { label: string; targetId: string };
 
 type PopupWatch = {
-  collect(sessionId: string): Promise<PopupReceiptEntry[]>;
+  collect(sessionId: string, synced?: boolean): Promise<PopupReceiptEntry[]>;
   dispose(): void;
 };
 
@@ -284,6 +286,25 @@ const FILE_INPUT_PROBE_INSTALL = `(() => {
   });
   return true;
 })()`;
+// Read-and-reset the probe without removing it, so one install per document
+// serves every action of a program.
+const FILE_INPUT_PROBE_PEEK = `(() => {
+  const key = "__egoBrowserFileInputProbe";
+  const probe = window[key];
+  if (!probe) return null;
+  const seen = probe.seen === true;
+  probe.seen = false;
+  if (seen) return true;
+  return document.querySelector("iframe, frame") ? null : false;
+})()`;
+
+// Remove the probe and its prototype wrappers (program end).
+const FILE_INPUT_PROBE_RESTORE = `(() => { /* __egoBrowserFileInputProbeRestore */
+  const probe = window["__egoBrowserFileInputProbe"];
+  if (probe) probe.restore();
+  return true;
+})()`;
+
 const FILE_INPUT_PROBE_READ = `(() => {
   const key = "__egoBrowserFileInputProbe";
   const probe = window[key];
@@ -517,7 +538,7 @@ type PageModelServices = {
   pendingDialog(sessionId: string): Record<string, unknown> | null;
   prepareFileChooser(
     sessionId: string,
-    options: { timeoutMs: number; cancel: boolean },
+    options: { timeoutMs: number; cancel: boolean; keepAlive?: boolean },
   ): FileChooserInterception;
   drainEvents(sessionId: string): any[];
   ensureNetworkTracking(
@@ -532,6 +553,10 @@ type PageModelServices = {
     pendingRequests?: string[];
   };
   ensureSession(targetId: string, timeoutMs?: number): Promise<string>;
+  /** Main-document navigation count of the session's Page; -1 when unknown. */
+  documentEpoch?(sessionId: string): number;
+  /** Bumped whenever a page target is created (a new tab takes the foreground). */
+  foregroundEpoch?(): number;
   ensureFrameSessions(
     targetId: string,
     timeoutMs?: number,
@@ -623,6 +648,78 @@ const DEFAULT_PAGE_ACTION_TIMEOUT_MS = 3_000;
 // until the action timeout; a short interval lets an element that becomes
 // actionable a few frames later be clicked without waiting most of a second.
 const PAGE_ACTION_RESOLUTION_RETRY_MS = 50;
+
+/**
+ * Per-program state. A "program" is one agent script: a direct
+ * `ego-browser nodejs` run, or one `ego-run` call inside a persistent session.
+ * Work that only has to happen once per program (activating a Page, arming
+ * the file chooser safety interception, installing the file-input probe) is
+ * recorded here instead of being repeated for every action.
+ */
+type ProgramScope = {
+  activatedTargetId: string | null;
+  /** The foreground epoch at the last activation; a new tab since then re-activates. */
+  activatedEpoch: number;
+  /** Safety interceptions kept armed until the program ends, by session. */
+  fileChooserGuards: Map<string, FileChooserInterception>;
+  /** Sessions whose document carries the file-input probe, with its remover. */
+  probeRestorers: Map<string, () => Promise<void>>;
+};
+
+let programScope: ProgramScope = newProgramScope();
+
+/**
+ * Document epoch at which the file-input probe was installed, by session. One
+ * install serves every action of a program; the probe is removed again when
+ * the program ends (it wraps HTMLInputElement.prototype methods, which pages
+ * must not observe between programs), and reinstalled after a navigation (a
+ * new epoch) or when a read finds it missing.
+ */
+const fileInputProbes = new Map<string, number>();
+
+function newProgramScope(): ProgramScope {
+  return {
+    activatedTargetId: null,
+    activatedEpoch: -1,
+    fileChooserGuards: new Map(),
+    probeRestorers: new Map(),
+  };
+}
+
+/**
+ * Forget which Page is in the foreground. Called whenever the SDK itself
+ * creates or adopts a tab (task.newPage, a popup), so the next action on the
+ * previously active Page activates it again even when Target.targetCreated
+ * events are unavailable and foregroundEpoch() cannot advance.
+ */
+function invalidateActivation(): void {
+  programScope.activatedTargetId = null;
+  programScope.activatedEpoch = -1;
+}
+
+/** Start a program: nothing from the previous one is trusted. */
+export function beginProgram(): void {
+  programScope = newProgramScope();
+}
+
+/**
+ * End a program: release the file chooser interceptions it armed so the user
+ * can use file inputs in the Page again, and remove the file-input probes so
+ * pages see their own prototypes between programs. Idempotent, best-effort.
+ */
+export async function endProgram(): Promise<void> {
+  const guards = [...programScope.fileChooserGuards.values()];
+  const restorers = [...programScope.probeRestorers.entries()];
+  programScope = newProgramScope();
+  for (const [sessionId] of restorers) fileInputProbes.delete(sessionId);
+  await Promise.all([
+    ...guards.map((guard) => guard.dispose().catch(() => {})),
+    ...restorers.map(([, restore]) => restore().catch(() => {})),
+  ]);
+}
+
+/** How long a program's safety interception stays armed without an action. */
+const PROGRAM_FILE_CHOOSER_GUARD_MS = 30 * 60_000;
 // A missing action target stops being retried once the page has shown no DOM
 // mutation and no network activity for this long; a page that is still
 // loading or rendering keeps the full action timeout.
@@ -970,6 +1067,8 @@ const baseDefaultServices: Omit<PageModelServices, "ledger" | "pageBudget"> = {
   networkActivity,
   ensureSession,
   ensureFrameSessions,
+  documentEpoch,
+  foregroundEpoch,
   invalidateSession,
   setPreferredTarget,
   supportsBackgroundPageDiscovery: isBrowserRuntime,
@@ -1514,6 +1613,7 @@ class TaskSpace {
         throw pageBudgetError(this, this.#services.pageBudget, ledger, tabs);
       }
       const targetId = await this.#services.createTab("about:blank");
+      invalidateActivation(); // the new tab took the foreground
       this.#services.setPreferredTarget(targetId);
       const existingManaged = Object.entries(ledger.pages).find(
         ([, page]) => page.targetId === targetId,
@@ -2751,6 +2851,8 @@ class Page {
         const page = await this.#resolve();
         return this.#services.gate.withPage(page, async ({ sessionId }) => {
           await this.#activate(page.targetId);
+          // An explicit waiter takes over the Page's single interception slot.
+          await this.#dropProgramFileChooserGuard(sessionId);
           const interception = this.#services.prepareFileChooser(sessionId, {
             timeoutMs,
             cancel: false,
@@ -2794,6 +2896,7 @@ class Page {
         // unmanaged tab keeps reconcile from adopting it as a managed Page and
         // lets finish() close it instead of protecting it as a user tab.
         const anchorTargetId = await this.#services.createTab("about:blank");
+        invalidateActivation();
         try {
           await this.#services.ledger.keepUnmanaged(
             this.spaceId,
@@ -3195,18 +3298,16 @@ class Page {
       async ({ sessionId }) => {
         await this.#activate(page.targetId);
         await armedDownload?.interception.ready(sessionId);
+        // The safety interception and the file-input probe are armed once per
+        // program (and per document) rather than around every action.
         const fileChooserGuard =
           guardFileChooser && !explicitFileChooser
-            ? this.#services.prepareFileChooser(sessionId, {
-                timeoutMs: 1_000,
-                cancel: true,
-              })
+            ? await this.#programFileChooserGuard(sessionId)
             : undefined;
         const popupWatch = await this.#watchPopups(inputAction);
         try {
-          await fileChooserGuard?.ready;
           const fileInputProbe = fileChooserGuard
-            ? await this.#installFileInputProbe(sessionId)
+            ? await this.#ensureFileInputProbe(sessionId)
             : false;
           let actionError: unknown;
           let value: T | undefined;
@@ -3228,30 +3329,39 @@ class Page {
           if (!inputAction) {
             await this.#services.sleep(NAVIGATION_FRAME_SETTLE_MS);
           }
+          // One renderer round trip after the action both reads the probe and
+          // orders any Target.targetCreated event of a popup ahead of it.
+          let clickedFileInput: boolean | null = null;
+          let synced = false;
+          if (fileChooserGuard && !fileChooserGuard.peek() && fileInputProbe) {
+            clickedFileInput = await this.#peekFileInputProbe(sessionId);
+            synced = true;
+          }
           let popupError: unknown;
           let popups: PopupReceiptEntry[] = [];
           try {
-            popups = await popupWatch.collect(sessionId);
+            popups = await popupWatch.collect(sessionId, synced);
           } catch (error) {
             popupError = error;
           }
 
-          if (fileChooserGuard && !fileChooserGuard.peek()) {
-            const clickedFileInput = fileInputProbe
-              ? await this.#readFileInputProbe(sessionId)
-              : null;
-            if (clickedFileInput !== false) {
-              await Promise.race([
-                fileChooserGuard.event.catch(() => {}),
-                this.#services.sleep(
-                  clickedFileInput
-                    ? FILE_CHOOSER_OPEN_WAIT_MS
-                    : FILE_CHOOSER_SETTLE_MS,
-                ),
-              ]);
-            }
+          if (
+            fileChooserGuard &&
+            !fileChooserGuard.peek() &&
+            clickedFileInput !== false
+          ) {
+            await Promise.race([
+              fileChooserGuard.event.catch(() => {}),
+              this.#services.sleep(
+                clickedFileInput
+                  ? FILE_CHOOSER_OPEN_WAIT_MS
+                  : FILE_CHOOSER_SETTLE_MS,
+              ),
+            ]);
           }
           if (fileChooserGuard?.peek()) {
+            // The guard cancelled the chooser; re-arm on the next action.
+            await this.#dropProgramFileChooserGuard(sessionId);
             throw unhandledFileChooserError();
           }
 
@@ -3263,7 +3373,6 @@ class Page {
           };
         } finally {
           popupWatch.dispose();
-          await fileChooserGuard?.dispose();
         }
       },
       { sessionTimeoutMs },
@@ -3294,8 +3403,8 @@ class Page {
     });
     return {
       dispose: stop,
-      collect: async (sessionId) => {
-        if (created.size === 0 && inputAction) {
+      collect: async (sessionId, synced = false) => {
+        if (created.size === 0 && inputAction && !synced) {
           // A popup opened by the input is created by the browser before this
           // page answers any later command, so one round trip delivers its
           // Target.targetCreated event ahead of the response.
@@ -3376,6 +3485,8 @@ class Page {
   async #adoptCreatedPopups(
     created: Map<string, string>,
   ): Promise<PopupReceiptEntry[]> {
+    // A popup took the foreground, whether discovery or polling found it.
+    invalidateActivation();
     // Target discovery is browser-wide; the tab list scopes it to this space.
     let tabs = await this.#services.listTabs();
     for (let attempt = 0; attempt < POPUP_TAB_LIST_RETRIES; attempt += 1) {
@@ -3581,7 +3692,30 @@ class Page {
       );
       return (response.result || response).frameTree;
     };
-    const tree = await readTree(sessionId);
+    // Frame discovery may have been answered from its cache, which makes this
+    // read the first command the renderer has to answer in this call. A
+    // timeout here means the Page did not answer, exactly as a timeout inside
+    // discovery does, and is reported the same way (stopping the navigation).
+    const startedAt = this.#services.now();
+    let tree;
+    try {
+      tree = await readTree(sessionId);
+    } catch (error) {
+      if (
+        !isCdpRequestTimeoutError(error) ||
+        error.method !== "Page.getFrameTree"
+      )
+        throw error;
+      throw await this.#describeUnresponsivePage(
+        new PageUnresponsiveError(
+          "Page.getFrameTree",
+          this.#services.now() - startedAt,
+          page.targetId,
+          sessionId,
+        ),
+        page,
+      );
+    }
     const documents = new Map<string, string>();
     const visit = (node) => {
       if (
@@ -3688,8 +3822,106 @@ class Page {
   }
 
   async #activate(targetId: string): Promise<void> {
-    await this.#services.cdp("Target.activateTarget", { targetId });
+    // Once per program, per switch between Pages, and after any new tab: the
+    // browser keeps the tab active between actions, a new program activates
+    // again so a tab the user switched away from comes back when the agent
+    // continues, and a popup or new Page created since the last activation
+    // took the foreground (a hidden tab does not answer input).
+    const epoch = this.#services.foregroundEpoch?.() ?? 0;
+    if (
+      programScope.activatedTargetId !== targetId ||
+      programScope.activatedEpoch !== epoch
+    ) {
+      await this.#services.cdp("Target.activateTarget", { targetId });
+      programScope.activatedTargetId = targetId;
+      programScope.activatedEpoch = epoch;
+    }
     this.#services.setPreferredTarget(targetId);
+  }
+
+  /**
+   * The program-wide file chooser safety interception for one Page session:
+   * armed on the first guarded action, kept until the program ends, and
+   * re-armed after it caught a chooser (which the boundary reports).
+   */
+  async #programFileChooserGuard(
+    sessionId: string,
+  ): Promise<FileChooserInterception> {
+    let guard = programScope.fileChooserGuards.get(sessionId);
+    if (guard?.active()) return guard;
+    // The runtime drops a guard on its own when its timer expires or the
+    // session is lost; a cached but inactive guard must be re-armed.
+    if (guard) programScope.fileChooserGuards.delete(sessionId);
+    guard = this.#services.prepareFileChooser(sessionId, {
+      timeoutMs: PROGRAM_FILE_CHOOSER_GUARD_MS,
+      cancel: true,
+      // The guard outlives the action; its timer must not hold the process
+      // open after the script has finished (the direct CLI ends the program
+      // from `beforeExit`).
+      keepAlive: false,
+    });
+    programScope.fileChooserGuards.set(sessionId, guard);
+    try {
+      await guard.ready;
+    } catch (error) {
+      programScope.fileChooserGuards.delete(sessionId);
+      throw error;
+    }
+    return guard;
+  }
+
+  async #dropProgramFileChooserGuard(sessionId: string): Promise<void> {
+    const guard = programScope.fileChooserGuards.get(sessionId);
+    if (!guard) return;
+    programScope.fileChooserGuards.delete(sessionId);
+    await guard.dispose().catch(() => {});
+  }
+
+  /** Install the file-input probe once per document; true when it is live. */
+  async #ensureFileInputProbe(sessionId: string): Promise<boolean> {
+    const epoch = this.#services.documentEpoch?.(sessionId) ?? -1;
+    if (epoch >= 0 && fileInputProbes.get(sessionId) === epoch) {
+      return true;
+    }
+    const installed = await this.#installFileInputProbe(sessionId);
+    if (installed && epoch >= 0) {
+      fileInputProbes.set(sessionId, epoch);
+    } else {
+      fileInputProbes.delete(sessionId);
+    }
+    if (installed) {
+      programScope.probeRestorers.set(sessionId, () =>
+        this.#restoreFileInputProbe(sessionId),
+      );
+    }
+    return installed;
+  }
+
+  async #restoreFileInputProbe(sessionId: string): Promise<void> {
+    await this.#services.cdp(
+      "Runtime.evaluate",
+      { expression: FILE_INPUT_PROBE_RESTORE, returnByValue: true },
+      sessionId,
+      POPUP_SYNC_TIMEOUT_MS,
+    );
+  }
+
+  /** Read and reset the probe (one renderer round trip); null when unknown. */
+  async #peekFileInputProbe(sessionId: string): Promise<boolean | null> {
+    try {
+      const response = await this.#services.cdp(
+        "Runtime.evaluate",
+        { expression: FILE_INPUT_PROBE_PEEK, returnByValue: true },
+        sessionId,
+        POPUP_SYNC_TIMEOUT_MS,
+      );
+      const value = runtimeValue(response, FILE_INPUT_PROBE_PEEK);
+      if (value === null) fileInputProbes.delete(sessionId);
+      return typeof value === "boolean" ? value : null;
+    } catch {
+      fileInputProbes.delete(sessionId);
+      return null;
+    }
   }
 }
 

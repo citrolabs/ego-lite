@@ -7,11 +7,13 @@ import {
   disposeBrowserRuntime,
   invalidateSession,
   setPreferredTarget,
+  traceCdp,
 } from "./browser-runtime.js";
 import { formatCliLogValue } from "./format.js";
 import {
   bufferOutput,
   createRoundConsole,
+  flushRound,
   installLifecycleFlush,
   resetSink,
 } from "./output-sink.js";
@@ -19,6 +21,7 @@ import { runMain } from "./run.js";
 import { installStaleEgoBrowserGuard } from "./skill-migration.js";
 import { emitUpdateNotice } from "./update-notice.js";
 import { installPageContextGuard } from "./page-context-guard.js";
+import { beginProgram, endProgram } from "./page-model.js";
 import { disposeDownloadArtifacts } from "./driver/downloads.js";
 
 type HelperFunction = (...args: unknown[]) => unknown;
@@ -92,6 +95,28 @@ export function installEgoSdk(
   // Install the 1.3 migration guard explicitly so embedded SDK execution and
   // the direct CLI produce the same actionable error.
   installStaleEgoBrowserGuard(target);
+  // Diagnostics for measuring the CDP cost of actions; not part of the API.
+  Object.defineProperty(target, "__egoBrowserTraceCdp", {
+    value: traceCdp,
+    writable: true,
+    configurable: true,
+    enumerable: false,
+  });
+  // Program boundaries. The SDK path runs one script per process, so the
+  // program starts here; a host that keeps the context alive (the ego-run
+  // daemon) calls these around every program it runs.
+  for (const [name, value] of [
+    ["__egoBeginProgram", beginProgram],
+    ["__egoEndProgram", endProgram],
+  ] as const) {
+    Object.defineProperty(target, name, {
+      value,
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    });
+  }
+  beginProgram();
   Object.defineProperty(target, "cliLog", {
     value: cliLogFn,
     writable: true,
@@ -114,6 +139,16 @@ export function installEgoSdk(
     // calls execute(), so reset the per-run sink and flush it on process teardown.
     resetSink();
     installLifecycleFlush(process.stdout);
+    // Best effort: the connection drop at exit releases interceptions anyway.
+    process.once("beforeExit", () => void endProgram().catch(() => {}));
+    // A persistent context (the ego-run daemon's REPL session) drains the sink
+    // after each program instead of waiting for process teardown.
+    Object.defineProperty(target, "__egoBrowserFlushRound", {
+      value: flushRound,
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    });
   }
   if (target.ego && typeof target.ego === "object") {
     void emitUpdateNotice(target.ego, (line) => {
