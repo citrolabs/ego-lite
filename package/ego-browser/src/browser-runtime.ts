@@ -5,7 +5,19 @@ import {
   isEgoUserControlError,
 } from "./ego-errors.js";
 
-const RESPONSE_TIMEOUT_MS = 15000;
+const DEFAULT_RESPONSE_TIMEOUT_MS = 15000;
+
+/**
+ * How long one renderer-bound CDP command may go unanswered before the
+ * runtime gives up on it. Read per call so a test process can shorten the
+ * wait with EGO_BROWSER_RESPONSE_TIMEOUT_MS; agents keep the default.
+ */
+export function responseTimeoutMs(): number {
+  const configured = Number(process.env.EGO_BROWSER_RESPONSE_TIMEOUT_MS);
+  return Number.isInteger(configured) && configured > 0
+    ? configured
+    : DEFAULT_RESPONSE_TIMEOUT_MS;
+}
 // Page.enable, Network.enable, and Target.setAutoAttach answer within
 // milliseconds on a responsive Page. A Page whose main-frame navigation has
 // started but not committed, or whose renderer hangs, answers none of them
@@ -507,7 +519,7 @@ function rawCdp(
   method,
   params: any = {},
   sessionId = undefined,
-  timeoutMs = RESPONSE_TIMEOUT_MS,
+  timeoutMs = responseTimeoutMs(),
 ) {
   const runtime = browserEgo();
   bindRuntimeCallbacks(runtime);
@@ -561,7 +573,7 @@ export async function browserCdp(
   method,
   params: any = {},
   sessionId = undefined,
-  timeoutMs = RESPONSE_TIMEOUT_MS,
+  timeoutMs = responseTimeoutMs(),
 ) {
   // Test mock: cdpOverride bypasses everything including session injection.
   // Include the effective timeout so tests can verify timing contracts without
@@ -639,7 +651,7 @@ function recordCommandState(method, params, sessionId, response) {
 
 export async function ensureSession(
   requestedTargetId = undefined,
-  timeoutMs = RESPONSE_TIMEOUT_MS,
+  timeoutMs = responseTimeoutMs(),
 ) {
   const cachedTargetId =
     requestedTargetId || state.preferredTargetId || defaultTargetId;
@@ -718,7 +730,7 @@ export async function ensureSession(
  */
 export async function ensureFrameSessions(
   pageTargetId: string,
-  timeoutMs = RESPONSE_TIMEOUT_MS,
+  timeoutMs = responseTimeoutMs(),
 ) {
   if (typeof pageTargetId !== "string" || pageTargetId.length === 0) {
     throw new TypeError("ensureFrameSessions requires a non-empty targetId");
@@ -985,7 +997,7 @@ export function isNetworkDomainEnabled(sessionId) {
 /** Ensure Network events are available on every selected Page/OOPIF session. */
 export async function ensureNetworkTracking(
   sessionIds: string[],
-  timeoutMs = RESPONSE_TIMEOUT_MS,
+  timeoutMs = responseTimeoutMs(),
 ): Promise<void> {
   const unique = [...new Set(sessionIds.filter(Boolean))];
   await Promise.all(
@@ -1041,7 +1053,7 @@ export function networkActivity(sessionIds: string[]): {
 /** Refresh and return the main and known OOPIF sessions for one Page. */
 export async function pageNetworkSessions(
   sessionId: string,
-  timeoutMs = RESPONSE_TIMEOUT_MS,
+  timeoutMs = responseTimeoutMs(),
 ): Promise<string[]> {
   const targetId = sessionTargets.get(sessionId);
   if (!targetId) {
@@ -1185,7 +1197,7 @@ function enableEgoAutomation(sessionId: string): void {
   void rawCdp("egoAutomated.enable", {}, sessionId).catch(() => {});
 }
 
-async function enablePageEvents(sessionId, timeoutMs = RESPONSE_TIMEOUT_MS) {
+async function enablePageEvents(sessionId, timeoutMs = responseTimeoutMs()) {
   const targetId = sessionId ? sessionTargets.get(sessionId) : undefined;
   const target = targetId ? targetStates.get(targetId) : undefined;
   if (!target || target.sessionId !== sessionId || target.pageEventsEnabled) {
@@ -1213,7 +1225,7 @@ async function enablePageEvents(sessionId, timeoutMs = RESPONSE_TIMEOUT_MS) {
 async function enableNetworkTrackingForSession(
   sessionId: string,
   required = false,
-  timeoutMs = RESPONSE_TIMEOUT_MS,
+  timeoutMs = responseTimeoutMs(),
 ): Promise<void> {
   const targetId = sessionId ? sessionTargets.get(sessionId) : undefined;
   const target = targetId ? targetStates.get(targetId) : undefined;
@@ -1258,7 +1270,7 @@ async function enableNetworkTrackingForSession(
 
 async function enableOopifAutoAttach(
   sessionId: string,
-  timeoutMs = RESPONSE_TIMEOUT_MS,
+  timeoutMs = responseTimeoutMs(),
 ): Promise<void> {
   const targetId = sessionId ? sessionTargets.get(sessionId) : undefined;
   const target = targetId ? targetStates.get(targetId) : undefined;

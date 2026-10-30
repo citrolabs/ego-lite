@@ -8,6 +8,7 @@ import {
   ensureNetworkTracking,
   ensureSession,
   ensureFrameSessions,
+  responseTimeoutMs,
   invalidateSession,
   isCdpRequestTimeoutError,
   isPageUnresponsiveError,
@@ -649,8 +650,19 @@ const SNAPSHOT_DOCUMENT_CHANGE_RETRIES = 2;
 const FILE_CHOOSER_OPEN_WAIT_MS = 1_000;
 const FILE_CHOOSER_SETTLE_MS = 50;
 const CONTROL_POLL_INTERVAL_MS = 20_000;
-const PAGE_EVALUATE_EXECUTION_TIMEOUT_MS = 14_000;
-const PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS = 15_000;
+// page.evaluate waits one runtime response timeout for the transport and
+// asks Chromium to stop the script one second earlier, so a long synchronous
+// callback is reported as stopped rather than as an unanswered command.
+const PAGE_EVALUATE_EXECUTION_MARGIN_MS = 1_000;
+function pageEvaluateTransportTimeoutMs(): number {
+  return responseTimeoutMs();
+}
+function pageEvaluateExecutionTimeoutMs(): number {
+  return Math.max(
+    PAGE_EVALUATE_EXECUTION_MARGIN_MS,
+    pageEvaluateTransportTimeoutMs() - PAGE_EVALUATE_EXECUTION_MARGIN_MS,
+  );
+}
 const PAGE_EVALUATE_HEALTH_TIMEOUT_MS = 250;
 const PAGE_EVALUATE_HEALTH_EXECUTION_TIMEOUT_MS = 200;
 const PAGE_EVALUATE_TERMINATE_TIMEOUT_MS = 1_000;
@@ -2847,14 +2859,14 @@ class Page {
           expression,
           hasArgument,
           serializedArgument,
-          PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS,
-          PAGE_EVALUATE_EXECUTION_TIMEOUT_MS,
+          pageEvaluateTransportTimeoutMs(),
+          pageEvaluateExecutionTimeoutMs(),
         );
       } catch (error) {
         if (isEvaluationExecutionDeadlineError(error)) {
           throw evaluationExecutionDeadlineError(
             "page.evaluate",
-            PAGE_EVALUATE_EXECUTION_TIMEOUT_MS,
+            pageEvaluateExecutionTimeoutMs(),
           );
         }
         if (isRuntimeEvaluateTransportTimeout(error)) {
@@ -2862,7 +2874,7 @@ class Page {
             this.#services,
             sessionId,
             "page.evaluate",
-            PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS,
+            pageEvaluateTransportTimeoutMs(),
           );
         }
         if (typeof expression === "function") {

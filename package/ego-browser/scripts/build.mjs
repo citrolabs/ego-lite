@@ -6,6 +6,7 @@ import {
   readdir,
   readFile,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { builtinModules } from "node:module";
@@ -41,6 +42,18 @@ const entrySkillEntries = [
   "learnings",
 ];
 const buildLock = join(root, ".build.lock");
+
+// The pre-commit hooks build once and then run several checks that each start
+// with `npm run build`. They set this flag so those checks reuse that output.
+if (isTruthy(process.env.EGO_BROWSER_REUSE_BUILD)) {
+  if (await exists(bundledCli)) {
+    console.log(
+      `reusing the existing build at ${bundledCli} (EGO_BROWSER_REUSE_BUILD)`,
+    );
+    process.exit(0);
+  }
+  console.log("EGO_BROWSER_REUSE_BUILD is set but no build exists; building");
+}
 
 let lock;
 try {
@@ -143,4 +156,17 @@ async function collectTsFiles(absDir, relativeDir) {
     }
   }
   return files;
+}
+
+function isTruthy(value) {
+  return value === "1" || value === "true";
+}
+
+async function exists(path) {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
 }

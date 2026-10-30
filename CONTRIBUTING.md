@@ -145,7 +145,7 @@ For additional CLI setup and troubleshooting, see
 | `npm test`                     | Builds the SDK, checks any local Skill translation, typechecks, then runs `src/**/*.test.mjs` with Node's test runner.  |
 | `npm run style:check`          | Checks formatting of runtime source, build scripts, and package documentation.                                          |
 | `npm run validate:site-skills` | Builds and validates the site-learning packs. Run this when changing their manifests, tools, notes, or validation code. |
-| `npm run e2e`                  | Builds the current checkout and runs the complete real-browser suite with its SDK.                                      |
+| `npm run e2e`                  | Builds the current checkout and runs the complete real-browser suite with its SDK. See the skip rule below.             |
 
 Tests live next to the runtime source and use `node:assert/strict`, injected
 service overrides, or fake native bindings. Add a regression that demonstrates a
@@ -158,6 +158,23 @@ It does not depend on the debug override above. Do not manually switch its task
 space, take control, or change the SDK while it is running. On macOS it selects
 the ego lite app's CLI; use `EGO_BROWSER_REAL_E2E_CLI` to select another installed
 ego lite CLI explicitly.
+
+After a full pass the suite records a fingerprint of its inputs (`dist/out`,
+the suite under `scripts/real-browser-e2e/`, and the selected CLI's size and
+mtime) in `node_modules/.cache/ego-browser-real-e2e/`. A later `npm run e2e`
+with the same fingerprint reports that it is skipping and exits successfully.
+Set `EGO_BROWSER_REAL_E2E_FORCE=1` to run the suite anyway; a run limited with
+`EGO_BROWSER_REAL_E2E_ONLY` neither skips nor records a pass.
+
+Three of its cases wait out the runtime's response timeout on purpose (a
+blocked `page.evaluate`, a navigation that never commits). They shorten it for
+their own process with `EGO_BROWSER_RESPONSE_TIMEOUT_MS`, which the SDK reads
+per call; it is a test aid, and agents keep the 15 s default.
+
+Every build-first command starts with `npm run build`. Set
+`EGO_BROWSER_REUSE_BUILD=1` to keep the existing `dist/` instead, which is how
+the pre-commit hooks build once and run the checks in parallel. Leave it unset
+when running commands by hand so they test the current source.
 
 ## Find the code to change
 
@@ -195,18 +212,27 @@ input actions`. In the PR, explain the problem, the resulting behavior, and how
 you verified it. Call out public API or Skill changes, and add an appropriate
 release-note label such as `fix`, `feat`, `docs`, or `ci`.
 
-The pre-commit hooks select checks based on the staged files. Their freshness
-check currently compares against `origin/dev`. For a beta-targeted PR, verify
-that the latest `origin/2.0.0-beta-dev` is an ancestor of your branch; if the dev
-check is inapplicable, exclude only `branch-up-to-date` with
+The pre-commit hooks select checks based on the staged files: after the
+branch-freshness check and one SDK build, the style check, `npm test`,
+site-skill validation and plugin tests run in parallel against that build. The
+freshness check currently compares against `origin/dev`. For a beta-targeted
+PR, verify that the latest `origin/2.0.0-beta-dev` is an ancestor of your
+branch; if the dev check is inapplicable, exclude only `branch-up-to-date` with
 `LEFTHOOK_EXCLUDE=branch-up-to-date` for that commit. Keep the other checks enabled.
+
+The real-browser E2E suite is a pre-push hook rather than a pre-commit one: it
+runs when the commits being pushed touch `package/ego-browser/` or
+`skills/ego-browser/`, and it skips itself when nothing it tests changed since
+the last full pass (see "Verify a change"). Run `npm run e2e` yourself before
+pushing browser-behavior changes if you want the result earlier.
 
 ## CI and releases
 
 [CI](.github/workflows/ci.yml) runs on pull requests, pushes to `dev` and `main`,
 and version tags. It installs dependencies, checks formatting and dependency
-vulnerabilities, runs `npm test`, and validates site learnings. The real-browser
-E2E suite is a local gate and is not run by this GitHub-hosted workflow.
+vulnerabilities (`npm audit` runs only here, not in the Git hooks), runs
+`npm test`, and validates site learnings. The real-browser E2E suite is a local
+pre-push gate and is not run by this GitHub-hosted workflow.
 
 The current release behavior is:
 
