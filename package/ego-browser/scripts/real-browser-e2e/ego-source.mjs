@@ -32,16 +32,43 @@ export function egoSource(body, context) {
     process.env.EGO_BROWSER_STATE_DIR = join(tempDir, "runtime-state");
     process.env.EGO_BROWSER_PAGE_BUDGET = "3";
 
-    // Ledger files are scoped by browser instance; this isolated state
-    // directory belongs to the one Ego Lite instance under test.
-    async function pageLedgerPath(spaceId) {
+    // Ledger files are scoped by browser instance (this isolated state
+    // directory belongs to the one Ego Lite instance under test) and
+    // versioned: every SDK write creates space-<id>@<instance>.<n>.json and
+    // removes the versions before it. The current ledger is the highest
+    // version that parses, and a path listed a moment ago may already be
+    // gone, so read through readPageLedger instead of holding on to a path.
+    async function pageLedgerVersions(spaceId) {
       const stateDir = process.env.EGO_BROWSER_STATE_DIR;
       const prefix = "space-" + spaceId + "@";
-      const names = (await readdir(stateDir)).filter(
-        (name) => name.startsWith(prefix) && name.endsWith(".json")
-      );
-      assertEqual(names.length, 1, "one page ledger exists for space " + spaceId);
-      return join(stateDir, names[0]);
+      const names = await readdir(stateDir).catch(() => []);
+      return names
+        .filter((name) => name.startsWith(prefix) && name.endsWith(".json"))
+        .map((name) => ({
+          name,
+          seq: Number(/\\.(\\d+)\\.json$/.exec(name)?.[1] ?? 0),
+        }))
+        .sort((a, b) => b.seq - a.seq)
+        .map((entry) => join(stateDir, entry.name));
+    }
+
+    async function pageLedgerPath(spaceId) {
+      const [latest] = await pageLedgerVersions(spaceId);
+      assert(Boolean(latest), "a page ledger exists for space " + spaceId);
+      return latest;
+    }
+
+    async function readPageLedger(spaceId) {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        for (const path of await pageLedgerVersions(spaceId)) {
+          try {
+            return JSON.parse(await readFile(path, "utf8"));
+          } catch {
+            // Superseded between listing and reading, or still being written.
+          }
+        }
+      }
+      throw new Error("no readable page ledger for space " + spaceId);
     }
 
     let __assertionCount = 0;
@@ -283,16 +310,10 @@ export function egoSource(body, context) {
     };
 
     async function ledgerTargetIds(spaceId) {
-      const stateDir = process.env.EGO_BROWSER_STATE_DIR;
-      const prefix = "space-" + spaceId + "@";
-      const names = await readdir(stateDir).catch(() => []);
-      const targetIds = new Set();
-      for (const name of names) {
-        if (!name.startsWith(prefix) || !name.endsWith(".json")) continue;
-        const ledger = JSON.parse(await readFile(join(stateDir, name), "utf8"));
-        for (const page of Object.values(ledger.pages || {})) targetIds.add(page.targetId);
-      }
-      return targetIds;
+      const ledger = await readPageLedger(spaceId).catch(() => ({}));
+      return new Set(
+        Object.values(ledger.pages || {}).map((page) => page.targetId)
+      );
     }
 
     async function closePagesOpenedByCase() {

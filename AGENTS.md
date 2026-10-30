@@ -79,8 +79,12 @@ Run from `package/ego-browser/`:
 - Behavior-focused tests inject overrides (`__testing.setOverrides`) or a
   `FakeEgo` double (see `src/helpers.test.mjs` and `src/page-model.test.mjs`).
 - Cover session handling, locator resolution, helper behavior, and site-skill validation when changing runtime code; run `npm run validate:site-skills` for learning changes.
-- `npm run e2e` is the self-contained real-browser gate. It builds the current
-  checkout, passes the resulting absolute bundle through `--sdk-path`, starts a
-  local fixture server, uses a unique temporary task space, and cleans it up.
+- `npm run e2e` is the self-contained real-browser gate, run by the pre-push
+  hook (pre-commit runs only the fast checks against one shared build). It
+  builds the current checkout, passes the resulting absolute bundle through
+  `--sdk-path`, starts a local fixture server, uses a unique temporary task
+  space, and cleans it up. A full pass records a fingerprint of `dist/out`, the
+  suite and the CLI under `node_modules/.cache/`; an unchanged rerun skips, and
+  `EGO_BROWSER_REAL_E2E_FORCE=1` overrides that.
   Do not link another runtime, reuse a prior E2E space, or manually take control
   while the suite is running.

@@ -208,7 +208,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     name: "Page.goto",
     signature: "await page.goto(url, { referer?, timeout?, waitUntil? })",
     summary:
-      "Navigate this Page in place. Timeout errors report whether the new document committed, plus its URL and readyState when available.",
+      "Navigate this Page in place. Timeout errors report whether the new document committed, plus its URL and readyState when available. A navigation that has not committed by the timeout is stopped so the Page stays usable on its previous document.",
     options: {
       referer: option(
         "nonEmptyString",
@@ -225,7 +225,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: "Page.reload",
     signature: "await page.reload({ timeout?, waitUntil? })",
-    summary: "Reload this Page and wait for the selected navigation state.",
+    summary:
+      "Reload this Page and wait for the selected navigation state. A reload that has not committed by the timeout is stopped so the Page stays usable on its previous document.",
     options: {
       timeout,
       waitUntil: option(

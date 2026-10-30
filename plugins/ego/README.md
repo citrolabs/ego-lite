@@ -42,7 +42,9 @@ root. The GitHub Copilot ZIP carries its marketplace file the same way, because
 Copilot CLI deprecates installing a plugin directly from a local path.
 
 The three npm packages have separate names and exports so their adapters cannot
-be confused by package caches. All ten packages contain real Skill files;
+be confused by package caches. They are versioned apart from the plugin:
+`npmVersion` in `package.json` sets their version, while the archive names and
+the Pi gallery image follow the plugin version. All ten packages contain real Skill files;
 none depends on the source checkout.
 
 Every host that reads a plugin logo uses the Skill's
@@ -182,11 +184,6 @@ and confirm that `copilot skill list` shows `ego-browser` under **Plugin
 skills**. Copilot CLI deprecates `copilot plugin install` from a local path, so
 use the marketplace route for a persistent install.
 
-Personal and project Skills take precedence over plugin Skills with the same
-name. When a personal `ego-browser` Skill is installed, `copilot skill list`
-shows it under **Personal skills** and hides the plugin copy. Remove that
-duplicate before use.
-
 See the [GitHub Copilot plugin guide](https://docs.github.com/en/copilot/concepts/agents/about-plugins).
 
 ### Grok Build
@@ -273,8 +270,7 @@ The package is named `@ego-lite/opencode-plugin`. Its `.` and `./server` exports
 load `index.js`, whose default export serves both versions. OpenCode 1 calls
 `server()`, which adds the packaged `skills/` directory to its Skill paths and
 offers ego-browser as the `/ego-browser` command. OpenCode 2 calls `setup()`,
-which adds the packaged ego-browser Skill unless the user already has one, such
-as the copy ego lite installs in `~/.agents/skills`.
+which adds the packaged ego-browser Skill.
 
 See the plugin guides for [OpenCode 1](https://opencode.ai/docs/plugins/) and
 [OpenCode 2](https://opencode.ai/v2/docs/build/plugins/).
@@ -304,11 +300,6 @@ The package is named `@ego-lite/dsh-plugin`. Its bundle patch loads
 `/ego-browser`. Remove it with
 `dsh plugin --profile web remove @ego-lite/dsh-plugin`.
 
-An existing personal `ego-browser` Skill takes precedence over this bundled
-provider. Check the base directory returned by the Skill tool: it must point
-inside the package installed in the profile when validating the plugin. Resolve the duplicate
-personal Skill if you want named invocation to use the plugin copy.
-
 See the [DeepSeek Harness local package guide](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/user/develop/basic/publish.md).
 
 ### Pi
@@ -326,11 +317,7 @@ loading any Skill. Use `/skill:ego-browser`. Remove it with
 
 The package declares the `pi-package` keyword, which makes a published package
 eligible for the [Pi package gallery](https://pi.dev/packages), and `pi.image`
-for its gallery preview. The ego-browser Skill that ego lite installs in
-`~/.agents/skills` takes precedence over this package copy, even when it is an
-older version: Pi reports the package copy as skipped under **Skill
-conflicts**. Both are the thin entry Skill, and the ego lite copy matches the
-installed app.
+for its gallery preview.
 
 See the [Pi packages guide](https://pi.dev/docs/latest/packages).
 

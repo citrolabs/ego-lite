@@ -22,13 +22,12 @@ Pass the script to `ego-browser nodejs`.
 
 Pass the script to `ego-run --session <id>`. Use one session id per user goal
 (lowercase letters, digits, dashes, up to 64 characters; the task space name is
-a good id) for every script of that goal. The user starts the daemon once with
-`ego-run daemon start --detach`; on `EGO_RUN_DAEMON_UNAVAILABLE` ask them to,
-do not start it yourself.
-Scripts of one session share one Node.js context and run one at a time:
-top-level `const`/`let` declarations, functions, and Page handles from earlier
-scripts stay defined, so use `task`, `page`, or a popup handle directly instead
-of copying them to `globalThis`.
+a good id). The user starts the daemon once with `ego-run daemon start
+--detach`; on `EGO_RUN_DAEMON_UNAVAILABLE` ask them to, do not start it
+yourself. Scripts of one session share one Node.js context and run one at a
+time: top-level `const`/`let` declarations, functions, and Page handles from
+earlier scripts stay defined, so use `task`, `page`, or a popup handle directly
+instead of copying them to `globalThis`.
 
 <!-- /mode -->
 
@@ -84,20 +83,18 @@ await page.snapshot()
 EOF
 ```
 
-The script's last expression (or `return` value) is printed after its
-`console.log` output: end every script with the observation the next step needs
-instead of sending a separate script to look. A later script continues with the
-same `page`:
+The last expression (or `return` value) is printed after the `console.log`
+output: end every script with the observation the next step needs. A later
+script continues with the same `page`:
 
 ```bash
 ego-run --session inspect-example -e 'await page.click("@3"); await page.snapshot()'
 ```
 
-A popup caught in one script (`const preview = await popupPromise`) is used as
+A popup caught in one script (`const preview = await popupPromise`) is
 `preview` in later scripts, without `task.page()`.
 
-When a sandbox blocks heredoc input, use `-e` (single quotes outside, double
-quotes inside) or `--file` with an absolute path.
+When a sandbox blocks heredoc input, use `-e` or `--file <absolute path>`.
 
 <!-- /mode -->
 
@@ -130,8 +127,8 @@ file: never put it in a `-e` argument.
 ego-run --session <id> --file C:/Users/<name>/ego/task.mjs
 ```
 
-`--file` reads the file as UTF-8, so the whole task, including any non-ASCII
-text, belongs in the `.mjs` file; never put it in a `-e` argument.
+`--file` reads UTF-8, so the whole task, including non-ASCII text, belongs in
+the `.mjs` file, never in a `-e` argument.
 
 <!-- /mode -->
 
@@ -174,9 +171,8 @@ editing the previous one, which would replay old steps.
 
 <!-- mode: ego-run -->
 
-The session keeps earlier rounds' variables. Write a new file with only the
-next steps for every round (`round-01.mjs`, `round-02.mjs`, ...) instead of
-editing the previous one.
+The session keeps earlier rounds' variables: each round's new file
+(`round-01.mjs`, `round-02.mjs`, ...) holds only the next steps.
 
 <!-- /mode -->
 
@@ -252,10 +248,10 @@ stop and ask the user.
 <!-- mode: ego-run -->
 
 - The session context is rebuilt when a script exceeds its deadline
-  (`--timeout-ms`, default 60000) or blocks the event loop; `ego-run` then
-  prints `[ego-run] session ... was rebuilt`, and the next script gets its
-  handles again with `taskSpace(name)` and `task.page(label)`. Spaces, tabs,
-  and labels persist.
+  (`--timeout-ms`, default 60000) or blocks the event loop; `ego-run` prints
+  `[ego-run] session ... was rebuilt`, and the next script gets its handles
+  again with `taskSpace(name)` and `task.page(label)`. Spaces, tabs, and labels
+  persist.
 - Keep a whole loop (paging, polling) in one script; raise its deadline with
   `--timeout-ms <ms>` (max 180000).
 
@@ -340,8 +336,12 @@ ego-browser provides the following Page API:
 or Node.js modules from the surrounding script. Define browser-side helpers
 inside the callback or pass one JSON-serializable value as its second argument.
 
-A Page whose navigation has not committed fails with `EGO_PAGE_UNRESPONSIVE`;
-the error says how to recover (`page.cdp("Page.stopLoading")`, a new Page).
+`goto()` and `reload()` stop a navigation that has not committed by their
+timeout, so the Page stays usable on its previous document; retry with a longer
+timeout. Any other call on a Page whose navigation is pending (after a link
+click, for example) waits one bounded period, then fails with
+`EGO_PAGE_UNRESPONSIVE` and stops that navigation; the error says which
+document the Page shows now and how to load the pending one.
 
 Work efficiently:
 
@@ -684,8 +684,7 @@ await task.finish({ keep: ["p2"] }); // Exception: keep only the result Page for
 
 <!-- mode: ego-run -->
 
-The final round is one line:
-`ego-run --session <id> -e 'await task.finish({ keep: [] }); "done"'`.
+Final round: `ego-run --session <id> -e 'await task.finish({ keep: [] }); "done"'`.
 
 <!-- /mode -->
 

@@ -10,6 +10,7 @@ import {
   ensureFrameSessions,
   documentEpoch,
   foregroundEpoch,
+  responseTimeoutMs,
   invalidateSession,
   isCdpRequestTimeoutError,
   isPageUnresponsiveError,
@@ -721,6 +722,9 @@ const MISSING_TARGET_PROBE_TIMEOUT_MS = 1_000;
 // event ahead of the response, so no settle delay is needed.
 const POPUP_SYNC_TIMEOUT_MS = 1_000;
 const PAGE_UNRESPONSIVE_URL_TIMEOUT_MS = 1_000;
+// Page.stopLoading is answered by the browser process; the frame-tree read
+// afterwards is what shows whether the renderer answers again.
+const PAGE_UNRESPONSIVE_STOP_TIMEOUT_MS = 1_000;
 // The native tab list can lag the CDP target event by a few milliseconds.
 const POPUP_TAB_LIST_RETRIES = 10;
 const POPUP_TAB_LIST_RETRY_MS = 20;
@@ -743,8 +747,19 @@ const SNAPSHOT_DOCUMENT_CHANGE_RETRIES = 2;
 const FILE_CHOOSER_OPEN_WAIT_MS = 1_000;
 const FILE_CHOOSER_SETTLE_MS = 50;
 const CONTROL_POLL_INTERVAL_MS = 20_000;
-const PAGE_EVALUATE_EXECUTION_TIMEOUT_MS = 14_000;
-const PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS = 15_000;
+// page.evaluate waits one runtime response timeout for the transport and
+// asks Chromium to stop the script one second earlier, so a long synchronous
+// callback is reported as stopped rather than as an unanswered command.
+const PAGE_EVALUATE_EXECUTION_MARGIN_MS = 1_000;
+function pageEvaluateTransportTimeoutMs(): number {
+  return responseTimeoutMs();
+}
+function pageEvaluateExecutionTimeoutMs(): number {
+  return Math.max(
+    PAGE_EVALUATE_EXECUTION_MARGIN_MS,
+    pageEvaluateTransportTimeoutMs() - PAGE_EVALUATE_EXECUTION_MARGIN_MS,
+  );
+}
 const PAGE_EVALUATE_HEALTH_TIMEOUT_MS = 250;
 const PAGE_EVALUATE_HEALTH_EXECUTION_TIMEOUT_MS = 200;
 const PAGE_EVALUATE_TERMINATE_TIMEOUT_MS = 1_000;
@@ -2947,14 +2962,14 @@ class Page {
           expression,
           hasArgument,
           serializedArgument,
-          PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS,
-          PAGE_EVALUATE_EXECUTION_TIMEOUT_MS,
+          pageEvaluateTransportTimeoutMs(),
+          pageEvaluateExecutionTimeoutMs(),
         );
       } catch (error) {
         if (isEvaluationExecutionDeadlineError(error)) {
           throw evaluationExecutionDeadlineError(
             "page.evaluate",
-            PAGE_EVALUATE_EXECUTION_TIMEOUT_MS,
+            pageEvaluateExecutionTimeoutMs(),
           );
         }
         if (isRuntimeEvaluateTransportTimeout(error)) {
@@ -2962,7 +2977,7 @@ class Page {
             this.#services,
             sessionId,
             "page.evaluate",
-            PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS,
+            pageEvaluateTransportTimeoutMs(),
           );
         }
         if (typeof expression === "function") {
@@ -3519,8 +3534,11 @@ class Page {
 
   /**
    * Replace the runtime's generic "did not answer" error with one that names
-   * this Page and tells the agent what can be done about it. Thrown from here
-   * so the stack shows the public call instead of a transport timer.
+   * this Page and what happened next. The wait that just ran out was this
+   * call's whole budget, so a main-frame navigation that did not commit in it
+   * is stopped here, as goto does at its own timeout: the Page then answers
+   * again instead of costing every later call another full wait. Thrown from
+   * here so the stack shows the public call instead of a transport timer.
    */
   async #describeUnresponsivePage(
     error: PageUnresponsiveError,
@@ -3542,17 +3560,65 @@ class Page {
     } catch {
       // The URL is a courtesy; the error stands without it.
     }
+    const recovered = error.sessionId
+      ? await this.#stopPendingNavigation(error.sessionId)
+      : "unknown";
     const described = new PageUnresponsiveError(
       error.method,
       error.waitedMs,
       page.targetId,
       error.sessionId,
     );
-    described.message =
-      `Page ${this.label}${url ? ` (${url})` : ""} did not answer ${error.method} within ${error.waitedMs}ms. ` +
-      "Chromium suspends every renderer command while a main-frame navigation has started but not committed, and a hung renderer behaves the same way. " +
-      'Retry once the pending navigation commits, call page.goto(url, { timeout }) with a longer timeout, stop the pending navigation with page.cdp("Page.stopLoading"), or continue on a new Page from task.newPage().';
+    const head = `Page ${this.label}${url ? ` (${url})` : ""} did not answer ${error.method} within ${error.waitedMs}ms`;
+    if (recovered === "hung") {
+      described.message = `${head}, and still did not answer after Page.stopLoading, so its renderer is probably hung. Continue on a new Page from task.newPage(), or close this Page and open it again.`;
+    } else if (recovered === "unknown") {
+      described.message =
+        `${head}. ` +
+        "Chromium suspends every renderer command while a main-frame navigation has started but not committed, and a hung renderer behaves the same way. " +
+        'Retry once the pending navigation commits, call page.goto(url, { timeout }) with a longer timeout, stop the pending navigation with page.cdp("Page.stopLoading"), or continue on a new Page from task.newPage().';
+    } else {
+      described.stopped = true;
+      described.currentUrl = recovered.url;
+      described.message =
+        `${head}: a main-frame navigation had started but not committed. ` +
+        `It was stopped once that wait ran out, so the Page answers again${recovered.url ? ` and shows ${recovered.url}` : ""}. ` +
+        "Retry the call to continue on that document; to load the pending one, call page.goto(url, { timeout }) with a longer timeout, or continue on a new Page from task.newPage().";
+    }
     return described;
+  }
+
+  /**
+   * Stop whatever main-frame navigation keeps this Page from answering and
+   * read its main frame once it does. "hung" means the Page still answers
+   * nothing: a hung renderer, which Page.stopLoading cannot help.
+   */
+  async #stopPendingNavigation(
+    sessionId: string,
+  ): Promise<{ url?: string } | "hung"> {
+    try {
+      await this.#services.cdp(
+        "Page.stopLoading",
+        {},
+        sessionId,
+        PAGE_UNRESPONSIVE_STOP_TIMEOUT_MS,
+      );
+      const response = await this.#services.cdp(
+        "Page.getFrameTree",
+        {},
+        sessionId,
+        PAGE_UNRESPONSIVE_STOP_TIMEOUT_MS,
+      );
+      const frame =
+        response?.result?.frameTree?.frame || response?.frameTree?.frame;
+      return {
+        ...(typeof frame?.url === "string" && frame.url.length > 0
+          ? { url: frame.url }
+          : {}),
+      };
+    } catch {
+      return "hung";
+    }
   }
 
   async #refMapForAction(
