@@ -9,11 +9,19 @@ jobs:
   require-dev-source:
     runs-on: ubuntu-latest
     steps:
-      - name: Require dev branch
+      - name: Require dev or hotfix/docs branch
         env:
           HEAD_REF: ${{ github.head_ref }}
         run: |
-          if [ "$HEAD_REF" != "dev" ]; then
-            echo "Pull requests into main must come from the dev branch."
-            exit 1
-          fi
+          # Regular releases flow dev -> main. hotfix/* and docs/* are the
+          # sanctioned fast lanes for fixes that cannot wait for a release
+          # and must not drag unfinished work from dev into main.
+          case "$HEAD_REF" in
+            dev|hotfix/*|docs/*)
+              echo "Allowed source branch: $HEAD_REF"
+              ;;
+            *)
+              echo "Pull requests into main must come from dev, hotfix/*, or docs/*."
+              exit 1
+              ;;
+          esac
