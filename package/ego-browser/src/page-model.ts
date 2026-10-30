@@ -3669,7 +3669,30 @@ class Page {
       );
       return (response.result || response).frameTree;
     };
-    const tree = await readTree(sessionId);
+    // Frame discovery may have been answered from its cache, which makes this
+    // read the first command the renderer has to answer in this call. A
+    // timeout here means the Page did not answer, exactly as a timeout inside
+    // discovery does, and is reported the same way (stopping the navigation).
+    const startedAt = this.#services.now();
+    let tree;
+    try {
+      tree = await readTree(sessionId);
+    } catch (error) {
+      if (
+        !isCdpRequestTimeoutError(error) ||
+        error.method !== "Page.getFrameTree"
+      )
+        throw error;
+      throw await this.#describeUnresponsivePage(
+        new PageUnresponsiveError(
+          "Page.getFrameTree",
+          this.#services.now() - startedAt,
+          page.targetId,
+          sessionId,
+        ),
+        page,
+      );
+    }
     const documents = new Map<string, string>();
     const visit = (node) => {
       if (

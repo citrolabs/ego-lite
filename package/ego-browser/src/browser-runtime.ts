@@ -43,6 +43,7 @@ const FRAME_LIFECYCLE_EVENT = (method: string) =>
   method === "Target.targetInfoChanged" ||
   method === "Page.frameAttached" ||
   method === "Page.frameDetached" ||
+  method === "Page.frameStartedLoading" ||
   method === "Page.frameNavigated";
 const OOPIF_AUTO_ATTACH_PARAMS = {
   autoAttach: true,
@@ -73,6 +74,10 @@ const sessionTargets = new Map();
 // Frame discovery cache: ensureFrameSessions() is answered from here while no
 // target or frame event has arrived since the last full discovery. Every
 // attach/detach/create/destroy and frame lifecycle event bumps the epoch.
+// Page.frameStartedLoading is one of them so that a main-frame navigation
+// that has started but not committed drops the cache: the next discovery then
+// sends Page.getFrameTree itself and reports the suspended renderer as
+// EGO_PAGE_UNRESPONSIVE, instead of a later command timing out unmapped.
 let frameEpoch = 0;
 const frameSessionCache = new Map<
   string,

@@ -109,7 +109,7 @@ session's lifetime; `EGO_BROWSER_BIN` picks the executable the daemon starts.
 
 ## Program boundaries (P3)
 
-The SDK now treats one agent script as a *program* (`beginProgram()` /
+The SDK now treats one agent script as a _program_ (`beginProgram()` /
 `endProgram()` in `page-model.ts`, exposed as `__egoBeginProgram` /
 `__egoEndProgram`). The direct CLI and `installEgoSdk` begin one per process;
 the daemon wrapper calls both around every call. Inside a program:
@@ -134,7 +134,11 @@ the daemon wrapper calls both around every call. Inside a program:
   the one renderer round trip that also orders popup events ahead of the
   receipt;
 - frame discovery (`Target.getTargets` + `Page.getFrameTree`) is answered from a
-  cache until a Target or Page frame lifecycle event invalidates it;
+  cache until a Target or Page frame lifecycle event invalidates it. A
+  navigation that starts (`Page.frameStartedLoading`) invalidates it too, so a
+  Page whose navigation has not committed is still reported as
+  `EGO_PAGE_UNRESPONSIVE` by the next call, and the main-frame tree read after
+  a cached discovery maps its timeout the same way;
 - the click point settle waits two frames only when something may be moving
   (a running animation or transition, or a scroll in the last 150 ms);
 - `click({ hover: false })` skips the pre-press pointer move.

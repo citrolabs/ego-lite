@@ -7900,3 +7900,69 @@ test("snapshot describes a Page that stops answering after the first document ch
     assert.equal(calls, 2, "the second frame discovery is the one that failed");
   });
 });
+
+test("snapshot reports an unresponsive Page when the frame tree read after a cached discovery times out", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    const stops = [];
+    let pending = false;
+    const task = taskForRound(fixture, "round-a", {
+      // Frame discovery answered from its cache: no renderer round trip here,
+      // so the main-frame tree read is the first command the renderer must
+      // answer.
+      async ensureFrameSessions() {
+        return new Map();
+      },
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Target.getTargetInfo") {
+          return { targetInfo: { url: "https://example.test/pending" } };
+        }
+        if (method === "Page.stopLoading") {
+          stops.push({ sessionId, timeoutMs });
+          return {};
+        }
+        if (method === "Page.getFrameTree" && pending) {
+          if (stops.length === 0) {
+            throw new CdpRequestTimeoutError(
+              method,
+              timeoutMs ?? 5_000,
+              sessionId,
+            );
+          }
+          return {
+            result: {
+              frameTree: {
+                frame: {
+                  id: "frame-1",
+                  loaderId: "loader-old",
+                  url: "https://example.test/previous",
+                },
+              },
+            },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/previous");
+    pending = true;
+
+    await assert.rejects(
+      () => page.snapshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_UNRESPONSIVE");
+        assert.equal(error.stopped, true);
+        assert.equal(error.currentUrl, "https://example.test/previous");
+        assert.match(
+          error.message,
+          /^Page p1 \(https:\/\/example\.test\/pending\) did not answer Page\.getFrameTree within \d+ms: a main-frame navigation had started but not committed\. It was stopped once that wait ran out, so the Page answers again and shows https:\/\/example\.test\/previous\./,
+        );
+        assert.match(error.message, /page\.goto\(url, \{ timeout \}\)/);
+        return true;
+      },
+    );
+    assert.deepEqual(stops, [
+      { sessionId: "session:target-1", timeoutMs: 1_000 },
+    ]);
+  });
+});
