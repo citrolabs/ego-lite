@@ -21,13 +21,11 @@ Pass the script to `ego-browser nodejs`.
 <!-- mode: ego-run -->
 
 Pass the script to `ego-run --session <id>`. Use one session id per user goal
-(lowercase letters, digits, dashes, up to 64 characters; the task space name is
-a good id). The user starts the daemon once with `ego-run daemon start
+(lowercase letters, digits, dashes, up to 64 characters, such as the task space name). The user starts the daemon once with `ego-run daemon start
 --detach`; on `EGO_RUN_DAEMON_UNAVAILABLE` ask them to, do not start it
 yourself. Scripts of one session share one Node.js context and run one at a
 time: top-level `const`/`let` declarations, functions, and Page handles from
-earlier scripts stay defined, so use `task`, `page`, or a popup handle directly
-instead of copying them to `globalThis`.
+earlier scripts stay defined, so use `task`, `page`, or a popup handle directly; do not copy them to `globalThis`.
 
 <!-- /mode -->
 
@@ -91,8 +89,7 @@ script continues with the same `page`:
 ego-run --session inspect-example -e 'await page.click("@3"); await page.snapshot()'
 ```
 
-A popup caught in one script (`const preview = await popupPromise`) is
-`preview` in later scripts, without `task.page()`.
+A popup caught in one script (`const preview = await popupPromise`) stays `preview` in later scripts.
 
 When a sandbox blocks heredoc input, use `-e` or `--file <absolute path>`.
 
@@ -127,8 +124,7 @@ file: never put it in a `-e` argument.
 ego-run --session <id> --file C:/Users/<name>/ego/task.mjs
 ```
 
-`--file` reads UTF-8, so the whole task, including non-ASCII text, belongs in
-the `.mjs` file, never in a `-e` argument.
+`--file` reads UTF-8: the whole task, non-ASCII text included, belongs in the file, never in `-e`.
 
 <!-- /mode -->
 
@@ -151,7 +147,7 @@ ego-browser nodejs < C:\Users\<name>\ego\task.mjs
 
 <!-- mode: ego-run -->
 
-cmd has no heredoc; pass the same `.mjs` file with `--file`:
+cmd: pass the same `.mjs` file with `--file`:
 
 ```bat
 ego-run --session <id> --file C:\Users\<name>\ego\task.mjs
@@ -273,9 +269,7 @@ await source.goto("https://example.com/releases");
 
 <!-- /mode -->
 
-Do not inspect or select profiles unless the user explicitly requests a
-particular Ego Lite profile. A `profileId` applies only when creating a space;
-use `help("profiles")` for the exact workflow.
+Do not inspect or select profiles unless the user explicitly asks for a particular Ego Lite profile; a `profileId` applies only when creating a space (`help("profiles")`).
 
 Supported TaskSpace API:
 
@@ -285,12 +279,10 @@ Supported TaskSpace API:
 - Control: `waitForControl(options)`, `handOff()`, `finish({ keep })`
 - Advanced: `cdp(method, params, options)`
 
-Pages receive permanent labels such as `p1`, `p2`, and `p3`. Prefer these labels
-to custom `{ as }` values. Reuse or close Pages as the task proceeds; the runtime
+Pages receive permanent labels such as `p1`, `p2`, `p3`; prefer them to custom `{ as }` values. Reuse or close Pages as the task proceeds; the runtime
 reports the configured Page budget when it is reached.
 
-`task.newPage()` creates another blank Page when multiple Pages must stay open.
-Navigate it separately with `page.goto()`.
+`task.newPage()` creates another blank Page when several Pages must stay open; navigate it with `page.goto()`.
 
 `task.page(label)` only refers to a Page that already exists; it never creates
 one, and its handle is always truthy, so `task.page("p2") || await task.newPage()`
