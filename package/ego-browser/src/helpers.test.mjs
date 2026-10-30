@@ -205,6 +205,8 @@ test("taskspace helper surface exposes public helpers including claimTaskSpace",
   assert.equal(typeof context.openOrReuseTab, "function");
   assert.equal(typeof helperExports.closeTab, "function");
   assert.equal(typeof context.closeTab, "function");
+  assert.equal(typeof helperExports.setViewportSize, "function");
+  assert.equal(typeof context.setViewportSize, "function");
   assert.equal("newTab" in helperExports, false);
   assert.equal("newTab" in context, false);
   assert.equal("elementEval" in helperExports, false);

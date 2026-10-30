@@ -50,6 +50,7 @@ export {
 export {
   INTERNAL_URL_PREFIXES,
   pageInfo,
+  setViewportSize,
   listTabs,
   currentTab,
   switchTab,
