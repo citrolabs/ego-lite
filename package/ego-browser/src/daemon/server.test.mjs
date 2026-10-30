@@ -149,10 +149,25 @@ test("a daemon refuses to start while another live process holds the lock", asyn
     sessions: { connect: fakeConnect() },
   });
   await assert.rejects(daemon.start(), /already running \(pid \d+\)/);
+  // Stopping the refused daemon must not remove a lock it never owned.
+  await daemon.stop();
+  assert.equal(
+    readFileSync(paths.lockFile, "utf8"),
+    `${process.ppid}\n`,
+    "the other process's lock is untouched",
+  );
   // A stale lock from a dead process is taken over.
   writeFileSync(paths.lockFile, "999999999\n");
-  await daemon.start();
-  await daemon.stop();
+  const second = new Daemon({
+    paths,
+    bin: "ego-browser",
+    watchVersion: false,
+    sessions: { connect: fakeConnect() },
+  });
+  await second.start();
+  assert.equal(readFileSync(paths.lockFile, "utf8"), `${process.pid}\n`);
+  await second.stop();
+  assert.equal(existsSync(paths.lockFile), false, "the owner removes its lock");
   rmSync(stateDir, { recursive: true, force: true });
 });
 

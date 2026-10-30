@@ -61,6 +61,7 @@ export class Daemon {
   #timers: NodeJS.Timeout[] = [];
   #egoBrowserVersion: string | null = null;
   #stopping: Promise<void> | null = null;
+  #lockOwned = false;
   readonly #idleMs: number;
   readonly #watchVersion: boolean;
   #logFd: number | null = null;
@@ -103,30 +104,36 @@ export class Daemon {
   async start(): Promise<void> {
     mkdirSync(this.paths.stateDir, { recursive: true, mode: 0o700 });
     mkdirSync(this.paths.spillDir, { recursive: true, mode: 0o700 });
-    // Order matters: refuse on a live lock, then on a live socket (the lock
-    // file can be missing or unreadable while a daemon still owns the
-    // socket), and only then write our own lock, so another daemon's files
-    // are never touched on the way out.
-    this.#checkLock();
-    if (process.platform !== "win32" && existsSync(this.paths.endpoint)) {
-      if (await endpointAlive(this.paths.endpoint)) {
-        throw new ProtocolError(
-          ErrorCodes.BAD_REQUEST,
-          `an ego-run daemon is already listening on ${this.paths.endpoint}`,
-        );
+    // The lock is created exclusively, so two daemons starting at once cannot
+    // both pass the check and overwrite each other's lock; a live socket (the
+    // lock can be missing while a daemon still owns the socket) is refused
+    // next, and a start that fails after taking the lock gives it back. Only
+    // the lock this instance created is ever removed.
+    this.#acquireLock();
+    try {
+      if (process.platform !== "win32" && existsSync(this.paths.endpoint)) {
+        if (await endpointAlive(this.paths.endpoint)) {
+          throw new ProtocolError(
+            ErrorCodes.BAD_REQUEST,
+            `an ego-run daemon is already listening on ${this.paths.endpoint}`,
+          );
+        }
+        unlinkSync(this.paths.endpoint); // stale socket from a crashed daemon
       }
-      unlinkSync(this.paths.endpoint); // stale socket from a crashed daemon
-    }
-    this.#writeLock();
-    this.#token = this.#loadOrCreateToken();
-    this.#server = createServer((socket) => this.#serve(socket));
-    await new Promise<void>((resolve, reject) => {
-      this.#server!.once("error", reject);
-      this.#server!.listen(this.paths.endpoint, () => {
-        this.#server!.off("error", reject);
-        resolve();
+      this.#token = this.#loadOrCreateToken();
+      this.#server = createServer((socket) => this.#serve(socket));
+      await new Promise<void>((resolve, reject) => {
+        this.#server!.once("error", reject);
+        this.#server!.listen(this.paths.endpoint, () => {
+          this.#server!.off("error", reject);
+          resolve();
+        });
       });
-    });
+    } catch (error) {
+      this.#server = null;
+      this.#releaseLock();
+      throw error;
+    }
     if (process.platform !== "win32") {
       try {
         const { chmodSync } = await import("node:fs");
@@ -157,21 +164,60 @@ export class Daemon {
       await new Promise<void>((resolve) =>
         this.#server ? this.#server.close(() => resolve()) : resolve(),
       );
-      for (const file of [this.paths.endpoint, this.paths.lockFile]) {
+      if (process.platform !== "win32") {
         try {
-          if (process.platform === "win32" && file === this.paths.endpoint)
-            continue;
-          unlinkSync(file);
+          unlinkSync(this.paths.endpoint);
         } catch {
           // already gone
         }
       }
+      this.#releaseLock();
       if (this.#logFd !== null) {
         closeSync(this.#logFd);
         this.#logFd = null;
       }
     })();
     return this.#stopping;
+  }
+
+  /**
+   * Take the lock by creating it exclusively. An existing lock is refused
+   * when it names a live process other than this one; a stale one (dead
+   * process, unreadable) is removed and the creation retried once.
+   */
+  #acquireLock() {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        const fd = openSync(this.paths.lockFile, "wx", 0o600);
+        try {
+          writeSync(fd, `${process.pid}\n`);
+        } finally {
+          closeSync(fd);
+        }
+        this.#lockOwned = true;
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST" || attempt > 0)
+          throw error;
+        this.#checkLock();
+        try {
+          unlinkSync(this.paths.lockFile);
+        } catch {
+          // gone already; the retry decides
+        }
+      }
+    }
+  }
+
+  /** Remove the lock only when this instance created it. */
+  #releaseLock() {
+    if (!this.#lockOwned) return;
+    this.#lockOwned = false;
+    try {
+      unlinkSync(this.paths.lockFile);
+    } catch {
+      // already gone
+    }
   }
 
   /** Throw when the lock file names a live process other than this one. */
@@ -188,10 +234,6 @@ export class Daemon {
       if (error instanceof ProtocolError) throw error;
       // no lock, or an unreadable one
     }
-  }
-
-  #writeLock() {
-    writeFileSync(this.paths.lockFile, `${process.pid}\n`, { mode: 0o600 });
   }
 
   #loadOrCreateToken(): string {
