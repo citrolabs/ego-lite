@@ -7867,6 +7867,199 @@ test("snapshot names a probably hung renderer when stopping does not help", asyn
   });
 });
 
+test("screenshot stops a pending navigation when the Page never answers its renderer command", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let held = true;
+    const stops = [];
+    const task = taskForRound(fixture, "round-a", {
+      async screenshot(path, options, sessionId) {
+        if (held) {
+          throw new CdpRequestTimeoutError(
+            "Runtime.evaluate",
+            15_000,
+            sessionId,
+          );
+        }
+        return "/tmp/after-stop.png";
+      },
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.stopLoading") {
+          stops.push({ sessionId, timeoutMs });
+          held = false;
+          return {};
+        }
+        if (method === "Page.getFrameTree" && !held) {
+          return {
+            result: {
+              frameTree: {
+                frame: {
+                  id: "frame-1",
+                  loaderId: "loader-old",
+                  url: "https://example.test/previous",
+                },
+              },
+            },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/previous");
+
+    await assert.rejects(
+      () => page.screenshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_UNRESPONSIVE");
+        assert.equal(error.method, "Runtime.evaluate");
+        assert.equal(error.waitedMs, 15_000);
+        assert.equal(error.stopped, true);
+        assert.equal(error.currentUrl, "https://example.test/previous");
+        assert.match(
+          error.message,
+          /^Page p1 .*did not answer Runtime\.evaluate within 15000ms: a main-frame navigation had started but not committed\. It was stopped once that wait ran out/,
+        );
+        return true;
+      },
+    );
+    assert.equal(stops.length, 1);
+    assert.equal(typeof stops[0].sessionId, "string");
+    assert.equal(await page.screenshot(), "/tmp/after-stop.png");
+  });
+});
+
+test("a browser-level command timeout is not treated as an unresponsive Page", async () => {
+  await withFixture(async (fixture) => {
+    let stops = 0;
+    const task = taskForRound(fixture, "round-a", {
+      async screenshot(path, options, sessionId) {
+        throw new CdpRequestTimeoutError("Target.getTargetInfo", 15_000);
+      },
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.stopLoading") stops += 1;
+        return fixture.services.cdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/browser");
+
+    await assert.rejects(
+      () => page.screenshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_CDP_REQUEST_TIMEOUT");
+        assert.equal(error.method, "Target.getTargetInfo");
+        return true;
+      },
+    );
+    assert.equal(stops, 0);
+  });
+});
+
+test("evaluate stops a pending navigation when the Page never answers", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let held = false;
+    let terminateCalls = 0;
+    const stops = [];
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (
+          method === "Runtime.evaluate" &&
+          params.expression.includes("__egoPageEvaluate") &&
+          params.expression.includes("pendingProbe")
+        ) {
+          held = true;
+        }
+        if (held && method === "Runtime.evaluate") {
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (held && method === "Runtime.terminateExecution") {
+          terminateCalls += 1;
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Page.stopLoading") {
+          stops.push({ sessionId, timeoutMs });
+          held = false;
+          return {};
+        }
+        if (method === "Page.getFrameTree" && stops.length > 0) {
+          return {
+            result: {
+              frameTree: {
+                frame: {
+                  id: "frame-1",
+                  loaderId: "loader-old",
+                  url: "https://example.test/previous",
+                },
+              },
+            },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/previous");
+
+    await assert.rejects(
+      () => page.evaluate(() => "pendingProbe"),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_EVALUATION_TIMED_OUT");
+        assert.equal(error.stopped, true);
+        assert.equal(error.currentUrl, "https://example.test/previous");
+        assert.equal(error.pageResponsive, true);
+        assert.equal(error.executionStopped, false);
+        assert.equal(error.mayHaveLateEffects, true);
+        assert.match(
+          error.message,
+          /^page\.evaluate on Page p1 timed out after \d+ms: a main-frame navigation had started but not committed, so the Page answered nothing\. It was stopped once that wait ran out, so the Page answers again and shows https:\/\/example\.test\/previous; the evaluation may still run late/,
+        );
+        assert.match(error.message, /page\.goto\(url, \{ timeout \}\)/);
+        return true;
+      },
+    );
+    assert.equal(terminateCalls, 1, "termination is still attempted first");
+    assert.equal(stops.length, 1);
+  });
+});
+
+test("evaluate names a probably hung renderer when stopping does not help", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let held = false;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (
+          method === "Runtime.evaluate" &&
+          params.expression.includes("hungProbe")
+        ) {
+          held = true;
+        }
+        if (
+          held &&
+          (method === "Runtime.evaluate" ||
+            method === "Runtime.terminateExecution" ||
+            method === "Page.stopLoading")
+        ) {
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/hung");
+
+    await assert.rejects(
+      () => page.evaluate(() => "hungProbe"),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_EVALUATION_TIMED_OUT");
+        assert.equal(error.stopped, false);
+        assert.equal(error.pageResponsive, false);
+        assert.match(error.message, /renderer is probably hung/);
+        assert.match(error.message, /task\.newPage\(\)/);
+        return true;
+      },
+    );
+  });
+});
+
 test("snapshot describes a Page that stops answering after the first document check", async () => {
   await withFixture(async (fixture) => {
     let calls = 0;
