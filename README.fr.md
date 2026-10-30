@@ -9,6 +9,7 @@
 <p>
   <a href="https://cdn.ego.app/setup/macos/arm64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/Download-Apple%20Silicon-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Apple Silicon" /></a>
   <a href="https://cdn.ego.app/setup/macos/x64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/Download-Intel-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Intel" /></a>
+  <a href="https://cdn.ego.app/setup/windows/x64/egoliteSetup-Y7MbxKIuhzFB.exe"><img src="https://img.shields.io/badge/Download-Windows-000000?style=for-the-badge&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTAgMGgxMS4zNzd2MTEuMzcySDB6bTEyLjYyMyAwSDI0djExLjM3MkgxMi42MjN6TTAgMTIuNjIzaDExLjM3N1YyNEgwem0xMi42MjMgMEgyNFYyNEgxMi42MjN6Ii8%2BPC9zdmc%2B" alt="Download for Windows" /></a>
   <a href="https://discord.gg/5eGZVvHbTq"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" /></a>
   <a href="https://x.com/ego_agent"><img src="https://img.shields.io/badge/Follow-%40ego__agent-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow @ego_agent on X" /></a>
   <a href="https://lite.ego.app/document/"><img src="https://img.shields.io/badge/Docs-lite.ego.app-1E90FF?style=for-the-badge&logo=gitbook&logoColor=white" alt="Docs" /></a>
@@ -39,16 +40,17 @@ https://github.com/user-attachments/assets/ffe7954b-58ee-411e-b35d-ec30c58a08bc
 
 ## Démarrage rapide
 
-ego lite fonctionne aujourd'hui sur macOS, une bêta fermée pour Windows arrive bientôt, et Linux figure sur la [feuille de route](https://lite.ego.app/roadmap).
+ego lite fonctionne sur macOS et Windows, et Linux figure sur la [feuille de route](https://lite.ego.app/roadmap).
 
 ### 1. Installer
 
 Choisissez ce qui convient le mieux à votre façon de travailler.
 
-**1.1 Télécharger l'application macOS**
+**1.1 Télécharger l'application**
 
 <a href="https://cdn.ego.app/setup/macos/arm64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/⬇%20Apple%20Silicon-.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download ego lite for Apple Silicon" /></a>
 <a href="https://cdn.ego.app/setup/macos/x64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/⬇%20Intel-.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download ego lite for Intel" /></a>
+<a href="https://cdn.ego.app/setup/windows/x64/egoliteSetup-Y7MbxKIuhzFB.exe"><img src="https://img.shields.io/badge/⬇%20Windows-.exe-000000?style=for-the-badge&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTAgMGgxMS4zNzd2MTEuMzcySDB6bTEyLjYyMyAwSDI0djExLjM3MkgxMi42MjN6TTAgMTIuNjIzaDExLjM3N1YyNEgwem0xMi42MjMgMEgyNFYyNEgxMi42MjN6Ii8%2BPC9zdmc%2B" alt="Download ego lite for Windows" /></a>
 
 Cliquez pour télécharger, puis ouvrez le fichier pour installer. Dans un cas comme dans l'autre, ego lite ajoute la Skill `ego-browser` au répertoire de Skills de chaque agent installé sur votre machine.
 
@@ -101,31 +103,31 @@ Vos données de navigation, vos cookies et tout ce que contient le navigateur re
 
 La plupart des outils savent automatiser un navigateur. Les vraies questions sont ailleurs : de quel navigateur l'agent dispose-t-il ? Pouvez-vous continuer à travailler pendant ce temps ? L'outil est-il conçu pour l'agent que vous utilisez déjà, ou pour un agent intégré ?
 
-| Capacité | ego lite | Browser-Use | agent-browser (Vercel) | ChatGPT Atlas | Perplexity Comet |
-|---|:---:|:---:|:---:|:---:|:---:|
-| Multitâche en parallèle | ✓ | — | — | — | — |
-| Skills réutilisables | ✓ | — | — | — | — |
-| Reprend les données de Chrome | ✓ | — | — | ✓ | ✓ |
-| Le même navigateur, un espace de travail séparé | ✓ | — | — | — | — |
-| Entrée sémantique compressée | ✓ | — | ✓ | — | — |
-| Pilotable par des agents externes | ✓ | ✓ | ✓ | — | — |
-| Données stockées en local | ✓ | ✓ | ✓ | — | — |
-| Aucune friction de connexion | ✓ | — | — | ✓ | ✓ |
-| Navigateur du quotidien | ✓ | — | — | ✓ | ✓ |
-| Gratuit | ✓ | ✓ | ✓ | — | — |
-
-Deux autres catégories tentent de résoudre le même problème. Les frameworks d'automatisation comme Browser-Use et agent-browser de Vercel sont des bibliothèques que l'agent appelle ; ils ne fournissent aucun navigateur en propre, il leur faut donc un navigateur séparé à piloter, et vos sessions connectées sont rarement reprises correctement. Les navigateurs IA comme ChatGPT Atlas et Perplexity Comet embarquent un agent intégré, et seul cet agent peut piloter le navigateur. ego lite est un navigateur unique, pensé dès le départ pour être partagé entre vous et n'importe quel agent que vous amenez.
-
+| Fonctionnalité | ego lite | Extensions de navigateur<br><sub>Claude/Codex in Chrome</sub> | Navigateurs intégrés<br><sub>Navigateur intégré de Claude/ChatGPT</sub> | Navigateurs cloud<br><sub>Browserbase/Browser Use</sub> | CLI de navigateur<br><sub>playwright-cli/Browser Harness</sub> | Navigateurs IA<br><sub>Comet/Dia</sub> |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| Compatible avec tout agent IA | ✓ | — | — | ✓ | ✓ | — |
+| Réutilise vos sessions de navigateur | ✓ | ✓ | — | — | — | ✓ |
+| Moins de CAPTCHA | ✓ | ✓ | — | — | — | ✓ |
+| Agit sur tout votre ordinateur | ✓ | — | ✓ | — | ✓ | — |
+| Ne détourne pas votre navigateur | ✓ | — | ✓ | ✓ | — | — |
+| Multitâche en parallèle | ✓ | — | — | ✓ | — | — |
+| Gère le scraping à grande échelle | ✓ | — | — | ✓ | ✓ | — |
+| Sert de navigateur au quotidien | ✓ | ✓ | — | — | — | ✓ |
+| Gratuit | ✓ | — | — | — | ✓ | — |
+| Données stockées en local | ✓ | ✓ | ✓ | — | ✓ | — |
+| Compétences réutilisables (bientôt disponible) | ✓ | — | — | — | — | — |
 
 ## Benchmarks
 
-Nous avons comparé ego lite à agent-browser de Vercel sur quatre tâches complexes d'automatisation web. ego lite a terminé chaque tâche jusqu'à 2,5× plus vite, avec nettement moins de jetons. Plus la tâche est difficile, plus l'écart se creuse. Le détail tâche par tâche est dans le graphique ci-dessous.
+Plus rapide, taux de réussite plus élevé, moins de jetons. Nous avons comparé ego-browser à quatre autres outils de navigateur pour agents IA sur Real-World Bench : 31 tâches complexes d'automatisation web sur de vrais sites en ligne. ego-browser arrive en tête pour la vitesse, le taux de réussite et le coût, et fait aboutir les tâches web complexes de votre agent de 47 % à 63 % plus vite que les autres outils.
 
 <div align="center">
 
-<img src="docs/assets/ego-vs-agent-benchmark.png" alt="ego lite vs agent-browser, speed and cost across four tasks" width="100%" />
+<img src="docs/assets/real-world-bench.jpg" alt="Real-World Bench, 31 tasks: ego-browser vs Browser Harness, playwright-cli, chrome-devtools-cli and agent-browser on turns, rubric average, perfect rate, trajectory efficiency, average duration and average cost" width="100%" />
 
 </div>
+
+Chaque outil a exécuté les mêmes 31 tâches, piloté par le même agent (pi) avec le même modèle (gpt-5.6-sol, effort de réflexion max), et a été noté par le même juge selon une grille propre à chaque tâche. Une tâche ne compte comme une réussite complète que si toutes ses exigences sont remplies.
 
 ## Documentation
 
