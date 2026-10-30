@@ -225,7 +225,9 @@ timeout, so the Page stays usable on its previous document; retry with a longer
 timeout. Any other call on a Page whose navigation is pending (after a link
 click, for example) waits one bounded period, then fails with
 `EGO_PAGE_UNRESPONSIVE` and stops that navigation; the error says which
-document the Page shows now and how to load the pending one.
+document the Page shows now and how to load the pending one. `evaluate()`
+reports the same outcome as `EGO_PAGE_EVALUATION_TIMED_OUT` with `stopped`
+set.
 
 Work efficiently:
 
