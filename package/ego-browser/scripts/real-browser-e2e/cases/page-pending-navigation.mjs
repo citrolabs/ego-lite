@@ -3,8 +3,16 @@
 // stops. These cases pin the harness behavior on such a Page: public calls
 // stay inside one bounded wait, then stop the navigation and say which
 // document the Page shows, so the next call answers at once.
+//
+// That bounded wait is the runtime's response timeout. Both processes shorten
+// it (the SDK reads it per call) so the cases prove "one wait, not one per
+// setup command" in seconds instead of waiting out the 15 s default.
+const PENDING_NAVIGATION_RESPONSE_TIMEOUT_MS = 5_000;
+
 export function pagePendingNavigationCase() {
   return `
+    const transportMs = ${PENDING_NAVIGATION_RESPONSE_TIMEOUT_MS};
+    process.env.EGO_BROWSER_RESPONSE_TIMEOUT_MS = String(transportMs);
     const task = await taskSpace(taskName);
     const page = await newPageAt(
       task,
@@ -106,7 +114,7 @@ export function pagePendingNavigationCase() {
       "the error tells the agent how to load the pending document"
     );
     assert(
-      snapshotElapsed < 20_000,
+      snapshotElapsed < transportMs + 3_500,
       "snapshot gives up after one bounded wait, not one per setup command: " +
         snapshotElapsed
     );
@@ -173,6 +181,8 @@ export function pagePendingNavigationCase() {
 
 export function pagePendingNavigationFreshProcessCase() {
   return `
+    const transportMs = ${PENDING_NAVIGATION_RESPONSE_TIMEOUT_MS};
+    process.env.EGO_BROWSER_RESPONSE_TIMEOUT_MS = String(transportMs);
     const task = await taskSpace(taskName);
     const saved = JSON.parse(
       await readFile(join(tempDir, "pending-navigation-state.json"), "utf8")
@@ -194,7 +204,7 @@ export function pagePendingNavigationFreshProcessCase() {
         error?.message
     );
     assert(
-      elapsed < 20_000,
+      elapsed < transportMs + 3_500,
       "a new process does not wait a full transport timeout per setup command: " +
         elapsed
     );
