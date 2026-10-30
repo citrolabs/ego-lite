@@ -221,3 +221,31 @@ test("a lone string literal is the value, not a directive", () => {
   );
   assert.equal(rewriteProgram('"use strict"').body, '"use strict"');
 });
+
+test("a program with top-level destructuring runs and keeps its bindings", async () => {
+  // The REPL header declares the bound names (`var a, c, d, rest;`), never
+  // the pattern; the body assigns through the original pattern.
+  const program = [
+    "const source = { a: 1, b: [2, 3], extra: true };",
+    "const { a, b: [c, d = 4], ...rest } = source;",
+    "let [first] = source.b;",
+    "({ a, c, d, first, rest })",
+  ].join("\n");
+  const rewritten = rewriteProgram(program);
+  const cell = wrapProgram(rewritten, {
+    requestId: "destructure",
+    timeoutMs: 1_000,
+    spillDir: "/s",
+    inlineLimit: 1_000_000,
+  });
+  assert.match(cell, /^var source, a, c, d, rest, first;\n/);
+  const envelope = await runCell(cell, "destructure");
+  assert.equal(envelope.ok, true, envelope.error?.message);
+  assert.deepEqual(envelope.value, {
+    a: 1,
+    c: 2,
+    d: 3,
+    first: 2,
+    rest: { extra: true },
+  });
+});
