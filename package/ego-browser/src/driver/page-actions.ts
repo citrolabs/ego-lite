@@ -7,6 +7,7 @@ import { RefMap } from "../ref-map.js";
 import {
   ACTION_TARGET_STATE_HELPERS,
   EDIT_ACTION_TARGET_HELPERS,
+  ENABLED_SCROLL_TARGET_HELPERS,
   HIT_TARGET_HELPERS,
   SCROLL_TARGET_HELPERS,
 } from "./action-target.js";
@@ -23,6 +24,9 @@ type PageActionServices = {
   showAgentTaskState(state: string): Promise<void>;
   sleep(ms: number): Promise<void>;
   platform?: string;
+  now?(): number;
+  /** Absolute `now()` time at which the current action gives up. */
+  actionDeadline?: number;
 };
 
 export type MouseButton = "left" | "middle" | "right";
@@ -255,6 +259,8 @@ export async function clickInPage(
     },
   );
   try {
+    // One page round trip computes the action point and verifies that the
+    // element is visible, enabled, and (unless forced) the hit target there.
     let point = await resolveElementPoint(
       services,
       target.sessionId,
@@ -264,6 +270,7 @@ export async function clickInPage(
         frameId: target.frameId,
         actionName: "page.click",
         hitTest: !options.force,
+        requireEnabled: true,
         stability: "recompute",
         pageSessionId: sessionId,
         iframeSessions,
@@ -305,20 +312,13 @@ export async function clickInPage(
         sessionId,
       );
       point = { ...pagePoint, local: point.local };
-      await assertElementEnabled(
+      await assertClickTargetActionable(
         services,
         target.sessionId,
         target.objectId,
-        "page.click",
+        point.local,
+        { hitTest: !options.force },
       );
-      if (!options.force) {
-        await assertElementReceivesPointerEvents(
-          services,
-          target.sessionId,
-          target.objectId,
-          point.local,
-        );
-      }
       await dispatchMouseEvent(services, target.sessionId, {
         type: "mouseMoved",
         x: point.x,
@@ -330,24 +330,18 @@ export async function clickInPage(
     }
     for (let count = 1; count <= clickCount; count += 1) {
       // Moving the pointer or completing an earlier click can change layout.
-      // Recheck before every press so hover-created overlays fail closed.
-      // A same-process iframe must keep its native move/press sequence
-      // contiguous; its state was checked immediately before that gesture's
-      // final move.
+      // Recheck the enabled state and the hit target in one page call before
+      // every press so hover-created overlays fail closed. A same-process
+      // iframe must keep its native move/press sequence contiguous; its state
+      // was checked immediately before that gesture's final move, and later
+      // presses in any iframe only recheck the enabled state.
       if (!target.frameId || count > 1) {
-        await assertElementEnabled(
-          services,
-          target.sessionId,
-          target.objectId,
-          "page.click",
-        );
-      }
-      if (!options.force && !target.frameId) {
-        await assertElementReceivesPointerEvents(
+        await assertClickTargetActionable(
           services,
           target.sessionId,
           target.objectId,
           point.local,
+          { hitTest: !options.force && !target.frameId },
         );
       }
       await dispatchMouseEvent(services, target.sessionId, {
@@ -374,13 +368,7 @@ export async function clickInPage(
       }
     }
   } finally {
-    await services
-      .cdp(
-        "Runtime.releaseObject",
-        { objectId: target.objectId },
-        target.sessionId,
-      )
-      .catch(() => {});
+    await releaseObject(services, target.sessionId, target.objectId);
   }
 }
 
@@ -844,6 +832,10 @@ async function verifyFillOutcome(
       String(result?.type ?? ""),
     );
     lastOutcome = outcome;
+    // An accepted value is final: a later application reformat is accepted
+    // too, so there is nothing to wait for. Only a rejected reading is
+    // re-read, because the control may still be propagating the input.
+    if (fillOutcomeAccepted(outcome)) return outcome;
     const reading = `${outcome}\u0000${String(result?.actual ?? "")}`;
     if (reading === prior) {
       consecutiveReads += 1;
@@ -1316,6 +1308,8 @@ type ResolveElementPointOptions = {
   frameId?: string;
   actionName?: string;
   hitTest?: boolean;
+  /** Also fail with "element is disabled" in the same page round trip. */
+  requireEnabled?: boolean;
   stability?: ElementPointStability;
   pageSessionId?: string;
   iframeSessions?: Map<string, string>;
@@ -1351,6 +1345,7 @@ async function resolveElementPoint(
     frameId,
     actionName = "page.click",
     hitTest = true,
+    requireEnabled = false,
     stability = "strict",
     pageSessionId = sessionId,
     iframeSessions = new Map<string, string>(),
@@ -1397,13 +1392,21 @@ async function resolveElementPoint(
       return { error: "element is not stable" };
     }`
       : settleExpression;
+  const helpers = hitTest
+    ? HIT_TARGET_HELPERS
+    : requireEnabled
+      ? ENABLED_SCROLL_TARGET_HELPERS
+      : SCROLL_TARGET_HELPERS;
   const expression = `async function(${position ? "position" : ""}) {
-    ${hitTest ? HIT_TARGET_HELPERS : SCROLL_TARGET_HELPERS}
+    ${helpers}
     if (!this.isConnected) return { error: "element is not connected" };
     let rect = this.getBoundingClientRect();
     let point = ${pointExpression};
     if (rect.width <= 0 || rect.height <= 0 || !point) {
       return { error: "element is not visible" };
+    }
+    if (${requireEnabled ? "true" : "false"} && isActionTargetDisabled(this)) {
+      return { error: "element is disabled" };
     }
     const scroll = scrollRequestForPoint(this, point);
     if (scroll) return { scroll };
@@ -1426,39 +1429,24 @@ async function resolveElementPoint(
       iframeSessions,
     );
   }
-  for (let attempt = 0; attempt <= AUTO_SCROLL_ATTEMPTS; attempt += 1) {
-    const response = await services.cdp(
-      "Runtime.callFunctionOn",
-      {
-        functionDeclaration: expression,
-        objectId,
-        arguments: position ? [{ value: position }] : [],
-        returnByValue: true,
-        awaitPromise: true,
-      },
-      sessionId,
-    );
-    const point = runtimeValue(response, expression);
-    if (typeof point?.error === "string") {
-      throw new ElementResolutionError(
-        `${actionName} failed: ${point.error}`,
-        "transient",
+  const point = await bringIntoView(services, sessionId, objectId, {
+    actionName,
+    subject: "element",
+    evaluate: async () => {
+      const response = await services.cdp(
+        "Runtime.callFunctionOn",
+        {
+          functionDeclaration: expression,
+          objectId,
+          arguments: position ? [{ value: position }] : [],
+          returnByValue: true,
+          awaitPromise: true,
+        },
+        sessionId,
       );
-    }
-    const scroll = point?.scroll;
-    if (scroll) {
-      if (
-        attempt === AUTO_SCROLL_ATTEMPTS ||
-        !Number.isFinite(scroll.x) ||
-        !Number.isFinite(scroll.y) ||
-        !Number.isFinite(scroll.deltaX) ||
-        !Number.isFinite(scroll.deltaY)
-      ) {
-        throw new ElementResolutionError(
-          `${actionName} failed: element is not visible in the viewport`,
-          "transient",
-        );
-      }
+      return runtimeValue(response, expression);
+    },
+    wheel: async (scroll) => {
       const pageScrollPoint = await pagePointForFrame(
         services,
         sessionId,
@@ -1466,36 +1454,130 @@ async function resolveElementPoint(
         scroll,
         pageSessionId,
       );
-      await dispatchWheelMotion(
-        {
-          dispatch: (params) => dispatchMouseEvent(services, sessionId, params),
-          sleep: services.sleep,
-        },
-        {
-          x: pageScrollPoint.x,
-          y: pageScrollPoint.y,
-          deltaX: scroll.deltaX,
-          deltaY: scroll.deltaY,
-        },
+      return dispatchWheelMotion(wheelMotionServices(services, sessionId), {
+        x: pageScrollPoint.x,
+        y: pageScrollPoint.y,
+        deltaX: scroll.deltaX,
+        deltaY: scroll.deltaY,
+      });
+    },
+  });
+  if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) {
+    throw new Error(`${actionName} could not resolve the element position`);
+  }
+  const pagePoint = await pagePointForFrame(
+    services,
+    sessionId,
+    frameId,
+    point,
+    pageSessionId,
+  );
+  return { ...pagePoint, local: point };
+}
+
+type WheelRequest = { x: number; y: number; deltaX: number; deltaY: number };
+
+function wheelMotionServices(services: PageActionServices, sessionId: string) {
+  return {
+    dispatch: (params: Record<string, unknown>) =>
+      dispatchMouseEvent(services, sessionId, params),
+    sleep: services.sleep,
+    exhausted: () => actionDeadlinePassed(services),
+  };
+}
+
+function actionDeadlinePassed(services: PageActionServices): boolean {
+  return (
+    services.actionDeadline !== undefined &&
+    services.now !== undefined &&
+    services.now() >= services.actionDeadline
+  );
+}
+
+function sameWheelRequest(a: WheelRequest, b: WheelRequest): boolean {
+  return (
+    Math.abs(a.x - b.x) < 1 &&
+    Math.abs(a.y - b.y) < 1 &&
+    Math.abs(a.deltaX - b.deltaX) < 1 &&
+    Math.abs(a.deltaY - b.deltaY) < 1
+  );
+}
+
+/**
+ * Re-evaluate a target until it reports a position instead of a scroll
+ * request, scrolling with browser wheel input in between.
+ *
+ * Wheel input is the primary path because it is trusted input that reaches
+ * the nearest scrollable container like a user's wheel would. It can fail
+ * silently: the wheel point may land on an element that calls
+ * `preventDefault()` on wheel events (maps, carousels, canvas editors), or
+ * the page may be at the end of its scroll range. When a motion leaves the
+ * target exactly where it was, the next request is identical, and the loop
+ * falls back once to `DOM.scrollIntoViewIfNeeded` (which bypasses a site's
+ * patched `Element.prototype.scrollIntoView`) instead of repeating a motion
+ * that already proved ineffective. The action deadline is checked before
+ * every motion and inside it so a slow wheel handler cannot run the action
+ * far past its timeout.
+ */
+async function bringIntoView<
+  T extends { error?: unknown; scroll?: WheelRequest | null },
+>(
+  services: PageActionServices,
+  sessionId: string,
+  objectId: string,
+  input: {
+    actionName: string;
+    subject: "element" | "iframe";
+    evaluate: () => Promise<T>;
+    wheel: (scroll: WheelRequest) => Promise<boolean>;
+  },
+): Promise<T> {
+  const notVisible = () =>
+    new ElementResolutionError(
+      `${input.actionName} failed: ${input.subject} is not visible in the viewport`,
+      "transient",
+    );
+  let previous: WheelRequest | undefined;
+  let fellBack = false;
+  for (let attempt = 0; attempt <= AUTO_SCROLL_ATTEMPTS; attempt += 1) {
+    const result = await input.evaluate();
+    if (typeof result?.error === "string") {
+      throw new ElementResolutionError(
+        `${input.actionName} failed: ${result.error}`,
+        "transient",
       );
+    }
+    const scroll = result?.scroll;
+    if (!scroll) return result;
+    if (
+      attempt === AUTO_SCROLL_ATTEMPTS ||
+      !Number.isFinite(scroll.x) ||
+      !Number.isFinite(scroll.y) ||
+      !Number.isFinite(scroll.deltaX) ||
+      !Number.isFinite(scroll.deltaY) ||
+      actionDeadlinePassed(services)
+    ) {
+      throw notVisible();
+    }
+    if (previous && sameWheelRequest(previous, scroll)) {
+      if (fellBack) throw notVisible();
+      fellBack = true;
+      previous = undefined;
+      try {
+        await services.cdp(
+          "DOM.scrollIntoViewIfNeeded",
+          { objectId },
+          sessionId,
+        );
+      } catch {
+        throw notVisible();
+      }
       continue;
     }
-    if (!Number.isFinite(point?.x) || !Number.isFinite(point?.y)) {
-      throw new Error(`${actionName} could not resolve the element position`);
-    }
-    const pagePoint = await pagePointForFrame(
-      services,
-      sessionId,
-      frameId,
-      point,
-      pageSessionId,
-    );
-    return { ...pagePoint, local: point };
+    previous = scroll;
+    if (!(await input.wheel(scroll))) throw notVisible();
   }
-  throw new ElementResolutionError(
-    `${actionName} failed: element is not visible in the viewport`,
-    "transient",
-  );
+  throw notVisible();
 }
 
 async function ensureFrameOwnerInView(
@@ -1563,47 +1645,28 @@ async function ensureFrameOwnerInView(
     return { scroll: scrollRequestForPoint(this, point) };
   }`;
   try {
-    for (let attempt = 0; attempt <= AUTO_SCROLL_ATTEMPTS; attempt += 1) {
-      const response = await services.cdp(
-        "Runtime.callFunctionOn",
-        {
-          functionDeclaration: source,
-          objectId,
-          returnByValue: true,
-          awaitPromise: false,
-        },
-        ownerSessionId,
-      );
-      const result = runtimeValue(response, source);
-      if (typeof result?.error === "string") {
-        throw new ElementResolutionError(
-          `${actionName} failed: ${result.error}`,
-          "transient",
+    await bringIntoView(services, ownerSessionId, objectId, {
+      actionName,
+      subject: "iframe",
+      evaluate: async () => {
+        const response = await services.cdp(
+          "Runtime.callFunctionOn",
+          {
+            functionDeclaration: source,
+            objectId,
+            returnByValue: true,
+            awaitPromise: false,
+          },
+          ownerSessionId,
         );
-      }
-      const scroll = result?.scroll;
-      if (!scroll) return;
-      if (
-        attempt === AUTO_SCROLL_ATTEMPTS ||
-        !Number.isFinite(scroll.x) ||
-        !Number.isFinite(scroll.y) ||
-        !Number.isFinite(scroll.deltaX) ||
-        !Number.isFinite(scroll.deltaY)
-      ) {
-        throw new ElementResolutionError(
-          `${actionName} failed: iframe is not visible in the viewport`,
-          "transient",
-        );
-      }
-      await dispatchWheelMotion(
-        {
-          dispatch: (params) =>
-            dispatchMouseEvent(services, ownerSessionId, params),
-          sleep: services.sleep,
-        },
-        scroll,
-      );
-    }
+        return runtimeValue(response, source);
+      },
+      wheel: (scroll) =>
+        dispatchWheelMotion(
+          wheelMotionServices(services, ownerSessionId),
+          scroll,
+        ),
+    });
   } finally {
     await releaseObject(services, ownerSessionId, objectId);
   }
@@ -1718,6 +1781,53 @@ async function cursorPointForElement(
     return point;
   } catch {
     return inputPoint;
+  }
+}
+
+/**
+ * Re-validate a click target after the pointer moved, in one page round trip:
+ * the element must still be connected and enabled and, when `hitTest` is set,
+ * nothing may intercept pointer events at the frame-local `point`. Failures
+ * keep the resolver's wording and order (disabled before intercepted) so the
+ * retry loop and callers see the same transient errors as before.
+ */
+async function assertClickTargetActionable(
+  services: PageActionServices,
+  sessionId: string,
+  objectId: string,
+  point: { x: number; y: number },
+  options: { hitTest: boolean; actionName?: string },
+): Promise<void> {
+  const { hitTest, actionName = "page.click" } = options;
+  const expression = `function clickTargetActionable(point) {
+    ${hitTest ? HIT_TARGET_HELPERS : ACTION_TARGET_STATE_HELPERS}
+    if (!this.isConnected) return { error: "element is not connected" };
+    if (isActionTargetDisabled(this)) return { error: "element is disabled" };
+    if (${hitTest ? "true" : "false"}) {
+      const interceptor = interceptingElementAtPoint(this, point);
+      if (interceptor) {
+        return { error: describeHitTarget(interceptor) + " intercepts pointer events" };
+      }
+    }
+    return { ok: true };
+  }`;
+  const response = await services.cdp(
+    "Runtime.callFunctionOn",
+    {
+      functionDeclaration: expression,
+      objectId,
+      arguments: [{ value: point }],
+      returnByValue: true,
+      awaitPromise: false,
+    },
+    sessionId,
+  );
+  const result = runtimeValue(response, expression);
+  if (typeof result?.error === "string") {
+    throw new ElementResolutionError(
+      `${actionName} failed: ${result.error}`,
+      "transient",
+    );
   }
 }
 
@@ -1881,7 +1991,11 @@ async function releaseObject(
   sessionId: string,
   objectId: string,
 ): Promise<void> {
-  await services
+  // Best-effort and not awaited: the action already finished with the handle.
+  // When the action started a navigation, the Page answers nothing until the
+  // new document commits, and waiting here would add a transport timeout to
+  // every click on a link.
+  void services
     .cdp("Runtime.releaseObject", { objectId }, sessionId)
     .catch(() => {});
 }

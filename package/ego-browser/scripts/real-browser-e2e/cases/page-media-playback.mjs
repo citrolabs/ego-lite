@@ -19,6 +19,12 @@ export function pageMediaPlaybackCase() {
       timeout: 5_000,
     });
     await page.click("#video-pause");
+    // Media events are queued tasks; the click returns before they fire.
+    await page.waitForFunction(
+      () => window.__mediaWorkbench.read().video.events.pause >= 1,
+      undefined,
+      { timeout: 2_000 }
+    );
     const playedVideo = await page.evaluate(() => window.__mediaWorkbench.read().video);
     assertEqual(playedVideo.paused, true, "video pauses after visibly progressing");
     assert(playedVideo.currentTime >= 0.15, "video playback advances currentTime");
@@ -56,6 +62,12 @@ export function pageMediaPlaybackCase() {
 
     await page.click("#audio-seek");
     await page.click("#audio-volume");
+    // The seeked event fires once the seek completes, after the click returns.
+    await page.waitForFunction(
+      () => window.__mediaWorkbench.read().audio.events.seeked >= 1,
+      undefined,
+      { timeout: 2_000 }
+    );
     const final = await page.evaluate(() => window.__mediaWorkbench.read());
     assert(
       final.audio.currentTime >= 1.15 && final.audio.currentTime <= 1.3,

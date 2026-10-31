@@ -2170,7 +2170,21 @@ function buildCssCountJs(selector) {
           })()`;
 }
 
-function buildSelectorCenterJs(selector) {
+/**
+ * True for a plain CSS selector: not a `@ref` and not a `loc=` / role / href
+ * locator. A malformed locator is reported by the caller's resolver path.
+ */
+export function isRawSelector(input: unknown): boolean {
+  if (typeof input !== "string" || input.trim().length === 0) return false;
+  if (parseRef(input)) return false;
+  try {
+    return parseLocatorOrThrow(input) === null;
+  } catch {
+    return false;
+  }
+}
+
+export function buildSelectorCenterJs(selector) {
   const findExpr = buildFindElementJs(selector);
   return `(() => {
             const el = ${findExpr};

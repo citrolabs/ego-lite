@@ -41,9 +41,9 @@ Task spaces are isolated browsing contexts with an ownership model (`agent` / `u
 
 - `package/ego-browser/src/` — runtime, helpers, resolver, drivers, learning subsystem.
 - `package/ego-browser/src/**/*.test.mjs` — tests are colocated with the code (there is no separate `test/` directory).
-- `package/ego-browser/scripts/` — `build.mjs` (esbuild per-file → `dist/src`, rollup bundle → `dist/out/index.js`, renders `skill-body/SKILL.md` → `dist/out/ego-browser/SKILL.md` with version and end markers, copies the entry Skill and its learnings → `dist/out/agent-skills/ego-browser`), `validate-site-skills.ts`, and the real-browser E2E runner.
+- `package/ego-browser/scripts/` — `build.mjs` (esbuild per-file → `dist/src`, rollup bundle → `dist/out/index.js`, renders `skill-body/SKILL.md` via `render-guide.mjs` → `dist/out/ego-browser/SKILL.md` plus `SKILL.macos.md` / `SKILL.windows.md`, selecting `<!-- platform: ... -->` blocks and adding version and end markers, copies the entry Skill and its learnings → `dist/out/agent-skills/ego-browser`), `validate-site-skills.ts`, and the real-browser E2E runner.
 - `package/ego-browser/skill-body/SKILL.md` — canonical agent-facing usage guide, printed by `ego-browser skill`.
-- `skills/ego-browser/` — thin entry Skill published to skill markets and plugins: `SKILL.md`, `references/install.md`, `references/clearing-state.md`, `scripts/install.sh`, and the site `learnings/`. See `docs/ego-browser-skill-command.md` for the browser-side contract.
+- `skills/ego-browser/` — thin entry Skill published to skill markets and plugins: `SKILL.md`, `references/install.md` (plus `install-macos.md` / `install-windows.md`), `references/clearing-state.md`, `scripts/install.sh`, and the site `learnings/`. See `docs/ego-browser-skill-command.md` for the browser-side contract. `plugins/ego/skills/ego-browser/` is a copy of it for hosts that install the plugin from Git: edit only `skills/ego-browser/`, and the commit hook syncs and stages the copy (without the hook, run `npm --prefix plugins/ego run sync-skills`).
 - `skills/ego-browser/learnings/` — reusable per-site experience packs (`manifest.json` + `notes/` + `tools/` + `browser-tools/`).
 
 ## Development Commands
@@ -77,8 +77,12 @@ Run from `package/ego-browser/`:
 - Behavior-focused tests inject overrides (`__testing.setOverrides`) or a
   `FakeEgo` double (see `src/helpers.test.mjs` and `src/page-model.test.mjs`).
 - Cover session handling, locator resolution, helper behavior, and site-skill validation when changing runtime code; run `npm run validate:site-skills` for learning changes.
-- `npm run e2e` is the self-contained real-browser gate. It builds the current
-  checkout, passes the resulting absolute bundle through `--sdk-path`, starts a
-  local fixture server, uses a unique temporary task space, and cleans it up.
+- `npm run e2e` is the self-contained real-browser gate, run by the pre-push
+  hook (pre-commit runs only the fast checks against one shared build). It
+  builds the current checkout, passes the resulting absolute bundle through
+  `--sdk-path`, starts a local fixture server, uses a unique temporary task
+  space, and cleans it up. A full pass records a fingerprint of `dist/out`, the
+  suite and the CLI under `node_modules/.cache/`; an unchanged rerun skips, and
+  `EGO_BROWSER_REAL_E2E_FORCE=1` overrides that.
   Do not link another runtime, reuse a prior E2E space, or manually take control
   while the suite is running.

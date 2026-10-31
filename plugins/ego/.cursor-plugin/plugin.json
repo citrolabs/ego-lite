@@ -1,7 +1,7 @@
 {
   "name": "ego",
   "displayName": "ego",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Browser automation with the ego-browser Skill",
   "author": {
     "name": "citrolabs",
@@ -11,5 +11,8 @@
   "repository": "https://github.com/citrolabs/ego-lite",
   "license": "MIT",
   "keywords": ["browser", "automation", "skill", "playwright"],
+  "logo": "skills/ego-browser/assets/logo.png",
+  "category": "developer-tools",
+  "tags": ["browser", "automation", "testing"],
   "skills": "./skills/"
 }

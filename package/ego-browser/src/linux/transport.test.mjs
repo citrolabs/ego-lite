@@ -114,6 +114,27 @@ test("late events and errors from one task do not interrupt another task", async
     ego.useTaskSpace(b.id);
     invalidateSession();
     const sessionB = await ensureSession(targets[1].targetId);
+    const commandStarted = waitStarted("hold-b-capability");
+    const command = browserCdp(
+      "Runtime.evaluate",
+      { expression: "hold-b-capability" },
+      sessionB,
+    );
+    const commandResult = Promise.allSettled([command]);
+    await commandStarted;
+    await assert.rejects(
+      browserCdp("egoAutomated.enable", {}, sessionB),
+      /Unsupported task-scoped CDP method/,
+    );
+    held.get("hold-b-capability")({ result: { value: 44 } });
+    const [outcome] = await commandResult;
+    assert.equal(outcome.status, "fulfilled");
+    assert.equal(outcome.value.result.result.value, 44);
+    assert.equal(
+      calls.some((call) => call.method === "egoAutomated.enable"),
+      false,
+    );
+
     let began = waitStarted("hold-b-event");
     const pendingB = browserCdp(
       "Runtime.evaluate",

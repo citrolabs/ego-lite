@@ -153,6 +153,27 @@ export function taskSpaceCase() {
       "task.finish closes unlisted Agent Pages"
     );
     await completeTaskSpace(finishSpaceId, { keep: false });
+
+    const anchorTask = await taskSpace(taskName + " v2 finish after last close");
+    const anchorSpaceId = anchorTask.spaceId;
+    await anchorTask.page("p1").goto(baseUrl + "/secondary?v2-lifecycle=last-close");
+    await anchorTask.page("p1").close();
+    const anchorTabs = await anchorTask.tabs();
+    assertEqual(anchorTabs.length, 1, "closing the last Page leaves one anchor tab");
+    assertEqual(anchorTabs[0].openedBy, "agent", "the anchor tab is SDK-owned");
+    const afterAnchorPage = await anchorTask.newPage();
+    await afterAnchorPage.goto(baseUrl + "/secondary?v2-lifecycle=after-anchor");
+    const anchorReceipt = await anchorTask.finish({ keep: [] });
+    assertEqual(anchorReceipt.closedSpace, true, "finish closes a space that only holds the anchor and Agent Pages");
+    assertEqual(anchorReceipt.preservedUnmanagedCount, 0, "the anchor tab is not reported as protected");
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      if (!(await listTaskSpaces()).some((space) => space.id === anchorSpaceId)) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert(
+      !(await listTaskSpaces()).some((space) => space.id === anchorSpaceId),
+      "task.finish removes the space after the last Page was closed and reopened"
+    );
   `;
 }
 

@@ -12,7 +12,7 @@ export function egoSource(body, context) {
     keepTaskSpace,
   } = context;
   return `
-    const { readFile, stat, writeFile } = await import("node:fs/promises");
+    const { readFile, readdir, stat, writeFile } = await import("node:fs/promises");
     const { join } = await import("node:path");
     const { inflateSync } = await import("node:zlib");
     const taskName = ${JSON.stringify(taskName)};
@@ -31,6 +31,45 @@ export function egoSource(body, context) {
     // taskSpace() call; page-model reads these values lazily.
     process.env.EGO_BROWSER_STATE_DIR = join(tempDir, "runtime-state");
     process.env.EGO_BROWSER_PAGE_BUDGET = "3";
+
+    // Ledger files are scoped by browser instance (this isolated state
+    // directory belongs to the one Ego Lite instance under test) and
+    // versioned: every SDK write creates space-<id>@<instance>.<n>.json and
+    // removes the versions before it. The current ledger is the highest
+    // version that parses, and a path listed a moment ago may already be
+    // gone, so read through readPageLedger instead of holding on to a path.
+    async function pageLedgerVersions(spaceId) {
+      const stateDir = process.env.EGO_BROWSER_STATE_DIR;
+      const prefix = "space-" + spaceId + "@";
+      const names = await readdir(stateDir).catch(() => []);
+      return names
+        .filter((name) => name.startsWith(prefix) && name.endsWith(".json"))
+        .map((name) => ({
+          name,
+          seq: Number(/\\.(\\d+)\\.json$/.exec(name)?.[1] ?? 0),
+        }))
+        .sort((a, b) => b.seq - a.seq)
+        .map((entry) => join(stateDir, entry.name));
+    }
+
+    async function pageLedgerPath(spaceId) {
+      const [latest] = await pageLedgerVersions(spaceId);
+      assert(Boolean(latest), "a page ledger exists for space " + spaceId);
+      return latest;
+    }
+
+    async function readPageLedger(spaceId) {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        for (const path of await pageLedgerVersions(spaceId)) {
+          try {
+            return JSON.parse(await readFile(path, "utf8"));
+          } catch {
+            // Superseded between listing and reading, or still being written.
+          }
+        }
+      }
+      throw new Error("no readable page ledger for space " + spaceId);
+    }
 
     let __assertionCount = 0;
 
@@ -253,11 +292,45 @@ export function egoSource(body, context) {
       return tab;
     }
 
+    // Page ledgers persist across cases and the budget is three Pages. Record
+    // the Pages each space already had so a failed case can close only the
+    // Pages it opened instead of exhausting the budget for every later case.
+    // Read the ledger file: task.pages() can adopt the active tab as a Page.
+    const __pagesBeforeCase = new Map();
+    const __taskSpace = taskSpace;
+    taskSpace = async (...args) => {
+      const task = await __taskSpace(...args);
+      if (!__pagesBeforeCase.has(task.spaceId)) {
+        __pagesBeforeCase.set(task.spaceId, {
+          task,
+          targetIds: await ledgerTargetIds(task.spaceId),
+        });
+      }
+      return task;
+    };
+
+    async function ledgerTargetIds(spaceId) {
+      const ledger = await readPageLedger(spaceId).catch(() => ({}));
+      return new Set(
+        Object.values(ledger.pages || {}).map((page) => page.targetId)
+      );
+    }
+
+    async function closePagesOpenedByCase() {
+      for (const { task, targetIds } of __pagesBeforeCase.values()) {
+        const pages = await task.pages().catch(() => []);
+        for (const page of pages) {
+          if (!targetIds.has(page.targetId)) await page.close().catch(() => {});
+        }
+      }
+    }
+
     try {
       ${body}
       cliLog(JSON.stringify({ ok: true, assertions: __assertionCount }));
     } catch (error) {
       cliLog(JSON.stringify({ ok: false, assertions: __assertionCount, error: error.message }));
+      await closePagesOpenedByCase().catch(() => {});
       error.message = ${JSON.stringify("real browser e2e")} + ": " + error.message;
       throw error;
     }

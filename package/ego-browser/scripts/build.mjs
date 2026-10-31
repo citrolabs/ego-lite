@@ -6,6 +6,7 @@ import {
   readdir,
   readFile,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { builtinModules } from "node:module";
@@ -16,6 +17,8 @@ import { build } from "esbuild";
 import { rollup } from "rollup";
 import resolve from "@rollup/plugin-node-resolve";
 import typescript from "@rollup/plugin-typescript";
+
+import { guidePlatforms, renderGuide } from "./render-guide.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = dirname(dirname(root));
@@ -38,9 +41,19 @@ const entrySkillEntries = [
   "assets",
   "learnings",
 ];
-// Claude Code keeps 30,000 characters of command output; leave headroom.
-const maxGuideLength = 25_000;
 const buildLock = join(root, ".build.lock");
+
+// The pre-commit hooks build once and then run several checks that each start
+// with `npm run build`. They set this flag so those checks reuse that output.
+if (isTruthy(process.env.EGO_BROWSER_REUSE_BUILD)) {
+  if (await exists(bundledCli)) {
+    console.log(
+      `reusing the existing build at ${bundledCli} (EGO_BROWSER_REUSE_BUILD)`,
+    );
+    process.exit(0);
+  }
+  console.log("EGO_BROWSER_REUSE_BUILD is set but no build exists; building");
+}
 
 let lock;
 try {
@@ -103,11 +116,20 @@ try {
     absWorkingDir: root,
   });
 
+  // `SKILL.md` keeps every platform's passages, for launchers that do not
+  // pick a platform guide; `SKILL.<platform>.md` drops the others'.
   await mkdir(bundledGuideDir, { recursive: true });
+  const guideMarkdown = await readFile(guideSource, "utf8");
   await writeFile(
     join(bundledGuideDir, "SKILL.md"),
-    renderGuide(await readFile(guideSource, "utf8")),
+    renderGuide(guideMarkdown, { name: guideSource }),
   );
+  for (const platform of guidePlatforms) {
+    await writeFile(
+      join(bundledGuideDir, `SKILL.${platform}.md`),
+      renderGuide(guideMarkdown, { platform, name: guideSource }),
+    );
+  }
   for (const entry of entrySkillEntries) {
     await cp(
       join(entrySkillSourceDir, entry),
@@ -119,30 +141,6 @@ try {
 } finally {
   await lock.close();
   await rm(buildLock, { force: true });
-}
-
-// Replace the source frontmatter with the version line and end marker that
-// `ego-browser skill` prints verbatim; agents use the marker to detect truncation.
-function renderGuide(source) {
-  const match = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(source);
-  const version = match && /^version: "([^"]+)"$/m.exec(match[1])?.[1];
-  if (!version) {
-    throw new Error(`${guideSource} needs frontmatter with a version`);
-  }
-  const guide = [
-    `[ego-browser:skill] ego-browser usage guide v${version}`,
-    "",
-    match[2].trim(),
-    "",
-    `[ego-browser:skill] end of guide v${version}`,
-    "",
-  ].join("\n");
-  if (guide.length > maxGuideLength) {
-    throw new Error(
-      `the bundled usage guide is ${guide.length} characters; keep it under ${maxGuideLength} so agents do not truncate it`,
-    );
-  }
-  return guide;
 }
 
 async function tsEntryPoints(dirs) {
@@ -166,4 +164,17 @@ async function collectTsFiles(absDir, relativeDir) {
     }
   }
   return files;
+}
+
+function isTruthy(value) {
+  return value === "1" || value === "true";
+}
+
+async function exists(path) {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
 }

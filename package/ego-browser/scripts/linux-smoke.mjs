@@ -8,7 +8,8 @@ import { join, resolve } from "node:path";
 import { createServer } from "node:http";
 import { once } from "node:events";
 
-const headed = process.argv.includes("--headed");
+const realSession = process.argv.includes("--real-session");
+const headed = realSession || process.argv.includes("--headed");
 const root = await mkdtemp(join(tmpdir(), "ego-linux-smoke-"));
 const cli = resolve("dist/out/index.js");
 const env = {
@@ -62,7 +63,7 @@ function result(text) {
   return JSON.parse(text.split("\n").find((line) => line.startsWith("{")));
 }
 try {
-  if (headed) {
+  if (headed && !realSession) {
     xvfb = spawn(
       "Xvfb",
       ["-displayfd", "3", "-screen", "0", "1280x800x24", "-nolisten", "tcp"],
@@ -155,7 +156,8 @@ try {
     ),
   );
   assert.equal(security.foreign.error_code, "EGO_WEB_CONTENTS_UNAVAILABLE");
-  assert.equal(security.escape.error_code, "EGO_CDP_SEND_FAILED");
+  assert.equal(security.escape.id, 1);
+  assert.equal(security.escape.error.error_code, "EGO_CDP_SEND_FAILED");
   if (headed) {
     const handoff = result(
       await run(
@@ -193,7 +195,7 @@ try {
   ).then((text) => assert.deepEqual(result(text), { taskSpaces: [] }));
   finalReport = {
     status: "passed",
-    mode: headed ? "headed-xvfb" : "headless",
+    mode: realSession ? "headed-session" : headed ? "headed-xvfb" : "headless",
     checks: [
       "skill/nodejs",
       ".env activation",

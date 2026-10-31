@@ -1,7 +1,14 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { copyFile, mkdir, readdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import {
+  type Dirent,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { copyFile, mkdir, rm, stat } from "node:fs/promises";
 import { dirname, isAbsolute, join } from "node:path";
+import { runtimeStateDir } from "../env.js";
 
 type DownloadServices = {
   cdp(
@@ -35,13 +42,43 @@ export type DownloadInterception = {
   dispose(reason?: Error): Promise<void>;
 };
 
-const artifactDirectories = new Set<string>();
+// Chromium keeps one download behavior per BrowserContext, and every ego lite
+// TaskSpace shares one context, so Page.setDownloadBehavior from any Page, in
+// any ego-browser process, overrides the others: the most recent call wins
+// and "default" from one Page strips the directory from everyone. Downloads
+// therefore all use the same directory with Chromium's `allowAndName`
+// behavior, which names each file after its download guid. Re-applying the
+// identical setting is harmless, and a waiter finds its own file by guid no
+// matter which Page armed last. The behavior goes back to default only when
+// no process on this machine still waits for a download.
+const WAITERS_DIRECTORY = "waiters";
+const STALE_WAITER_MS = 60 * 60 * 1_000;
+const WAITER_REFRESH_MS = 10 * 60 * 1_000;
+const STALE_FILE_MS = 24 * 60 * 60 * 1_000;
+const FILE_POLL_INTERVAL_MS = 50;
+
+let sharedDirectory: string | undefined;
+let waiterRefreshTimer: ReturnType<typeof setInterval> | undefined;
+const ownedFiles = new Set<string>();
+const armedInterceptions = new Set<symbol>();
 const activeInterceptions = new Set<() => void>();
 const activeDownloadTargets = new Set<string>();
 
 /**
- * Arm one Page session for its next download without changing the shared
- * Chromium BrowserContext download behavior.
+ * The directory every ego-browser process on this machine downloads into.
+ * Files are named after their Chromium download guid.
+ */
+export function downloadDirectory(): string {
+  if (sharedDirectory) return sharedDirectory;
+  const directory = join(runtimeStateDir(), "downloads");
+  mkdirSync(join(directory, WAITERS_DIRECTORY), { recursive: true });
+  removeStaleFiles(directory);
+  sharedDirectory = directory;
+  return directory;
+}
+
+/**
+ * Arm one Page session for its next download.
  */
 export function preparePageDownload(
   services: DownloadServices,
@@ -52,11 +89,10 @@ export function preparePageDownload(
     throw new Error(`${targetId} is already waiting for a download`);
   }
   activeDownloadTargets.add(targetId);
-  const directory = mkdtempSync(join(tmpdir(), "ego-browser-download-"));
-  artifactDirectories.add(directory);
-  const directoryPromise = Promise.resolve(directory);
+  const token = Symbol(targetId);
   const configuredSessions = new Set<string>();
   let guid: string | undefined;
+  let filePath: string | undefined;
   let disposed = false;
   let settled = false;
   let filePollTimer: ReturnType<typeof setTimeout> | undefined;
@@ -72,10 +108,14 @@ export function preparePageDownload(
     resolveCompletion = resolve;
   });
 
-  const resetBehavior = async () => {
+  // Decide synchronously whether this waiter was the last one, and send the
+  // reset in the same tick, so a `ready()` that follows in this process always
+  // sends its setting after the reset.
+  const restoreBehavior = async () => {
     const sessions = [...configuredSessions];
     configuredSessions.clear();
-    await Promise.all(
+    if (!releaseSharedBehavior(token)) return;
+    const restored = await Promise.all(
       sessions.map((sessionId) =>
         services
           .cdp(
@@ -84,9 +124,29 @@ export function preparePageDownload(
             sessionId,
             1_000,
           )
-          .catch(() => {}),
+          .then(
+            () => sessionId,
+            () => undefined,
+          ),
       ),
     );
+    // Another process may have registered, and sent its setting, between the
+    // marker check and Chromium applying the reset; its setting then lost.
+    // The reset has been applied once its response is back, so a marker seen
+    // now belongs to a waiter whose later sends land after it, and one seen
+    // from before only needs the setting put back for it.
+    const session = restored.find((sessionId) => sessionId !== undefined);
+    if (!session || armedInterceptions.size > 0 || !hasOtherLiveWaiter()) {
+      return;
+    }
+    await services
+      .cdp(
+        "Page.setDownloadBehavior",
+        { behavior: "allowAndName", downloadPath: downloadDirectory() },
+        session,
+        1_000,
+      )
+      .catch(() => {});
   };
   const finish = async (result: DownloadCompletion) => {
     if (settled) return;
@@ -95,28 +155,34 @@ export function preparePageDownload(
     if (filePollTimer) clearTimeout(filePollTimer);
     unsubscribe();
     activeInterceptions.delete(disposeSynchronously);
-    await resetBehavior();
+    await restoreBehavior();
     activeDownloadTargets.delete(targetId);
     resolveCompletion(result);
   };
+  // Chromium writes `<guid>.crdownload` and renames it to `<guid>` once the
+  // download completes, so the final name appearing is the completion signal
+  // even when the final progress event never arrives.
   const checkForDownloadedFile = async () => {
     filePollTimer = undefined;
-    if (disposed || settled || !guid) return;
+    if (disposed || settled || !filePath) return;
     try {
-      const path = await directoryPromise.then(findDownloadedFile);
-      if (path) {
-        await finish({ path, failure: null });
+      await stat(filePath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+        scheduleFileCheck();
         return;
       }
-    } catch (error) {
       await finish({ failure: asError(error).message });
       return;
     }
-    scheduleFileCheck();
+    await finish({ path: filePath, failure: null });
   };
   const scheduleFileCheck = () => {
     if (disposed || settled || filePollTimer) return;
-    filePollTimer = setTimeout(() => void checkForDownloadedFile(), 50);
+    filePollTimer = setTimeout(
+      () => void checkForDownloadedFile(),
+      FILE_POLL_INTERVAL_MS,
+    );
   };
   const onEvent = (message: any) => {
     const params = message?.params;
@@ -129,6 +195,8 @@ export function preparePageDownload(
         return;
       }
       guid = params.guid;
+      filePath = join(downloadDirectory(), params.guid);
+      ownedFiles.add(filePath);
       clearTimeout(timer);
       resolveEvent(
         new PageDownloadArtifact(
@@ -137,7 +205,7 @@ export function preparePageDownload(
           params.guid,
           params.url,
           params.suggestedFilename,
-          directoryPromise,
+          filePath,
           completion,
         ),
       );
@@ -163,7 +231,7 @@ export function preparePageDownload(
     if (filePollTimer) clearTimeout(filePollTimer);
     unsubscribe();
     activeDownloadTargets.delete(targetId);
-    void resetBehavior();
+    void restoreBehavior();
     rejectEvent(new Error("download waiter was disposed"));
     resolveCompletion({ failure: "download waiter was disposed" });
   };
@@ -174,7 +242,7 @@ export function preparePageDownload(
     unsubscribe();
     activeInterceptions.delete(disposeSynchronously);
     void (async () => {
-      await resetBehavior();
+      await restoreBehavior();
       activeDownloadTargets.delete(targetId);
       rejectEvent(
         new Error(
@@ -182,7 +250,6 @@ export function preparePageDownload(
         ),
       );
       resolveCompletion({ failure: "download did not start" });
-      await directoryPromise.then(removeArtifactDirectory);
     })();
   }, timeoutMs);
 
@@ -191,13 +258,16 @@ export function preparePageDownload(
       if (disposed || settled) {
         throw new Error("download waiter is no longer active");
       }
-      const downloadPath = await directoryPromise;
+      const downloadPath = downloadDirectory();
+      // Register the session before sending: a rejected call (a timeout, say)
+      // may still have been applied, and the restore must reach that session.
+      configuredSessions.add(sessionId);
+      claimSharedBehavior(token);
       await services.cdp(
         "Page.setDownloadBehavior",
-        { behavior: "allow", downloadPath },
+        { behavior: "allowAndName", downloadPath },
         sessionId,
       );
-      configuredSessions.add(sessionId);
     },
     event,
     async dispose(reason = new Error("download waiter was disposed")) {
@@ -207,11 +277,10 @@ export function preparePageDownload(
       if (filePollTimer) clearTimeout(filePollTimer);
       unsubscribe();
       activeInterceptions.delete(disposeSynchronously);
-      await resetBehavior();
+      await restoreBehavior();
       activeDownloadTargets.delete(targetId);
       rejectEvent(reason);
       resolveCompletion({ failure: reason.message });
-      await directoryPromise.then(removeArtifactDirectory);
     },
   };
 }
@@ -223,7 +292,7 @@ class PageDownloadArtifact implements DownloadArtifact {
   readonly #services: DownloadServices;
   readonly #targetId: string;
   readonly #guid: string;
-  readonly #directory: Promise<string>;
+  readonly #filePath: string;
   readonly #completion: Promise<DownloadCompletion>;
   #completionResult?: DownloadCompletion;
 
@@ -233,7 +302,7 @@ class PageDownloadArtifact implements DownloadArtifact {
     guid: string,
     url: string,
     suggestedFilename: string,
-    directory: Promise<string>,
+    filePath: string,
     completion: Promise<DownloadCompletion>,
   ) {
     this.#services = services;
@@ -241,7 +310,7 @@ class PageDownloadArtifact implements DownloadArtifact {
     this.#guid = guid;
     this.url = url;
     this.suggestedFilename = suggestedFilename;
-    this.#directory = directory;
+    this.#filePath = filePath;
     this.#completion = completion;
     this.finished = completion.then((result) => {
       this.#completionResult = result;
@@ -286,28 +355,111 @@ class PageDownloadArtifact implements DownloadArtifact {
 
   async delete(): Promise<void> {
     await this.#completion;
-    await removeArtifactDirectory(await this.#directory);
+    ownedFiles.delete(this.#filePath);
+    await rm(this.#filePath, { force: true });
   }
 }
 
-async function findDownloadedFile(
-  directory: string,
-): Promise<string | undefined> {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const files = entries.filter(
-    (entry) => entry.isFile() && !entry.name.endsWith(".crdownload"),
-  );
-  if (files.length > 1) {
-    throw new Error(
-      `download completed with ${files.length} files in its temporary directory`,
+// Every process that waits for a download leaves `waiters/<pid>` in the shared
+// directory while it waits. The last live waiter restores the default
+// behavior; the others leave it alone so their downloads keep landing here.
+// A marker is rewritten while its process waits, so one that stopped aging
+// belongs to a process that died and whose pid another process now holds.
+function claimSharedBehavior(token: symbol): void {
+  armedInterceptions.add(token);
+  writeWaiterMarker();
+  if (!waiterRefreshTimer) {
+    waiterRefreshTimer = setInterval(writeWaiterMarker, WAITER_REFRESH_MS);
+    waiterRefreshTimer.unref?.();
+  }
+}
+
+function releaseSharedBehavior(token: symbol): boolean {
+  armedInterceptions.delete(token);
+  if (armedInterceptions.size > 0) return false;
+  stopWaiterMarker();
+  return !hasOtherLiveWaiter();
+}
+
+function writeWaiterMarker(): void {
+  try {
+    writeFileSync(
+      waiterMarkerPath(),
+      JSON.stringify({ pid: process.pid, since: Date.now() }),
     );
+  } catch {
+    // A read-only state directory only loses cross-process coordination.
   }
-  return files.length === 1 ? join(directory, files[0].name) : undefined;
 }
 
-async function removeArtifactDirectory(directory: string): Promise<void> {
-  artifactDirectories.delete(directory);
-  await rm(directory, { recursive: true, force: true });
+function stopWaiterMarker(): void {
+  if (waiterRefreshTimer) clearInterval(waiterRefreshTimer);
+  waiterRefreshTimer = undefined;
+  rmSync(waiterMarkerPath(), { force: true });
+}
+
+function waiterMarkerPath(): string {
+  return join(downloadDirectory(), WAITERS_DIRECTORY, String(process.pid));
+}
+
+function hasOtherLiveWaiter(): boolean {
+  const waitersDirectory = join(downloadDirectory(), WAITERS_DIRECTORY);
+  let names: string[];
+  try {
+    names = readdirSync(waitersDirectory);
+  } catch {
+    return false;
+  }
+  const now = Date.now();
+  for (const name of names) {
+    const path = join(waitersDirectory, name);
+    const pid = Number(name);
+    if (pid === process.pid) continue;
+    let stale = !Number.isInteger(pid) || !isProcessAlive(pid);
+    if (!stale) {
+      try {
+        stale = now - statSync(path).mtimeMs > STALE_WAITER_MS;
+      } catch {
+        continue;
+      }
+    }
+    if (stale) {
+      rmSync(path, { force: true });
+      continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code === "EPERM";
+  }
+}
+
+// Files a process could not clean up (a crash mid-download) would otherwise
+// stay forever; anything older than a day is nobody's pending download.
+function removeStaleFiles(directory: string): void {
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  const cutoff = Date.now() - STALE_FILE_MS;
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const path = join(directory, entry.name);
+    try {
+      if (statSync(path).mtimeMs < cutoff) rmSync(path, { force: true });
+    } catch {
+      // Another process may have removed it first.
+    }
+  }
 }
 
 function assertAbsolutePath(path: string, method: string): void {
@@ -320,13 +472,18 @@ function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
-/** Remove round-local files and stop pending waits during SDK disposal. */
+/** Remove this process's download files and stop pending waits during SDK disposal. */
 export function disposeDownloadArtifacts(): void {
   for (const dispose of [...activeInterceptions]) dispose();
   activeInterceptions.clear();
   activeDownloadTargets.clear();
-  for (const directory of artifactDirectories) {
-    rmSync(directory, { recursive: true, force: true });
+  if (armedInterceptions.size > 0) {
+    armedInterceptions.clear();
+    if (sharedDirectory) stopWaiterMarker();
   }
-  artifactDirectories.clear();
+  for (const path of ownedFiles) {
+    rmSync(path, { force: true });
+    rmSync(`${path}.crdownload`, { force: true });
+  }
+  ownedFiles.clear();
 }

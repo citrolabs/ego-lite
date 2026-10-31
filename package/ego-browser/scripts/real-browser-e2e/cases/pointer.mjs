@@ -221,6 +221,25 @@ export function pointerCase() {
       "window.__fixtureState.pointerEvents"
     );
 
+    /* raw selector inside the fixture iframe: the v1 helper resolves raw
+       selectors in the top document only (no iframe session search), so the
+       combined resolve-and-probe fast path must hand a miss to the shared
+       resolver, which reports it with the same wording as before, and the
+       next top-document click must still work. */
+    cliLog(JSON.stringify({ pointerStep: "selector inside iframe" }));
+    await assertRejects(
+      () => click("#iframe-action"),
+      "Element not found: #iframe-action",
+      "a raw selector that only matches inside the iframe is reported by the shared resolver"
+    );
+    const afterMissBefore = await js("return window.__fixtureState.clicks");
+    await click("#click-button");
+    await waitForJsValue(
+      "window.__fixtureState.clicks",
+      afterMissBefore + 1,
+      "a top-document click still works after the fast path missed"
+    );
+
     /* checkbox toggle */
     cliLog(JSON.stringify({ pointerStep: "checkbox" }));
     await js("document.querySelector('#checkbox').checked = false; window.__fixtureState.checkboxChecked = false; return true;");

@@ -162,6 +162,14 @@ export async function connectHost(start = true): Promise<LinuxClient> {
     socket = await connect(socketPath);
   } catch (error) {
     if (!start || !["ENOENT", "ECONNREFUSED"].includes(error.code)) throw error;
+    if (
+      process.env.EGO_LINUX_HEADLESS === "0" &&
+      !process.env.DISPLAY &&
+      !process.env.WAYLAND_DISPLAY
+    )
+      throw new Error(
+        "Headed Linux Chrome requires DISPLAY or WAYLAND_DISPLAY; run from a desktop session or set EGO_LINUX_HEADLESS=1 for headless mode (without handoff)",
+      );
     if (error.code === "ECONNREFUSED") {
       const stale = await lstat(socketPath).catch(() => undefined);
       if (stale && (!stale.isSocket() || stale.uid !== process.getuid()))

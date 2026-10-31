@@ -28,7 +28,11 @@ export function recordUnhandledPage(notice: UnhandledPageNotice): void {
   for (const listener of [...pageNoticeListeners]) listener(merged);
 }
 
-/** Refresh the URL of an already-discovered Page without creating a new notice. */
+/**
+ * Refresh the URL of an already-discovered Page without creating a new notice.
+ * Listeners observe discoveries only: a popup waiter armed after the Page was
+ * discovered must not resolve with it when its URL settles later.
+ */
 export function refreshUnhandledPageNotice(
   spaceId: number,
   targetId: string,
@@ -37,7 +41,7 @@ export function refreshUnhandledPageNotice(
   const key = pageKey(spaceId, targetId);
   const existing = pendingPageNotices.get(key);
   if (!existing) return;
-  recordUnhandledPage({ ...existing, url });
+  pendingPageNotices.set(key, { ...existing, url });
 }
 
 /** Mark a Page as used during this round so it needs no further guidance. */

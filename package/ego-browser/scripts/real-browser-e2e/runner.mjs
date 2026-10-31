@@ -6,6 +6,12 @@ import { fileURLToPath } from "node:url";
 import { e2eCases } from "./cases/index.mjs";
 import { resolveEgoBrowserCli } from "./ego-browser-cli.mjs";
 import { egoSource } from "./ego-source.mjs";
+import {
+  computeE2eFingerprint,
+  isTruthyFlag,
+  readLastPass,
+  writeLastPass,
+} from "./fingerprint.mjs";
 import { closeFixtureServer, startFixtureServer } from "./fixture.mjs";
 import { runCommand } from "./run-command.mjs";
 
@@ -13,6 +19,16 @@ const runnerDir = dirname(fileURLToPath(import.meta.url));
 const packageDir = join(runnerDir, "..", "..");
 const egoBrowserSdkPath = join(packageDir, "dist", "out", "index.js");
 const egoBrowserArgs = ["nodejs", "--sdk-path", egoBrowserSdkPath];
+const sdkOutDir = join(packageDir, "dist", "out");
+// Last full pass, keyed by the inputs' fingerprint. Lives under node_modules so
+// `npm ci` and `npm run clean` never leave a stale record behind.
+const lastPassRecordPath = join(
+  packageDir,
+  "node_modules",
+  ".cache",
+  "ego-browser-real-e2e",
+  "last-pass.json",
+);
 
 export function parseOnlyCases(configured, availableCaseNames) {
   const raw = typeof configured === "string" ? configured.trim() : "";
@@ -67,9 +83,8 @@ export function parseOnlyCases(configured, availableCaseNames) {
 
 export async function runRealBrowserE2e() {
   const egoBrowserCli = resolveEgoBrowserCli();
-  const keepTaskSpace =
-    process.env.EGO_BROWSER_REAL_E2E_KEEP === "1" ||
-    process.env.EGO_BROWSER_REAL_E2E_KEEP === "true";
+  const keepTaskSpace = isTruthyFlag(process.env.EGO_BROWSER_REAL_E2E_KEEP);
+  const forceRun = isTruthyFlag(process.env.EGO_BROWSER_REAL_E2E_FORCE);
   const onlyCases = parseOnlyCases(
     process.env.EGO_BROWSER_REAL_E2E_ONLY,
     e2eCases.map((testCase) => testCase.name),
@@ -256,6 +271,22 @@ export async function runRealBrowserE2e() {
     await runCommand("npm", ["run", "build"], { cwd: packageDir });
     await stat(egoBrowserSdkPath);
 
+    const fingerprint = await computeE2eFingerprint({
+      inputDirs: [sdkOutDir, runnerDir],
+      cliPath: egoBrowserCli,
+    });
+    const isFullRun = onlyCases.size === 0;
+    if (isFullRun && !forceRun) {
+      const lastPass = await readLastPass(lastPassRecordPath);
+      if (lastPass?.fingerprint === fingerprint) {
+        console.log(
+          `== E2E skipped: the build, the suite, and the CLI are unchanged since the full pass at ${lastPass.passedAt} ==`,
+        );
+        console.log("set EGO_BROWSER_REAL_E2E_FORCE=1 to run it anyway");
+        return;
+      }
+    }
+
     tempDir = await mkdtemp(join(tmpdir(), "ego-browser-real-e2e-"));
     const artifactDir = join(tempDir, "artifacts");
     const uploadPath = join(tempDir, "fixture-upload.txt");
@@ -300,6 +331,12 @@ export async function runRealBrowserE2e() {
 
     if (!passed) {
       process.exitCode = 1;
+    } else if (isFullRun) {
+      await writeLastPass(lastPassRecordPath, {
+        fingerprint,
+        passedAt: new Date().toISOString(),
+        cli: egoBrowserCli,
+      });
     }
   } catch (error) {
     console.error(error?.stack || error?.message || String(error));

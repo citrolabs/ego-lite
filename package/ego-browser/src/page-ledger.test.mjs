@@ -1,6 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,6 +28,25 @@ async function withTempLedger(fn) {
   } finally {
     await rm(rootDir, { recursive: true, force: true });
   }
+}
+
+/** Parse the highest-numbered version of one ledger, e.g. base "space-5@browser-a". */
+async function readLatest(rootDir, base) {
+  const versions = (await readdir(rootDir))
+    .map((name) => ({
+      name,
+      seq: Number(new RegExp(`^${base}\\.(\\d+)\\.json$`).exec(name)?.[1]),
+    }))
+    .filter((file) => Number.isInteger(file.seq))
+    .sort((a, b) => b.seq - a.seq);
+  assert.ok(versions.length > 0, `no ledger version for ${base}`);
+  return JSON.parse(await readFile(join(rootDir, versions[0].name), "utf8"));
+}
+
+function sharingViolation(code, syscall) {
+  const error = new Error(`${code}: operation not permitted, ${syscall}`);
+  error.code = code;
+  return error;
 }
 
 test("page labels survive a new process and are never reused", async () => {
@@ -145,10 +171,79 @@ test("a reused space id starts conservatively in a new browser instance", async 
     assert.deepEqual(baseline.pages, {});
     assert.equal(baseline.unmanagedTargets["target-existing"], "unknown");
 
-    const persisted = JSON.parse(
-      await readFile(join(rootDir, "space-7.json"), "utf8"),
-    );
+    const persisted = await readLatest(rootDir, "space-7@browser-b");
     assert.equal(persisted.browserInstanceId, "browser-b");
+  });
+});
+
+test("concurrent browser instances keep separate ledgers for the same space id", async () => {
+  await withTempLedger(async (rootDir) => {
+    const browserA = new PageLedgerStore({
+      rootDir,
+      browserInstanceId: "browser-host:101",
+    });
+    const browserB = new PageLedgerStore({
+      rootDir,
+      browserInstanceId: "browser-host:202",
+    });
+
+    const pageA = await browserA.initializeCreatedSpace(1, "target-a");
+    const pageB = await browserB.initializeCreatedSpace(1, "target-b");
+    await browserB.addPage(1, "target-b2");
+    await browserA.addPage(1, "target-a2");
+
+    assert.deepEqual(await browserA.getPage(1, "p1"), pageA);
+    assert.deepEqual(await browserB.getPage(1, "p1"), pageB);
+    assert.equal((await browserA.getPage(1, "p2")).targetId, "target-a2");
+    assert.equal((await browserB.getPage(1, "p2")).targetId, "target-b2");
+
+    await browserB.discard(1);
+    assert.deepEqual(await browserA.getPage(1, "p1"), pageA);
+    assert.deepEqual((await readdir(rootDir)).sort(), [
+      "space-1@browser-host-101.2.json",
+    ]);
+  });
+});
+
+test("a shared-name ledger from this browser instance moves to its own file", async () => {
+  await withTempLedger(async (rootDir) => {
+    const legacyPath = join(rootDir, "space-7.json");
+    await writeFile(
+      legacyPath,
+      JSON.stringify({
+        browserInstanceId: "browser-host:101",
+        spaceId: 7,
+        nextLabel: 2,
+        usedLabels: ["p1"],
+        releasedLabels: [],
+        initialized: true,
+        userControlPending: false,
+        unmanagedTargets: {},
+        pages: {
+          p1: { targetId: "target-live", openedBy: "agent" },
+        },
+      }),
+    );
+
+    const otherBrowser = new PageLedgerStore({
+      rootDir,
+      browserInstanceId: "browser-host:202",
+    });
+    assert.deepEqual((await otherBrowser.read(7)).pages, {});
+    await readFile(legacyPath, "utf8");
+
+    const sameBrowser = new PageLedgerStore({
+      rootDir,
+      browserInstanceId: "browser-host:101",
+    });
+    assert.equal((await sameBrowser.getPage(7, "p1")).targetId, "target-live");
+    await assert.rejects(() => readFile(legacyPath, "utf8"), {
+      code: "ENOENT",
+    });
+    assert.equal(
+      (await readLatest(rootDir, "space-7@browser-host-101")).pages.p1.targetId,
+      "target-live",
+    );
   });
 });
 
@@ -181,9 +276,10 @@ test("a ledger from before instance ids is preserved and backfilled", async () =
       openedBy: "agent",
     });
     assert.equal(
-      JSON.parse(await readFile(path, "utf8")).browserInstanceId,
+      (await readLatest(rootDir, "space-7@browser-current")).browserInstanceId,
       "browser-current",
     );
+    await assert.rejects(() => readFile(path, "utf8"), { code: "ENOENT" });
   });
 });
 
@@ -205,6 +301,12 @@ test("expired ledgers from other browser instances are removed", async () => {
       }),
     );
     await utimes(stalePath, new Date(0), new Date(0));
+    const staleVersionPath = join(rootDir, "space-98@browser-a.3.json");
+    await writeFile(
+      staleVersionPath,
+      JSON.stringify({ browserInstanceId: "browser-a", spaceId: 98 }),
+    );
+    await utimes(staleVersionPath, new Date(0), new Date(0));
 
     const secondBrowser = new PageLedgerStore({
       rootDir,
@@ -215,6 +317,9 @@ test("expired ledgers from other browser instances are removed", async () => {
     await secondBrowser.read(7);
 
     await assert.rejects(() => readFile(stalePath, "utf8"), {
+      code: "ENOENT",
+    });
+    await assert.rejects(() => readFile(staleVersionPath, "utf8"), {
       code: "ENOENT",
     });
   });
@@ -234,14 +339,12 @@ test("custom labels share the permanent used-label namespace", async () => {
   });
 });
 
-test("writes use a complete atomic ledger document", async () => {
+test("writes use a complete ledger document", async () => {
   await withTempLedger(async (rootDir) => {
     const store = new PageLedgerStore({ rootDir });
     await store.addPage(5, "target-a");
 
-    const parsed = JSON.parse(
-      await readFile(join(rootDir, "space-5.json"), "utf8"),
-    );
+    const parsed = await readLatest(rootDir, "space-5");
     assert.deepEqual(parsed, {
       spaceId: 5,
       nextLabel: 2,
@@ -257,6 +360,215 @@ test("writes use a complete atomic ledger document", async () => {
         },
       },
     });
+  });
+});
+
+test("each write creates a new version and removes the superseded ones", async () => {
+  await withTempLedger(async (rootDir) => {
+    const store = new PageLedgerStore({ rootDir });
+    await store.addPage(5, "target-a");
+    assert.deepEqual(await readdir(rootDir), ["space-5.1.json"]);
+
+    await store.addPage(5, "target-b");
+    assert.deepEqual(await readdir(rootDir), ["space-5.2.json"]);
+    assert.deepEqual(
+      Object.keys((await readLatest(rootDir, "space-5")).pages),
+      ["p1", "p2"],
+    );
+  });
+});
+
+test("a superseded version held open by another process is left behind and ignored", async () => {
+  await withTempLedger(async (rootDir) => {
+    // Windows refuses to delete (or rename over) a file that another process
+    // holds without delete sharing. Only the removal is affected: the next
+    // version is still created, and readers pick it up.
+    let held;
+    const store = new PageLedgerStore({
+      rootDir,
+      remove: async (path) => {
+        if (path === held) throw sharingViolation("EBUSY", "unlink");
+        await rm(path, { force: true });
+      },
+    });
+    await store.addPage(5, "target-a");
+    held = join(rootDir, "space-5.1.json");
+
+    const page = await store.addPage(5, "target-b");
+
+    assert.equal(page.label, "p2");
+    assert.deepEqual((await readdir(rootDir)).sort(), [
+      "space-5.1.json",
+      "space-5.2.json",
+    ]);
+    const nextRound = new PageLedgerStore({ rootDir });
+    assert.deepEqual(Object.keys((await nextRound.read(5)).pages), [
+      "p1",
+      "p2",
+    ]);
+
+    held = undefined;
+    await store.addPage(5, "target-c");
+    assert.deepEqual(await readdir(rootDir), ["space-5.3.json"]);
+  });
+});
+
+test("a version that is gone or still being written falls back to the previous one", async () => {
+  await withTempLedger(async (rootDir) => {
+    const store = new PageLedgerStore({ rootDir });
+    await store.addPage(5, "target-a");
+    await writeFile(
+      join(rootDir, "space-5.2.json"),
+      '{"spaceId": 5, "nextLabel": 3, "usedLabels": ["p1", "p2"], "pages": {',
+    );
+
+    assert.deepEqual(Object.keys((await store.read(5)).pages), ["p1"]);
+
+    const page = await store.addPage(5, "target-b");
+    assert.equal(page.label, "p2");
+    assert.deepEqual(await readdir(rootDir), ["space-5.3.json"]);
+  });
+});
+
+/** A store whose reads of `locked.path` fail with `code` until `locked.until` attempts. */
+function lockedStore(rootDir, locked, options = {}) {
+  const sleeps = [];
+  const store = new PageLedgerStore({
+    ...options,
+    rootDir,
+    read: async (path) => {
+      if (path === locked.path && locked.attempts++ < locked.until) {
+        throw sharingViolation(locked.code, "open");
+      }
+      return readFile(path, "utf8");
+    },
+    sleep: async (ms) => {
+      sleeps.push(ms);
+    },
+  });
+  return { store, sleeps };
+}
+
+test("a current version held open by another process is reported, never replaced", async () => {
+  await withTempLedger(async (rootDir) => {
+    // Windows refuses to open a file that another process holds without read
+    // sharing (EBUSY/EPERM/EACCES). That version is still the current ledger:
+    // reading past it would lose every Page label, and writing the resulting
+    // empty ledger as the next version would make the loss permanent.
+    const locked = {
+      path: undefined,
+      attempts: 0,
+      until: Infinity,
+      code: "EBUSY",
+    };
+    const { store, sleeps } = lockedStore(rootDir, locked);
+    await store.addPage(5, "target-a");
+    await store.addPage(5, "target-b");
+    locked.path = join(rootDir, "space-5.2.json");
+
+    await assert.rejects(
+      () => store.read(5),
+      /^LedgerLockedError: cannot read page ledger .*space-5\.2\.json: EBUSY: .*Another process holds the file open/,
+    );
+    await assert.rejects(() => store.addPage(5, "target-c"), /EBUSY/);
+    await assert.rejects(() => store.getPage(5, "p1"), /EBUSY/);
+
+    assert.deepEqual(await readdir(rootDir), ["space-5.2.json"]);
+    assert.equal(sleeps.length, 30, "ten retries per load");
+    assert.deepEqual(sleeps.slice(0, 6), [20, 40, 80, 160, 250, 250]);
+
+    locked.until = 0;
+    assert.deepEqual(Object.keys((await store.read(5)).pages), ["p1", "p2"]);
+    assert.equal((await store.addPage(5, "target-c")).label, "p3");
+    assert.deepEqual(await readdir(rootDir), ["space-5.3.json"]);
+  });
+});
+
+test("a current version held open briefly is read once it is released", async () => {
+  await withTempLedger(async (rootDir) => {
+    const locked = { path: undefined, attempts: 0, until: 3, code: "EPERM" };
+    const { store, sleeps } = lockedStore(rootDir, locked);
+    await store.addPage(5, "target-a");
+    locked.path = join(rootDir, "space-5.1.json");
+
+    const page = await store.addPage(5, "target-b");
+
+    assert.equal(page.label, "p2");
+    assert.deepEqual(sleeps, [20, 40, 80]);
+    assert.deepEqual(await readdir(rootDir), ["space-5.2.json"]);
+  });
+});
+
+test("a locked shared-name ledger is not migrated to an empty one", async () => {
+  await withTempLedger(async (rootDir) => {
+    await writeFile(
+      join(rootDir, "space-5.json"),
+      JSON.stringify({
+        browserInstanceId: "browser-a",
+        spaceId: 5,
+        nextLabel: 2,
+        usedLabels: ["p1"],
+        pages: { p1: { targetId: "target-a", openedBy: "agent" } },
+      }),
+    );
+    const locked = {
+      path: join(rootDir, "space-5.json"),
+      attempts: 0,
+      until: Infinity,
+      code: "EACCES",
+    };
+    const { store } = lockedStore(rootDir, locked, {
+      browserInstanceId: "browser-a",
+    });
+
+    await assert.rejects(
+      () => store.read(5),
+      /cannot read page ledger .*EACCES/,
+    );
+
+    assert.deepEqual(await readdir(rootDir), ["space-5.json"]);
+    locked.until = 0;
+    assert.deepEqual(Object.keys((await store.read(5)).pages), ["p1"]);
+  });
+});
+
+test("concurrent writers never lose each other's update", async () => {
+  await withTempLedger(async (rootDir) => {
+    const roundA = new PageLedgerStore({ rootDir });
+    const roundB = new PageLedgerStore({ rootDir });
+    await roundA.addPage(5, "target-seed");
+
+    const [pageA, pageB] = await Promise.all([
+      roundA.addPage(5, "target-a"),
+      roundB.addPage(5, "target-b"),
+    ]);
+
+    assert.notEqual(pageA.label, pageB.label);
+    const ledger = await roundA.read(5);
+    assert.deepEqual(
+      Object.values(ledger.pages)
+        .map((page) => page.targetId)
+        .sort(),
+      ["target-a", "target-b", "target-seed"],
+    );
+    assert.deepEqual(ledger.usedLabels, ["p1", "p2", "p3"]);
+    assert.deepEqual(await readdir(rootDir), ["space-5.3.json"]);
+  });
+});
+
+test("discard tolerates a version that cannot be removed yet", async () => {
+  await withTempLedger(async (rootDir) => {
+    const store = new PageLedgerStore({
+      rootDir,
+      remove: async () => {
+        throw sharingViolation("EPERM", "unlink");
+      },
+    });
+    await store.addPage(5, "target-a");
+
+    await store.discard(5);
+
+    assert.deepEqual(await readdir(rootDir), ["space-5.1.json"]);
   });
 });
 
@@ -294,7 +606,8 @@ test("old ledger metadata is accepted and removed on the next write", async () =
     });
     await store.addPage(12, "target-new");
 
-    const persisted = JSON.parse(await readFile(path, "utf8"));
+    await assert.rejects(() => readFile(path, "utf8"), { code: "ENOENT" });
+    const persisted = await readLatest(rootDir, "space-12");
     assert.equal(Object.hasOwn(persisted, "version"), false);
     assert.equal(Object.hasOwn(persisted, "writerRound"), false);
     assert.equal(Object.hasOwn(persisted, "touchedAt"), false);
@@ -329,7 +642,7 @@ test("old handoff baselines migrate to a pending user-control boundary", async (
     await store.reconcile(13, ["target-agent", "target-user"], {
       autoAdoptNew: true,
     });
-    const persisted = JSON.parse(await readFile(path, "utf8"));
+    const persisted = await readLatest(rootDir, "space-13");
     assert.equal(persisted.userControlPending, false);
     assert.equal(Object.hasOwn(persisted, "handoffBaseline"), false);
     assert.equal(persisted.unmanagedTargets["target-user"], "unknown");
@@ -505,13 +818,13 @@ test("an explicitly unmanaged anchor is not adopted during reconciliation", asyn
   await withTempLedger(async (rootDir) => {
     const store = new PageLedgerStore({ rootDir });
     await store.reconcile(10, [], { autoAdoptNew: true });
-    await store.keepUnmanaged(10, "target-anchor", "unknown");
+    await store.keepUnmanaged(10, "target-anchor", "agent");
 
     const reconciled = await store.reconcile(10, ["target-anchor"], {
       autoAdoptNew: true,
     });
 
     assert.deepEqual(reconciled.pages, {});
-    assert.equal(reconciled.unmanagedTargets["target-anchor"], "unknown");
+    assert.equal(reconciled.unmanagedTargets["target-anchor"], "agent");
   });
 });

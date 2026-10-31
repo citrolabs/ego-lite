@@ -2,11 +2,7 @@ export function pageDelayedPopupScheduleCase() {
   return `
     const task = await taskSpace(taskName);
     const source = await newPageAt(task, baseUrl + "/?delayed-popup=schedule");
-    const ledgerPath = join(
-      process.env.EGO_BROWSER_STATE_DIR,
-      "space-" + task.spaceId + ".json"
-    );
-    const beforeLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
+    const beforeLedger = await readPageLedger(task.spaceId);
     await writeFile(
       join(tempDir, "delayed-popup-state.json"),
       JSON.stringify({
@@ -43,12 +39,7 @@ export function pageDelayedPopupResumeCase() {
     const source = task.page(saved.sourceLabel);
     await source.waitForTimeout(1_000);
     const beforeTargets = new Set(saved.beforeTargets);
-    const ledger = JSON.parse(
-      await readFile(
-        join(process.env.EGO_BROWSER_STATE_DIR, "space-" + task.spaceId + ".json"),
-        "utf8"
-      )
-    );
+    const ledger = await readPageLedger(task.spaceId);
     const delayedPopup = Object.entries(ledger.pages).find(
       ([, entry]) => !beforeTargets.has(entry.targetId)
     );

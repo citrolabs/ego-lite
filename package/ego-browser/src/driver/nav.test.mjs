@@ -231,6 +231,7 @@ test("browser runtime continuously enables Page and Network events", async () =>
       sent.map((request) => request.method),
       [
         "Target.attachToTarget",
+        "egoAutomated.enable",
         "Page.enable",
         "Network.enable",
         "Target.setAutoAttach",
@@ -239,15 +240,12 @@ test("browser runtime continuously enables Page and Network events", async () =>
     );
     assert.equal(sent[1].sessionId, "session-1");
     assert.equal(sent[2].sessionId, "session-1");
-    assert.deepEqual(sent[3].params, {
+    assert.equal(sent[3].sessionId, "session-1");
+    assert.deepEqual(sent[4].params, {
       autoAttach: true,
       waitForDebuggerOnStart: true,
       flatten: true,
-      filter: [
-        { type: "iframe", exclude: false },
-        { type: "worker", exclude: false },
-        { exclude: true },
-      ],
+      filter: [{}],
     });
 
     runtime.emit("Page.javascriptDialogOpening", {

@@ -54,7 +54,12 @@ export async function installEgoLinux(): Promise<void> {
           );
         })
         .catch((error) => {
-          if (error.error_code && space === selected)
+          // Command rejection has an id; only task/transport failures fan out.
+          if (
+            error.error_code &&
+            error.error_code !== "EGO_CDP_SEND_FAILED" &&
+            space === selected
+          )
             ego.onSendCDPMessageError?.(error.message, error.error_code);
           else
             ego.onCDPMessage?.(
@@ -63,6 +68,7 @@ export async function installEgoLinux(): Promise<void> {
                 error: {
                   message: `${message.method}: ${error.message}`,
                   code: error.code,
+                  error_code: error.error_code,
                 },
                 ...(message.sessionId ? { sessionId: message.sessionId } : {}),
               }),
