@@ -95,6 +95,7 @@ export async function triage(issue, record) {
     cwd: config.repoRoot,
     runDir: dir,
     label: "triage",
+    identifier: record.identifier,
     allowedTools: [
       "Read",
       "Grep",

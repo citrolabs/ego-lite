@@ -7,7 +7,7 @@ import { test } from "node:test";
 process.env.AUTOFIX_STATE_DIR = fs.mkdtempSync(
   path.join(os.tmpdir(), "linear-autofix-test-"),
 );
-const { byPriority, reconcile } = await import("./tick.mjs");
+const { byPriority, reconcile, stageCounts } = await import("./tick.mjs");
 const state = await import("./state.mjs");
 
 const issue = (identifier, extra = {}) => ({
@@ -124,4 +124,12 @@ test("identifiers are validated before they become paths", () => {
   );
   assert.equal(state.assertIdentifier("CL-556"), "CL-556");
   assert.equal(state.assertIdentifier("CITRO-2908"), "CITRO-2908");
+});
+
+test("stageCounts summarizes the stages for the log", () => {
+  assert.equal(
+    stageCounts([{ stage: "new" }, { stage: "in_review" }, { stage: "new" }]),
+    "new 2, in_review 1",
+  );
+  assert.equal(stageCounts([]), "none");
 });

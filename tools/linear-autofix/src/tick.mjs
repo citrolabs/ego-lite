@@ -56,6 +56,22 @@ export function reconcile(record, issue) {
   return record;
 }
 
+/** "in_review 2, new 1" for the log. Pure. */
+export function stageCounts(records) {
+  const counts = new Map();
+  for (const r of records) counts.set(r.stage, (counts.get(r.stage) ?? 0) + 1);
+  return [...counts].map(([stage, n]) => `${stage} ${n}`).join(", ") || "none";
+}
+
+/** Prefix console output with the local time, so a quiet stretch is visible as one. */
+export function timestampLogs() {
+  for (const method of ["log", "warn", "error"]) {
+    const original = console[method].bind(console);
+    console[method] = (...args) =>
+      original(new Date().toLocaleString("sv"), ...args);
+  }
+}
+
 async function guarded(record, fn) {
   try {
     await fn();
@@ -100,6 +116,7 @@ export async function tick() {
       issue,
       record: reconcile(upsertFromIssue(issue), issue),
     }));
+    console.log(`stages: ${stageCounts(work.map((w) => w.record))}`);
 
     // 1. Review loops first: cheap checks that may finish a PR.
     for (const { issue, record } of work.filter(
@@ -170,6 +187,9 @@ export async function tick() {
       error: failure,
     });
     releaseLock();
+    console.log(
+      `tick finished in ${Math.round((Date.now() - startedAt) / 1000)} s`,
+    );
   }
 }
 

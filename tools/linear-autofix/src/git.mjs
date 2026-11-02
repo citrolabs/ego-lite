@@ -180,6 +180,7 @@ export async function push(dir, branch, { skipHookE2e = false } = {}) {
     );
     return;
   }
+  console.log(`git push ${branch}`);
   await gitIn(dir, ["push", "--set-upstream", config.remote, branch], {
     timeoutMs: config.pushTimeoutMs,
     env: skipHookE2e ? { LEFTHOOK_EXCLUDE: "e2e-test" } : {},
@@ -204,6 +205,7 @@ export async function remoteSha(dir, branch) {
 export async function installDeps(dir) {
   const pkg = `${dir}/${config.packageDir}`;
   if (fs.existsSync(`${pkg}/node_modules/.bin/prettier`)) return;
+  console.log(`npm ci in ${pkg}`);
   await run("npm", ["ci", "--no-audit", "--no-fund"], {
     cwd: pkg,
     timeoutMs: 15 * 60_000,

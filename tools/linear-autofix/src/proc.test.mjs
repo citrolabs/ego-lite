@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { run, ProcessError } from "./proc.mjs";
+import { lineSplitter, run, ProcessError } from "./proc.mjs";
 
 const alive = (pid) => {
   try {
@@ -52,4 +52,30 @@ test("a timeout kills the child's descendants too", async () => {
     false,
     "background sleep should have been killed with the group",
   );
+});
+
+test("run shows complete output lines from both streams as they arrive", async () => {
+  const lines = [];
+  await run(
+    "sh",
+    ["-c", "printf 'a\\nb'; printf 'err\\n' >&2; sleep 0.1; printf 'c\\n'"],
+    { onLine: (line) => lines.push(line) },
+  );
+  assert.deepEqual(lines.sort(), ["a", "bc", "err"]);
+});
+
+test("lineSplitter survives a callback that throws", () => {
+  const seen = [];
+  const original = console.error;
+  console.error = () => {};
+  try {
+    const feed = lineSplitter((line) => {
+      seen.push(line);
+      throw new Error("boom");
+    });
+    feed("x\ny\n");
+  } finally {
+    console.error = original;
+  }
+  assert.deepEqual(seen, ["x", "y"]);
 });

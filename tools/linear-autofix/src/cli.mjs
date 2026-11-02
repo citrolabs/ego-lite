@@ -16,7 +16,7 @@ import {
 } from "./state.mjs";
 import * as git from "./git.mjs";
 import * as github from "./github.mjs";
-import { daemon, reconcile, tick } from "./tick.mjs";
+import { daemon, reconcile, tick, timestampLogs } from "./tick.mjs";
 import { triage } from "./triage.mjs";
 import { implement, publish } from "./implement.mjs";
 import { review } from "./review.mjs";
@@ -155,8 +155,10 @@ function status() {
 async function main([command, arg]) {
   switch (command) {
     case "tick":
+      timestampLogs();
       return tick();
     case "daemon":
+      timestampLogs();
       return daemon();
     case "triage": {
       const { issue, record } = await one(arg);

@@ -63,11 +63,18 @@ export function failedCases(results) {
 async function runSuite(dir, excluded, only) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "autofix-e2e-"));
   const resultsFile = path.join(tmp, "results.json");
+  const started = Date.now();
+  console.log(
+    `E2E started: ${only.length} case(s)${excluded.length ? `, ${excluded.length} excluded` : ""}, in ${dir}`,
+  );
   try {
     const result = await run("npm", ["run", "e2e"], {
       cwd: path.join(dir, config.packageDir),
       timeoutMs: config.pushTimeoutMs,
       allowFailure: true,
+      onLine: (line) => {
+        if (line.startsWith("[FAIL]")) console.log(`E2E ${line.slice(0, 300)}`);
+      },
       env: {
         EGO_BROWSER_REAL_E2E_RESULTS: resultsFile,
         // Without exclusions it stays a full run, which can skip an unchanged
@@ -77,6 +84,9 @@ async function runSuite(dir, excluded, only) {
           : {}),
       },
     });
+    console.log(
+      `E2E finished in ${Math.round((Date.now() - started) / 1000)} s, exit ${result.code}`,
+    );
     if (result.code === 0) return [];
     const failures = fs.existsSync(resultsFile)
       ? failedCases(JSON.parse(fs.readFileSync(resultsFile, "utf8")))

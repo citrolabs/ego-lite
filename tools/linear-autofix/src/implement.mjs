@@ -129,6 +129,7 @@ export async function implement(issue, record) {
     prompt,
     runDir: out,
     label: "implement",
+    identifier: record.identifier,
     budgetUsd: config.implementBudgetUsd,
     timeoutMs: config.implementTimeoutMs,
   });

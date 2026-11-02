@@ -239,6 +239,7 @@ export async function review(issue, record) {
     prompt,
     runDir: out,
     label: "review-fix",
+    identifier: record.identifier,
     budgetUsd: config.reviewBudgetUsd,
     timeoutMs: config.reviewTimeoutMs,
   });

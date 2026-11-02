@@ -158,6 +158,25 @@ or reset in that checkout would move the branch it is about to push.
 Updating the bot: `git pull` on `dev`; the next tick picks up the new code.
 State in `~/.local/state/linear-autofix` survives updates.
 
+## Local log
+
+`tick` and `daemon` print one timestamped line per step to stdout. The launchd
+agent and the `screen` command above send it to `/tmp/linear-autofix.log`:
+
+```
+2026-11-02 12:03:45 3 assigned issue(s) in Backlog/Todo/In Progress/Pending Review
+2026-11-02 12:03:45 stages: in_review 1, triaged 1, skipped 1
+2026-11-02 12:03:58 [CITRO-2908 implement] claude started, budget $25, limit 90 min
+2026-11-02 12:04:10 [CITRO-2908 implement] Bash: npm --prefix package/ego-browser test
+2026-11-02 12:21:02 E2E started: 83 case(s), in /Users/bot/.local/state/linear-autofix/worktrees/CITRO-2908
+2026-11-02 12:26:04 E2E finished in 302 s, exit 0
+2026-11-02 12:26:05 git push zhuoweiwang/citro-2908
+2026-11-02 12:26:30 tick finished in 1365 s
+```
+
+Claude runs show each tool call and the first line of each text block, as they
+happen. A long gap means one step is still running: usually a test or E2E run.
+
 ## Execution log on Linear
 
 Every tick that did something (a triage, a PR, a review round, an escalation,
