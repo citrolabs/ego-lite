@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <!--
-    Runs one scheduler pass every 30 minutes. A pass that is still running
+    Runs one scheduler pass every 10 minutes. A pass that is still running
     when the next one fires makes the newcomer exit at once (tick.lock).
 
     Secrets live in ~/.config/linear-autofix/env (chmod 600), not here.
@@ -24,7 +24,7 @@
   </array>
 
   <key>StartInterval</key>
-  <integer>1800</integer>
+  <integer>600</integer>
 
   <key>RunAtLoad</key>
   <true/>

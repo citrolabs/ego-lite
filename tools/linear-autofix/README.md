@@ -14,7 +14,7 @@ GitHub or `git push` is done by the orchestrator, never by Claude.
 
 ```
 Linear (assignee = me, state ∈ Backlog/Todo/In Progress/Pending Review)
-   │  tick every 30 min
+   │  tick every 10 min
    ▼
 new ──triage (claude, read-only)──► skipped  (browser_side / needs_info / ops_reply /
    │                                           design_decision / duplicate / already_fixed)
@@ -117,7 +117,7 @@ screen -dmS linear-autofix /bin/zsh -lc 'source ~/.config/linear-autofix/env && 
 screen -r linear-autofix      # attach; Ctrl-A D detaches again
 ```
 
-`daemon` runs a tick, sleeps `AUTOFIX_INTERVAL_MS` (default 30 min), repeats.
+`daemon` runs a tick, sleeps `AUTOFIX_INTERVAL_MS` (default 10 min), repeats.
 Ctrl-C or SIGTERM lets the current tick finish, then exits. The STOP file
 skips ticks without killing the loop. A `screen` session does not survive a
 reboot or a logout, so after either one start it again (or keep Option B).
@@ -130,7 +130,7 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.citrolabs.linear-aut
 launchctl kickstart -k gui/$(id -u)/com.citrolabs.linear-autofix   # run now
 ```
 
-The agent runs `node src/cli.mjs tick` every 30 minutes from a login shell, so
+The agent runs `node src/cli.mjs tick` every 10 minutes from a login shell, so
 fnm/nvm, `gh` and `claude` resolve as they do in a terminal. A pass still
 running when the next one fires makes the newcomer exit (`tick.lock`). Local
 logs go to `/tmp/linear-autofix.log`.
@@ -199,7 +199,7 @@ the ticket stays readable. Set `AUTOFIX_LOG_ISSUE=` (empty) to disable.
 - **CI failures**: the failing check output.
 
 The bot's own comments start with `<!-- linear-autofix -->` and are never fed
-back to it. Feedback is picked up on the next tick (every 30 minutes by
+back to it. Feedback is picked up on the next tick (every 10 minutes by
 default), so a comment is acted on within about half an hour.
 
 ## Review-loop termination

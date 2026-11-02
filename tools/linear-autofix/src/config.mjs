@@ -51,9 +51,9 @@ export const config = Object.freeze({
   e2eKnownFailures: list("AUTOFIX_E2E_KNOWN_FAILURES", []),
 
   // `daemon` mode: pause between ticks.
-  intervalMs: num("AUTOFIX_INTERVAL_MS", 30 * 60_000),
+  intervalMs: num("AUTOFIX_INTERVAL_MS", 10 * 60_000),
   maxImplementing: num("AUTOFIX_MAX_IMPLEMENTING", 2),
-  maxReviewRounds: num("AUTOFIX_MAX_REVIEW_ROUNDS", 5),
+  maxReviewRounds: num("AUTOFIX_MAX_REVIEW_ROUNDS", 10),
 
   claudeBin: process.env.AUTOFIX_CLAUDE_BIN ?? "claude",
   claudeModel: process.env.AUTOFIX_CLAUDE_MODEL ?? "",
