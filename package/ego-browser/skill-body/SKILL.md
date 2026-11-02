@@ -245,10 +245,10 @@ stop and ask the user.
 
 <!-- mode: ego-run -->
 
-- A script that exceeds its deadline (`--timeout-ms`, default 60000, max
-  180000) or blocks the event loop rebuilds the session context: `ego-run`
-  prints `[ego-run] session ... was rebuilt`, and the next script reacquires
-  its handles with `taskSpace(name)` and `task.page(label)`. Spaces, tabs, and
+- A script that exceeds its deadline (`--timeout-ms`, default 60000, max 180000)
+  or blocks the event loop rebuilds the session context: `ego-run` prints
+  `[ego-run] session ... was rebuilt`, and the next script reacquires its
+  handles with `taskSpace(name)` and `task.page(label)`. Spaces, tabs, and
   labels persist. Keep a whole loop (paging, polling) in one script.
 
 <!-- /mode -->
