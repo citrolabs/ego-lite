@@ -8,7 +8,13 @@ import * as linear from "./linear.mjs";
 import { note, runDir, transition, worktreePath } from "./state.mjs";
 import { escalate, FOOTER } from "./actions.mjs";
 import { bothTails } from "./proc.mjs";
-import { e2eNote, gatedPush } from "./e2e.mjs";
+import {
+  e2eNote,
+  e2eWarning,
+  flushE2eComment,
+  gatedPush,
+  recordE2e,
+} from "./e2e.mjs";
 
 /**
  * Tools the implementer and the review fixer may use. The list keeps Claude on
@@ -188,8 +194,8 @@ export async function publish(record) {
     record,
     "push",
     config.e2eKnownFailures.length
-      ? `E2E gate: the bot runs the suite without ${config.e2eKnownFailures.join(", ")} and pushes with the hook excluded`
-      : "no AUTOFIX_E2E_KNOWN_FAILURES set: the pre-push hook runs the full E2E suite",
+      ? `E2E gate: the bot runs the suite without ${config.e2eKnownFailures.join(", ")}; failed cases are reported on the PR`
+      : "E2E gate: the bot runs the full suite; failed cases are reported on the PR",
   );
   let gate;
   try {
@@ -205,10 +211,19 @@ export async function publish(record) {
     const excerpt = bothTails(err.stdout, err.stderr, 60).slice(-2200);
     return escalate(
       record,
-      `push 或推送前的 E2E 失败（通常是 E2E 用例未通过）：\n\n\`\`\`\n${excerpt}\n\`\`\`\n\n完整输出：\`${log}\`\nworktree: \`${dir}\`\n\n修好环境后运行 \`linear-autofix publish ${record.identifier}\` 只重跑 push 和开 PR，不会重新实现。`,
+      `push 失败，或推送前的 E2E 没能跑完（用例失败不会走到这里，只会评论到 PR）：\n\n\`\`\`\n${excerpt}\n\`\`\`\n\n完整输出：\`${log}\`\nworktree: \`${dir}\`\n\n修好环境后运行 \`linear-autofix publish ${record.identifier}\` 只重跑 push 和开 PR，不会重新实现。`,
     );
   }
+  const headSha = await git.headSha(dir);
+  recordE2e(record, gate, headSha);
   note(record, "pushed", await git.recentLog(dir, base));
+  if (gate.failures.length) {
+    note(
+      record,
+      "E2E failures reported on the PR",
+      gate.failures.map((f) => f.name).join(", "),
+    );
+  }
 
   const draft = record.triage?.needs_windows === true;
   // Taken before the PR exists, so no comment can slip in between creation
@@ -253,9 +268,12 @@ export async function publish(record) {
   }
   await linear.comment(
     record,
-    `**已开 PR** ${prInfo.url}${draft ? "（draft，待在 Windows 上验证后转正）" : ""}\n\n机器人会跟进 Codex review 和人工评论，直到没有新意见为止。合并由人工完成。\n\n${FOOTER}`,
+    `**已开 PR** ${prInfo.url}${draft ? "（draft，待在 Windows 上验证后转正）" : ""}\n\n机器人会跟进 Codex review 和人工评论，直到没有新意见为止。合并由人工完成。${e2eWarning(record, headSha)}\n\n${FOOTER}`,
   );
   transition(record, "in_review", prInfo.url);
+  // After the transition: if this fails, the next review check posts it, rather
+  // than the ticket being implemented again.
+  await flushE2eComment(record, prInfo.number);
 }
 
 /**

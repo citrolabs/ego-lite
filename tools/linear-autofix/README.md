@@ -20,15 +20,16 @@ new ──triage (claude, read-only)──► skipped  (browser_side / needs_inf
    │                                           design_decision / duplicate / already_fixed)
    └─ verdict fix ──► triaged
                         │ implement (claude in a worktree; failing test → fix → npm test → commit)
-                        │ git push (pre-push runs the real-browser E2E on this machine)
+                        │ real-browser E2E on this machine, then git push (failed cases do not block)
                         │ gh pr create --base dev   (draft when the ticket needs Windows verification)
+                        │ PR comment listing the failed E2E cases, if any
                         ▼
                      in_review ──► every tick: CI status + Codex comment for HEAD + unresolved threads
                         │             nothing left → done (Linear → Pending Review); human merges
                         │             findings → claude review-fix → commit → push → reply/resolve
                         ▼
-                     escalated   (round limit, same findings twice, merge conflict, push/E2E
-                                  failure, Claude says blocked, 3 consecutive errors)
+                     escalated   (round limit, same findings twice, merge conflict, push failure,
+                                  E2E suite did not finish, Claude says blocked, 3 consecutive errors)
 ```
 
 Per-ticket state lives in `~/.local/state/linear-autofix/issues/<ID>.json`;
@@ -66,7 +67,7 @@ Prerequisites on the host:
 
 - macOS with a logged-in GUI session that stays up: enable automatic login,
   disable the screen saver and screen lock, and keep the machine awake
-  (`sudo pmset -a sleep 0 displaysleep 0`). The pre-push E2E drives ego lite
+  (`sudo pmset -a sleep 0 displaysleep 0`). The bot's E2E run drives ego lite
   windows, and background or locked windows break it.
 - ego lite installed at `/Applications/ego lite.app` and running. The E2E
   runner uses the CLI bundled inside the app. Nobody takes manual control of
@@ -141,7 +142,7 @@ Operations:
 node src/cli.mjs status
 node src/cli.mjs stop        # STOP file: running tick finishes its step, later ticks exit
 node src/cli.mjs resume
-node src/cli.mjs publish CITRO-2908   # push failed (E2E)? fix the host, then redo only push + PR
+node src/cli.mjs publish CITRO-2908   # push failed or E2E did not finish? fix the host, then redo only E2E + push + PR
 node src/cli.mjs retry CITRO-2908     # start over: re-triage and re-implement (keeps worktree and branch)
 node src/cli.mjs reset CITRO-2908 --remote   # forget the ticket entirely: record, worktree, branches, bot labels
 launchctl bootout gui/$(id -u)/com.citrolabs.linear-autofix   # uninstall the schedule
@@ -167,24 +168,24 @@ the ticket stays readable. Set `AUTOFIX_LOG_ISSUE=` (empty) to disable.
 
 ## Configuration
 
-| Variable                     | Default                                   | Meaning                                                      |
-| ---------------------------- | ----------------------------------------- | ------------------------------------------------------------ |
-| `LINEAR_API_KEY`             | —                                         | required                                                     |
-| `AUTOFIX_REPO`               | this checkout                             | repository the worktrees are created from                    |
-| `AUTOFIX_STATE_DIR`          | `~/.local/state/linear-autofix`           | records, runs, worktrees, lock, STOP                         |
-| `AUTOFIX_LINEAR_STATES`      | `Backlog,Todo,In Progress,Pending Review` | states polled                                                |
-| `AUTOFIX_BASE_BRANCH`        | `dev`                                     | PR base and worktree base                                    |
-| `AUTOFIX_MAX_IMPLEMENTING`   | `2`                                       | bot PRs allowed in review at once                            |
-| `AUTOFIX_MAX_REVIEW_ROUNDS`  | `10`                                      | fix rounds per PR before escalating                          |
-| `AUTOFIX_INTERVAL_MS`        | `600000` (10 min)                         | pause between ticks in `daemon` mode                         |
-| `AUTOFIX_*_BUDGET_USD`       | triage 2 / implement 25 / review 15       | `--max-budget-usd` per Claude run                            |
-| `AUTOFIX_*_TIMEOUT_MS`       | triage 10 min / implement 90 / review 60  | wall-clock limit per Claude run                              |
-| `AUTOFIX_PUSH_TIMEOUT_MS`    | 45 min                                    | covers the pre-push E2E suite                                |
-| `AUTOFIX_CLAUDE_MODEL`       | Claude Code default                       | `--model`                                                    |
-| `AUTOFIX_E2E_KNOWN_FAILURES` | (empty)                                   | E2E cases the bot leaves out, pushing with the hook excluded |
-| `AUTOFIX_LOG_ISSUE`          | `CITRO-4786`                              | Linear ticket that receives one comment per active tick      |
-| `AUTOFIX_DRY_RUN`            | unset                                     | `1`: no Linear/GitHub writes, no push                        |
-| `AUTOFIX_ISSUE`              | unset                                     | restrict a tick to one identifier                            |
+| Variable                     | Default                                   | Meaning                                                  |
+| ---------------------------- | ----------------------------------------- | -------------------------------------------------------- |
+| `LINEAR_API_KEY`             | —                                         | required                                                 |
+| `AUTOFIX_REPO`               | this checkout                             | repository the worktrees are created from                |
+| `AUTOFIX_STATE_DIR`          | `~/.local/state/linear-autofix`           | records, runs, worktrees, lock, STOP                     |
+| `AUTOFIX_LINEAR_STATES`      | `Backlog,Todo,In Progress,Pending Review` | states polled                                            |
+| `AUTOFIX_BASE_BRANCH`        | `dev`                                     | PR base and worktree base                                |
+| `AUTOFIX_MAX_IMPLEMENTING`   | `2`                                       | bot PRs allowed in review at once                        |
+| `AUTOFIX_MAX_REVIEW_ROUNDS`  | `10`                                      | fix rounds per PR before escalating                      |
+| `AUTOFIX_INTERVAL_MS`        | `600000` (10 min)                         | pause between ticks in `daemon` mode                     |
+| `AUTOFIX_*_BUDGET_USD`       | triage 2 / implement 25 / review 15       | `--max-budget-usd` per Claude run                        |
+| `AUTOFIX_*_TIMEOUT_MS`       | triage 10 min / implement 90 / review 60  | wall-clock limit per Claude run                          |
+| `AUTOFIX_PUSH_TIMEOUT_MS`    | 45 min                                    | limit for the E2E suite, and for the push                |
+| `AUTOFIX_CLAUDE_MODEL`       | Claude Code default                       | `--model`                                                |
+| `AUTOFIX_E2E_KNOWN_FAILURES` | (empty)                                   | E2E cases the bot leaves out of its run and its comments |
+| `AUTOFIX_LOG_ISSUE`          | `CITRO-4786`                              | Linear ticket that receives one comment per active tick  |
+| `AUTOFIX_DRY_RUN`            | unset                                     | `1`: no Linear/GitHub writes, no push                    |
+| `AUTOFIX_ISSUE`              | unset                                     | restrict a tick to one identifier                        |
 
 ## What counts as review feedback
 
@@ -224,33 +225,42 @@ escalates instead of pushing again. A round whose outcome is `disputed`
 produces a PR comment and no commit; the next tick sees the same findings and
 escalates, which is intended: a dispute needs a human.
 
-## Known-failing E2E cases
+## E2E failures
 
-Some real-browser E2E cases fail for reasons outside this repository (today:
-`Page keyboard interface`, whose paste assertion hits a browser-side clipboard
-race). Left alone, that blocks every bot push that touches
-`package/ego-browser/`. Name such cases in `AUTOFIX_E2E_KNOWN_FAILURES`
-(comma-separated). When the diff is inside the E2E scope, the bot then runs the
-suite itself with those cases left out (`EGO_BROWSER_REAL_E2E_ONLY`) and pushes
-with `LEFTHOOK_EXCLUDE=e2e-test`; the PR body names the excluded cases. Remove
-a name as soon as the underlying bug ships, so the case guards again.
+Whenever the branch changes `package/ego-browser/` or `skills/ego-browser/`, the
+bot runs the real-browser E2E suite on this host before every push, and pushes
+with `LEFTHOOK_EXCLUDE=e2e-test` so the pre-push hook does not run it again.
+
+A failed case does not stop the bot. It pushes, opens the PR as usual, and
+comments on the PR with each failed case and its error. A later push whose run
+passes says so in another comment. The bot does not try to fix these failures,
+and they do not hold back `done`: E2E only runs on this host, so a human judges
+them. The Linear comments for the PR warn about them while they apply to the
+current head.
+
+Some cases fail for reasons outside this repository (today: `Page keyboard
+interface`, whose paste assertion hits a browser-side clipboard race). Name them
+in `AUTOFIX_E2E_KNOWN_FAILURES` (comma-separated) to leave them out of the run
+(`EGO_BROWSER_REAL_E2E_ONLY`), so they do not repeat in every PR's comment; the
+PR body names the excluded cases. Remove a name as soon as the underlying bug
+ships, so the case guards again.
 
 ## When a push fails
 
-`git push` runs the pre-push hook, which runs the real-browser E2E suite on
-this host whenever `package/ego-browser/` or `skills/ego-browser/` changed.
-A failed push escalates the ticket with the last lines of the hook output; the
-full output is in `runs/<ID>/<timestamp>-implement/push.log`. The commits stay
-in `worktrees/<ID>`. To see the failure directly:
+A failed push escalates the ticket, and so does an E2E run without a usable
+result: it did not finish (build error, timeout) or no case passed (CLI missing,
+browser down, unusable build). The escalation carries the last lines of the output;
+the full output is in `runs/<ID>/<timestamp>-implement/push.log`. The commits
+stay in `worktrees/<ID>`. To see the failure directly:
 
 ```sh
 cd ~/.local/state/linear-autofix/worktrees/CITRO-2908
-git push -u origin zhuoweiwang/citro-2908            # or: (cd package/ego-browser && npm run e2e)
+(cd package/ego-browser && npm run e2e)              # or: git push -u origin zhuoweiwang/citro-2908
 ```
 
 Once the host is fixed (ego lite running and in the foreground, nobody
-controlling it), `node src/cli.mjs publish CITRO-2908` redoes only the push
-and the PR; the review loop takes over from there.
+controlling it), `node src/cli.mjs publish CITRO-2908` redoes only E2E, the
+push and the PR; the review loop takes over from there.
 
 ## Limitations
 

@@ -145,7 +145,9 @@ export async function runRealBrowserE2e() {
       );
     } catch (error) {
       const durationMs = Date.now() - startedAt;
-      const message = error?.message || String(error);
+      const message =
+        extractCaseError(error?.stdout, error?.stderr) ??
+        (error?.message || String(error));
       const assertions =
         extractAssertionCount(error?.stdout, error?.stderr) ?? 0;
       recordResult(name, "fail", durationMs, assertions, message);
@@ -329,6 +331,16 @@ export async function runRealBrowserE2e() {
     passed = caseResults.every((r) => r.status !== "fail");
     printSummary(caseResults, Date.now() - totalStartedAt);
 
+    // For callers that act on individual cases (tools/linear-autofix). Written
+    // only when every case ran, so its absence means the suite did not finish.
+    if (process.env.EGO_BROWSER_REAL_E2E_RESULTS) {
+      await writeFile(
+        process.env.EGO_BROWSER_REAL_E2E_RESULTS,
+        JSON.stringify({ cases: caseResults }, null, 2),
+        "utf8",
+      );
+    }
+
     if (!passed) {
       process.exitCode = 1;
     } else if (isFullRun) {
@@ -398,21 +410,34 @@ async function initializeE2eEnvironment(context, tempDir) {
   );
 }
 
-function extractAssertionCount(...outputs) {
-  // Find the last JSON line with "assertions" from cliLog output
+/** The last JSON line with an assertion count from a case's cliLog output. */
+function lastCaseReport(outputs) {
   const lines = outputs.filter(Boolean).join("\n").split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim();
     if (line.startsWith("{") && line.includes("assertions")) {
       try {
         const parsed = JSON.parse(line);
-        if (typeof parsed.assertions === "number") return parsed.assertions;
+        if (typeof parsed.assertions === "number") return parsed;
       } catch {
         // not valid JSON, keep looking
       }
     }
   }
   return null;
+}
+
+function extractAssertionCount(...outputs) {
+  return lastCaseReport(outputs)?.assertions ?? null;
+}
+
+/**
+ * The reason a case reported for failing, or null. The process error only says
+ * which command exited non-zero, which does not tell one case from another.
+ */
+export function extractCaseError(...outputs) {
+  const error = lastCaseReport(outputs)?.error;
+  return typeof error === "string" && error ? error : null;
 }
 
 function formatDuration(ms) {
