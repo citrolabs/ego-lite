@@ -285,6 +285,19 @@ test('a leading "use strict" still governs a program that declares functions', a
   );
 });
 
+test("a hashbang line is dropped so the wrapped cell stays valid", async () => {
+  const rewritten = rewriteProgram("#!/usr/bin/env node\nconst a = 1;\na");
+  assert.equal(rewritten.body, "\nvoid ((a = 1));\nreturn (a);");
+  const cell = wrapProgram(rewritten, {
+    requestId: "hashbang",
+    timeoutMs: 1_000,
+    spillDir: "/s",
+    inlineLimit: 1_000,
+  });
+  assert.equal((await runCell(cell, "hashbang")).value, 1);
+  assert.equal(rewriteProgram("#!/usr/bin/env node").body, "");
+});
+
 test("a program with top-level destructuring runs and keeps its bindings", async () => {
   // The REPL header declares the bound names (`var a, c, d, rest;`), never
   // the pattern; the body assigns through the original pattern.

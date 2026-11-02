@@ -15,6 +15,7 @@ import {
   ErrorCodes,
   PROTOCOL_VERSION,
   ProtocolError,
+  clampTimeout,
   type ErrorResponse,
   type ExecResponse,
   type Response,
@@ -250,7 +251,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       (error as ProtocolError).code === ErrorCodes.DAEMON_UNAVAILABLE &&
       process.env.EGO_RUN_FALLBACK === "1"
     ) {
-      return runOnceWithoutDaemon(program, sdkPath);
+      return runOnceWithoutDaemon(program, sdkPath, clampTimeout(timeoutMs));
     }
     throw error;
   }
@@ -301,6 +302,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
 function runOnceWithoutDaemon(
   program: string,
   sdkPath: string | undefined,
+  timeoutMs: number,
 ): Promise<number> {
   process.stderr.write(
     "[ego-run] daemon unavailable; running once with ego-browser nodejs (persistent:false, variables will not survive this call)\n",
@@ -309,11 +311,23 @@ function runOnceWithoutDaemon(
   const args = ["nodejs", ...(sdkPath ? ["--sdk-path", sdkPath] : [])];
   return new Promise((resolve) => {
     const child = spawn(bin, args, { stdio: ["pipe", "inherit", "inherit"] });
+    // The same deadline as the daemon would apply; a direct run has no result
+    // envelope to carry it, so the process is ended and the exit code says so.
+    const deadline = setTimeout(() => {
+      process.stderr.write(
+        `[ego-run] EGO_RUN_DEADLINE: the program ran longer than ${timeoutMs} ms\n`,
+      );
+      child.kill(process.platform === "win32" ? undefined : "SIGKILL");
+    }, timeoutMs);
     child.on("error", (error) => {
+      clearTimeout(deadline);
       process.stderr.write(`[ego-run] cannot start ${bin}: ${error.message}\n`);
       resolve(1);
     });
-    child.on("exit", (code) => resolve(code ?? 1));
+    child.on("exit", (code) => {
+      clearTimeout(deadline);
+      resolve(code ?? 1);
+    });
     child.stdin.end(program);
   });
 }

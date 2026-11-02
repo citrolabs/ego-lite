@@ -46,6 +46,8 @@ class Session {
   readonly createdAt: number;
   sdkPath: string | null;
   connection: ReplConnection | null = null;
+  /** A REPL start in progress; shared by every program waiting for it. */
+  opening: Promise<void> | null = null;
   lastUsed: number;
   evaluations = 0;
   rebuilt = 0;
@@ -172,16 +174,10 @@ export class SessionManager {
         if (!session.connection) {
           fresh = true;
           rebuiltReason = session.pendingReason ?? undefined;
-          await this.#open(session);
-          if (session.closed) {
-            // close() ran while the REPL was starting: do not leave it behind.
-            this.#discard(session, "closed");
-            this.#assertOpen(session);
-          }
+          await this.#openWithin(session, timeoutMs - (this.#now() - queuedAt));
         }
-        // Starting the REPL (up to the banner timeout) is charged to the same
-        // deadline, so the budget is measured again here. A deadline that
-        // passed during startup leaves the fresh REPL for the next program.
+        // Starting the REPL is charged to the same deadline (openWithin fails
+        // when it passes), so the budget is measured again here.
         const remainingMs = timeoutMs - (this.#now() - queuedAt);
         if (remainingMs <= 0) {
           throw new ProtocolError(
@@ -285,7 +281,46 @@ export class SessionManager {
     return session;
   }
 
-  async #open(session: Session): Promise<void> {
+  // The REPL start counts against the program's deadline, but a start that
+  // outlives one deadline is not thrown away: it keeps going and the next
+  // program on the session adopts it, so a slow start makes progress instead
+  // of being killed and retried on every call.
+  async #openWithin(session: Session, budgetMs: number): Promise<void> {
+    const opening = this.#open(session);
+    let timer: NodeJS.Timeout | undefined;
+    const expired = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(
+            new ProtocolError(
+              ErrorCodes.DEADLINE,
+              `the deadline passed while session ${session.id} was starting its REPL; the program did not start, and the REPL keeps starting for the next one`,
+            ),
+          ),
+        Math.max(0, budgetMs),
+      );
+    });
+    try {
+      await Promise.race([opening, expired]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  #open(session: Session): Promise<void> {
+    if (!session.opening) {
+      const opening = this.#start(session).finally(() => {
+        session.opening = null;
+      });
+      // The program waiting for it sees a failure; when no program waits any
+      // more (its deadline passed) the rejection must not go unhandled.
+      opening.catch(() => {});
+      session.opening = opening;
+    }
+    return session.opening;
+  }
+
+  async #start(session: Session): Promise<void> {
     const spawnOptions: SpawnReplOptions = {
       bin: this.#options.bin,
       nodejsArgs: session.sdkPath ? ["--sdk-path", session.sdkPath] : [],
@@ -311,6 +346,12 @@ export class SessionManager {
             ErrorCodes.SESSION_START_FAILED,
             (error as Error).message,
           );
+    }
+    if (session.closed) {
+      // close() ran while the REPL was starting: do not leave it behind.
+      connection.kill();
+      this.#log(`open ${session.id} pid=${connection.pid} discarded: closed`);
+      this.#assertOpen(session);
     }
     connection.onExit(() => {
       if (session.connection === connection) {

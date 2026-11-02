@@ -52,7 +52,8 @@ ego-run session close order-flow
 The thin CLI never starts the daemon by itself: a daemon spawned from inside an
 agent's sandboxed shell would inherit the sandbox. With `EGO_RUN_FALLBACK=1` it
 runs the program once through `ego-browser nodejs` when the daemon is down and
-says so on stderr.
+says so on stderr; `--timeout-ms` still applies (the process is ended at the
+deadline and exit code 1 reports `EGO_RUN_DEADLINE`).
 
 `--sdk-path` is passed through to `ego-browser nodejs` and fixed for the
 session's lifetime; `EGO_BROWSER_BIN` picks the executable the daemon starts.
@@ -102,10 +103,12 @@ session's lifetime; `EGO_BROWSER_BIN` picks the executable the daemon starts.
   without sessions. `ego-browser --version` is checked every minute and a
   version change closes every session.
 - A program's deadline counts the time it waited in the session queue and the
-  time its REPL took to start, so a caller never waits longer than its own
-  timeout; a program whose deadline passed before it could start is refused
-  with `EGO_RUN_DEADLINE` and leaves the context (and a freshly started REPL)
-  intact, and one whose client has disconnected while it was queued is skipped.
+  time its REPL takes to start, so a caller never waits longer than its own
+  timeout: a program whose deadline passes before it could start is refused
+  with `EGO_RUN_DEADLINE` and leaves the context intact. A REPL still starting
+  at that point keeps starting and the next program on the session adopts it
+  (nothing is killed and retried). A program whose client has disconnected
+  while it was queued is skipped.
 - Programs run inside the browser's Node Service, exactly like a direct
   `ego-browser nodejs` script. Neither the daemon's nor the client's working
   directory applies to the script (the guide requires absolute paths), so the

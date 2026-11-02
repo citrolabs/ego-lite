@@ -283,10 +283,12 @@ test("queue time counts against the deadline and a late program never starts", a
   assert.equal(next.session.fresh, false);
 });
 
-test("REPL startup time counts against the deadline and leaves the fresh REPL for the next program", async () => {
+test("REPL startup counts against the deadline; the start continues for the next program", async () => {
   const { sessions, transports } = manager({
-    behavior: { startupDelayMs: 1200 },
+    behavior: { startupDelayMs: 1500 },
+    manager: { bannerTimeoutMs: 20_000 },
   });
+  const started = Date.now();
   await assert.rejects(
     sessions.exec(
       { cmd: "exec", session: "s", program: "1", timeoutMs: 1000 },
@@ -294,23 +296,41 @@ test("REPL startup time counts against the deadline and leaves the fresh REPL fo
     ),
     (error) =>
       error.code === "EGO_RUN_DEADLINE" &&
-      /started its REPL/.test(error.message) &&
+      /was starting its REPL/.test(error.message) &&
       /did not start/.test(error.message),
+  );
+  assert.ok(
+    Date.now() - started < 1400,
+    "the caller is answered at its own deadline, not the banner timeout",
   );
   assert.equal(transports.length, 1);
   assert.equal(transports[0].cells.length, 0, "req-1 was never sent");
-  assert.equal(transports[0].killed, false, "the started REPL is kept");
+  assert.equal(transports[0].killed, false, "the starting REPL is kept");
   const next = await sessions.exec(
     { cmd: "exec", session: "s", program: "2" },
     "req-2",
   );
   assert.equal(next.ok, true);
-  assert.equal(
-    next.session.fresh,
-    false,
-    "req-2 reuses the REPL req-1 started",
+  assert.equal(next.session.fresh, true, "req-2 is the first program in it");
+  assert.equal(transports.length, 1, "req-2 adopted the REPL req-1 started");
+  assert.equal(transports[0].cells.length, 1);
+});
+
+test("closing a session while its REPL starts kills the REPL once it is up", async () => {
+  const { sessions, transports } = manager({
+    behavior: { startupDelayMs: 100 },
+  });
+  const first = sessions.exec(
+    { cmd: "exec", session: "s", program: "1" },
+    "req-1",
   );
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  sessions.close("s");
+  await assert.rejects(first, (error) => error.code === "EGO_RUN_SESSION_LOST");
+  await new Promise((resolve) => setTimeout(resolve, 150));
   assert.equal(transports.length, 1);
+  assert.equal(transports[0].killed, true, "the late REPL did not leak");
+  assert.equal(sessions.list().length, 0);
 });
 
 test("a program whose client disconnected while queued is skipped", async () => {

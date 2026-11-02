@@ -61,6 +61,16 @@ export function rewriteProgram(source: string): RewrittenProgram {
   const edits: { start: number; end: number; text: string }[] = [];
   const prelude: string[] = [];
   const body: AnyNode[] = program.body;
+  // acorn accepts a `#!` line; inside the wrapper's function body it would be
+  // a syntax error, so it is blanked (the line break stays for line numbers).
+  if (source.startsWith("#!")) {
+    const lineEnd = source.indexOf("\n");
+    edits.push({
+      start: 0,
+      end: lineEnd === -1 ? source.length : lineEnd,
+      text: "",
+    });
+  }
   // Function declarations hoist within the wrapper, so their global copies can
   // be assigned first thing; placed after the directive prologue so a leading
   // "use strict" still governs the program.
