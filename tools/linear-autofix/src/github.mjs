@@ -38,11 +38,28 @@ export async function findPr(branch) {
     "--json",
     "number,url,state,isDraft,baseRefName,createdAt",
   ]);
-  if (!prs.length) return null;
-  return (
-    prs.find((p) => p.state === "OPEN") ??
-    prs.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
-  );
+  return pickPr(prs, config.baseBranch);
+}
+
+/**
+ * The PR the bot may resume for a branch: an open PR targeting the base
+ * branch, else the most recent closed one, else null. An open PR that
+ * targets another branch is not the bot's to touch, and pushing the branch
+ * would modify it, so that case throws. Pure.
+ */
+export function pickPr(prs, baseBranch) {
+  if (!prs?.length) return null;
+  const open = prs.filter((p) => p.state === "OPEN");
+  const mine = open.find((p) => p.baseRefName === baseBranch);
+  if (mine) return mine;
+  if (open.length) {
+    throw new Error(
+      `${open[0].url} is open against ${open[0].baseRefName}, not ${baseBranch}; the bot only works on PRs into ${baseBranch}`,
+    );
+  }
+  return [...prs].sort((a, b) =>
+    String(b.createdAt).localeCompare(String(a.createdAt)),
+  )[0];
 }
 
 function dry(what) {
@@ -122,7 +139,7 @@ export async function reviewThreads(number) {
             pageInfo{ hasNextPage endCursor }
             nodes{
               id isResolved isOutdated path line
-              comments(first:50){ nodes{ id body createdAt author{ login } } }
+              comments(last:50){ nodes{ id body createdAt author{ login } } }
             }
           }
         } }

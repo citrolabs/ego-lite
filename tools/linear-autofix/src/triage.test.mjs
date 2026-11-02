@@ -11,7 +11,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parseJsonBlock, renderPrompt } from "./claude.mjs";
-import { ciStatus } from "./github.mjs";
+import { ciStatus, pickPr } from "./github.mjs";
 
 test("validateTriage normalizes a good result and rejects bad ones", () => {
   const t = validateTriage({
@@ -157,4 +157,42 @@ test("sharesScope compares the first two path segments and refuses empty branche
   );
   assert.equal(sharesScope(["docs/x.md"], []), true);
   assert.equal(sharesScope([], ["package/ego-browser/src/b.ts"]), false);
+});
+
+test("pickPr resumes only an open PR into the base branch and refuses one into another branch", () => {
+  const dev = {
+    number: 1,
+    url: "u1",
+    state: "OPEN",
+    baseRefName: "dev",
+    createdAt: "2026-11-01T00:00:00Z",
+  };
+  const main = {
+    number: 2,
+    url: "u2",
+    state: "OPEN",
+    baseRefName: "main",
+    createdAt: "2026-11-02T00:00:00Z",
+  };
+  const closed = {
+    number: 3,
+    url: "u3",
+    state: "CLOSED",
+    baseRefName: "dev",
+    createdAt: "2026-10-01T00:00:00Z",
+  };
+  const older = {
+    number: 4,
+    url: "u4",
+    state: "MERGED",
+    baseRefName: "dev",
+    createdAt: "2026-09-01T00:00:00Z",
+  };
+  assert.equal(pickPr([closed, dev, main], "dev"), dev);
+  assert.throws(
+    () => pickPr([main, closed], "dev"),
+    /open against main, not dev/,
+  );
+  assert.equal(pickPr([older, closed], "dev"), closed);
+  assert.equal(pickPr([], "dev"), null);
 });
