@@ -281,12 +281,13 @@ matches in the top document before searching frames.
 
 `waitForLoadState()` defaults to `load`. `waitForFunction()` follows the
 Playwright argument order; pass `undefined` before options when there is no Page
-argument:
+argument. Unlike Playwright, it resolves to `true`, not the predicate's value:
 
 ```js
 await page.waitForFunction(() => window.appReady, undefined, {
   timeout: 10_000,
 });
+const ready = await page.evaluate(() => window.appReady);
 ```
 
 ```js

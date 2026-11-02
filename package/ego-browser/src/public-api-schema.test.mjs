@@ -51,6 +51,14 @@ test("the public API schema contains the v2 entry points and object methods", ()
   assert.equal(names.has("Page.scrollBy"), false);
 });
 
+test("Page.waitForFunction documents what it resolves to", () => {
+  const { summary } = PUBLIC_API_SCHEMA.find(
+    (entry) => entry.name === "Page.waitForFunction",
+  );
+  assert.match(summary, /resolves? to true, not (that|the predicate's) value/i);
+  assert.match(summary, /page\.evaluate\(\)/);
+});
+
 test("schema-driven option validation rejects unknown and invalid fields", () => {
   validatePublicApiOptions("taskSpace", { profileId: "Profile 2" });
   validatePublicApiOptions("Page.click", {

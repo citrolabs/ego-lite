@@ -10,6 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { runInNewContext } from "node:vm";
 
 import { NativeOperationGate } from "../dist/src/native-gate.js";
 import {
@@ -1355,6 +1356,45 @@ test("Page.waitForFunction polls one Page with one JSON argument", async () => {
       "waitForFunction activates the addressed Page",
     );
     assert.equal(second.targetId, "target-2");
+  });
+});
+
+test("Page.waitForFunction resolves to true, not the predicate's value", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    const task = taskForRound(fixture, "round-a", {
+      // Run the real probe, because the shared fixture answers it with a
+      // canned `matched` and would not exercise the coercion.
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (
+          method === "Runtime.evaluate" &&
+          params.expression.includes("__egoWaitForFunction")
+        ) {
+          const value = await runInNewContext(params.expression, {
+            location: { href: "https://example.test/wait" },
+            document: { title: "wait" },
+          });
+          return { result: { type: "object", value } };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/wait");
+
+    for (const predicate of [
+      () => "loaded",
+      () => ({ status: "ok" }),
+      () => 42,
+      async () => "loaded",
+      "'loaded'",
+      "({ status: 'ok' })",
+    ]) {
+      assert.equal(await page.waitForFunction(predicate), true);
+    }
+    await assert.rejects(
+      () => page.waitForFunction(() => 0, undefined, { timeout: 60 }),
+      /page\.waitForFunction timed out after 60ms/,
+    );
   });
 });
 

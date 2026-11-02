@@ -2282,7 +2282,11 @@ class Page {
     return this.#evaluate(expression, hasArgument, argument, true);
   }
 
-  /** Wait until a Page expression returns a truthy value. */
+  /**
+   * Wait until a Page expression returns a truthy value. Resolves to `true`,
+   * not that value, and throws on timeout; read Page state afterwards with
+   * `page.evaluate()`.
+   */
   async waitForFunction(
     expression: string | ((argument: any) => unknown | Promise<unknown>),
     argument?: unknown,
