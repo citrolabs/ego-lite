@@ -155,3 +155,29 @@ export async function installDeps(dir) {
     timeoutMs: 15 * 60_000,
   });
 }
+
+/** Delete the local branch unless a worktree still has it checked out. */
+export async function deleteLocalBranch(branch) {
+  const { code, stderr } = await git(["branch", "-D", branch], {
+    allowFailure: true,
+  });
+  if (code !== 0 && !/not found/.test(stderr)) throw new Error(stderr.trim());
+  return code === 0;
+}
+
+/** Delete the branch on the remote. Human-invoked only (`reset --remote`). */
+export async function deleteRemoteBranch(branch) {
+  if (config.dryRun) {
+    console.log(`[dry-run] git push ${config.remote} --delete ${branch}`);
+    return;
+  }
+  await git(["push", config.remote, "--delete", branch], { timeoutMs: 60_000 });
+}
+
+export async function remoteBranchExists(branch) {
+  const { stdout } = await git(
+    ["ls-remote", "--heads", config.remote, branch],
+    { timeoutMs: 60_000 },
+  );
+  return stdout.trim() !== "";
+}

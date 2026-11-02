@@ -142,7 +142,8 @@ node src/cli.mjs status
 node src/cli.mjs stop        # STOP file: running tick finishes its step, later ticks exit
 node src/cli.mjs resume
 node src/cli.mjs publish CITRO-2908   # push failed (E2E)? fix the host, then redo only push + PR
-node src/cli.mjs retry CITRO-2908     # start over: re-triage and re-implement
+node src/cli.mjs retry CITRO-2908     # start over: re-triage and re-implement (keeps worktree and branch)
+node src/cli.mjs reset CITRO-2908 --remote   # forget the ticket entirely: record, worktree, branches, bot labels
 launchctl bootout gui/$(id -u)/com.citrolabs.linear-autofix   # uninstall the schedule
 ```
 

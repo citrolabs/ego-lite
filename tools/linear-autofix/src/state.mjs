@@ -35,6 +35,10 @@ export function load(identifier) {
   }
 }
 
+export function remove(identifier) {
+  fs.rmSync(recordPath(identifier), { force: true });
+}
+
 export function loadAll() {
   ensureStateDir();
   return fs

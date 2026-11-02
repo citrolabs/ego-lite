@@ -4,11 +4,15 @@ import * as linear from "./linear.mjs";
 import {
   load,
   loadAll,
+  remove,
   setStop,
   stopRequested,
   transition,
   upsertFromIssue,
+  worktreePath,
 } from "./state.mjs";
+import * as git from "./git.mjs";
+import * as github from "./github.mjs";
 import { daemon, reconcile, tick } from "./tick.mjs";
 import { triage } from "./triage.mjs";
 import { implement, publish } from "./implement.mjs";
@@ -25,6 +29,8 @@ Usage:
   linear-autofix review <ID>          run one review-loop check for a ticket's PR
   linear-autofix publish <ID>         push the worktree and open the PR again (after a failed push)
   linear-autofix retry <ID>           reset a skipped/escalated ticket to "new" (re-triage, re-implement)
+  linear-autofix reset <ID> [--remote] forget a ticket: record, worktree, local branch, bot labels
+                                      (--remote also deletes the branch on origin; refuses while its PR is open)
   linear-autofix status               list tracked tickets and their stage
   linear-autofix stop | resume        create / remove the STOP file (kill switch)
 
@@ -54,6 +60,54 @@ async function one(identifier) {
   const issue = await linear.fetchIssue(identifier);
   if (!issue) throw new Error(`Linear has no issue ${identifier}`);
   return { issue, record: reconcile(upsertFromIssue(issue), issue) };
+}
+
+/**
+ * Forget everything the bot did for one ticket so the next tick starts from
+ * triage: the record, the worktree, the local branch and the bot's Linear
+ * labels. The remote branch goes only with --remote, and only when no PR on
+ * it is open.
+ */
+async function reset(identifier, deleteRemote) {
+  if (!identifier) throw new Error("issue identifier required");
+  const record = load(identifier);
+  const issue = await linear.fetchIssue(identifier);
+  if (!issue) throw new Error(`Linear has no issue ${identifier}`);
+  const branch = record?.branch ?? issue.branchName;
+  const ref = {
+    id: issue.id,
+    identifier: issue.identifier,
+    teamId: issue.team?.id,
+  };
+
+  const pr = await github.findPr(branch);
+  if (pr?.state === "OPEN") {
+    throw new Error(
+      `${pr.url} is still open; close it before resetting ${identifier}`,
+    );
+  }
+  const dir = worktreePath(identifier);
+  await git.removeWorktree(dir);
+  console.log(`worktree removed: ${dir}`);
+  if (await git.deleteLocalBranch(branch))
+    console.log(`local branch deleted: ${branch}`);
+  if (deleteRemote) {
+    await git.deleteRemoteBranch(branch);
+    console.log(`remote branch deleted: ${config.remote}/${branch}`);
+  } else if (await git.remoteBranchExists(branch)) {
+    console.warn(
+      `${config.remote}/${branch} still exists; the next implementation would start from it. Rerun with --remote to delete it.`,
+    );
+  }
+  for (const label of [
+    config.labels.fix,
+    config.labels.skipped,
+    config.labels.escalated,
+  ]) {
+    await linear.removeLabel(ref, label);
+  }
+  remove(identifier);
+  console.log(`${identifier} forgotten; the next tick triages it again`);
 }
 
 function status() {
@@ -106,6 +160,8 @@ async function main([command, arg]) {
         );
       return logged(`publish ${arg}`, () => publish(record));
     }
+    case "reset":
+      return reset(arg, process.argv.includes("--remote"));
     case "retry": {
       const record = load(arg);
       if (!record) throw new Error(`no record for ${arg}`);
