@@ -526,8 +526,11 @@ retry or route around the stop. Permission prompts, device choosers, and
 other browser-owned prompts require the user to handle them.
 
 When the user must act in the browser, call `await task.handOff()`, end the
-round, and explain what they should do. After the user confirms, resume the
-same space:
+round, and explain what they should do. This includes a login you have no
+credentials for, a CAPTCHA or other human verification, 2FA or a one-time code,
+and any other manual step. Do not switch sites, try other accounts, guess
+credentials, or work around it without telling the user; use only credentials
+the user gave for this task. After the user confirms, resume the same space:
 
 ```js
 const task = await takeOverTaskSpace(7);

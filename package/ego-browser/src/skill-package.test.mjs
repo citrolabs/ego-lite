@@ -50,6 +50,39 @@ test("the bundled usage guide is the unwrapped source guide between version and 
   assert.ok(bundled.length <= 25_000);
 });
 
+test("the guide hands login, verification and manual steps back to the user", async () => {
+  const guide = await readFile(join(outDir, "ego-browser/SKILL.md"), "utf8");
+  const section = /^## User control and completion$[\s\S]*?(?=^## )/m.exec(
+    guide,
+  )[0];
+  const rule = section
+    .split("\n\n")
+    .find((paragraph) => paragraph.includes("task.handOff()"));
+  for (const trigger of [
+    /login/i,
+    /CAPTCHA/,
+    /human verification/i,
+    /2FA/,
+    /one-time code/i,
+    /manual step/i,
+  ]) {
+    assert.match(rule, trigger);
+  }
+  assert.match(rule, /without telling the user/);
+  // Credentials the user supplied for the task stay usable.
+  assert.match(rule, /credentials/i);
+  assert.match(rule, /the user gave/);
+});
+
+test("the clearing-state reference does not clear a sign-in wall away", async () => {
+  const reference = await readFile(
+    join(repoRoot, "skills/ego-browser/references/clearing-state.md"),
+    "utf8",
+  );
+  assert.doesNotMatch(reference, /^Sign-in wall or /m);
+  assert.match(reference, /sign-in wall[^\n]*task\.handOff\(\)/i);
+});
+
 test("each platform guide keeps only its own passages", async () => {
   const source = await readFile(guideSource, "utf8");
   const version = /^version: "([^"]+)"$/m.exec(source)[1];
