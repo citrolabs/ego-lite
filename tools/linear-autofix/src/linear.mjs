@@ -128,10 +128,15 @@ export async function removeLabel(issue, name) {
   if (!found) return;
   if (config.dryRun)
     return dry(`remove label ${name} from ${issue.identifier}`);
-  await gql(
-    `mutation($id: String!, $labelId: String!) { issueRemoveLabel(id: $id, labelId: $labelId) { success } }`,
-    { id: issue.id, labelId: found.id },
-  );
+  try {
+    await gql(
+      `mutation($id: String!, $labelId: String!) { issueRemoveLabel(id: $id, labelId: $labelId) { success } }`,
+      { id: issue.id, labelId: found.id },
+    );
+  } catch (err) {
+    // Removing a label the issue does not carry is not an error for callers.
+    if (!/not on issue/i.test(err.message)) throw err;
+  }
 }
 
 export async function setState(issue, stateName) {
