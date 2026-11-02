@@ -27,6 +27,13 @@ test("run resolves with stdout and rejects on a non-zero exit", async () => {
   assert.equal(tolerated.code, 2);
 });
 
+test("a failure message carries both stdout and stderr", async () => {
+  await assert.rejects(
+    run("sh", ["-c", "echo hook-output; echo git-error >&2; exit 1"]),
+    (err) => /hook-output[\s\S]*git-error/.test(err.message),
+  );
+});
+
 test("a timeout kills the child's descendants too", async () => {
   const pidFile = path.join(
     fs.mkdtempSync(path.join(os.tmpdir(), "autofix-proc-")),

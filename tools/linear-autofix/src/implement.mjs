@@ -7,6 +7,7 @@ import * as github from "./github.mjs";
 import * as linear from "./linear.mjs";
 import { note, runDir, transition, worktreePath } from "./state.mjs";
 import { escalate, FOOTER } from "./actions.mjs";
+import { bothTails } from "./proc.mjs";
 
 /**
  * Tools the implementer and the review fixer may use. The list keeps Claude on
@@ -132,13 +133,50 @@ export async function implement(issue, record) {
       `实现阶段产生了 ${ahead} 个提交但没有写出 pr.json，无法开 PR。worktree: \`${dir}\``,
     );
   }
+  record.implement.pr = { title: pr.title.trim(), body: pr.body };
+  return publish(record);
+}
+
+/**
+ * Push the worktree branch and open (or adopt) the PR, then hand the ticket to
+ * the review loop. Also reachable from `linear-autofix publish <ID>` after a
+ * human fixed whatever made the push fail (usually the pre-push E2E).
+ */
+export async function publish(record) {
+  const dir = worktreePath(record.identifier);
+  const base = `${config.remote}/${config.baseBranch}`;
+  const pr = record.implement?.pr;
+  if (!pr?.title || !pr?.body) {
+    return escalate(record, `没有保存下来的 PR 标题和描述，无法 publish。`);
+  }
+  if (!fs.existsSync(dir)) {
+    return escalate(record, `worktree 不存在：\`${dir}\``);
+  }
+  if (await git.isDirty(dir)) {
+    return escalate(
+      record,
+      `工作树有未提交的改动，先处理再 publish。worktree: \`${dir}\``,
+    );
+  }
+  const ahead = await git.commitsAhead(dir, base);
+  if (ahead === 0) {
+    return escalate(record, `分支上没有领先 ${base} 的提交，无法 publish。`);
+  }
 
   try {
     await git.push(dir, record.branch);
   } catch (err) {
+    const logDir =
+      record.implement?.runDir ?? runDir(record.identifier, "publish");
+    const log = path.join(logDir, "push.log");
+    fs.writeFileSync(
+      log,
+      `${err.stdout ?? ""}\n${err.stderr ?? ""}\n${err.message}`,
+    );
+    const excerpt = bothTails(err.stdout, err.stderr, 60).slice(-2200);
     return escalate(
       record,
-      `push 失败（pre-push 会跑真浏览器 E2E，通常是 E2E 未通过）：\n\n\`\`\`\n${String(err.message).slice(0, 2500)}\n\`\`\`\n\nworktree: \`${dir}\``,
+      `push 失败（pre-push 会跑真浏览器 E2E，通常是 E2E 未通过）：\n\n\`\`\`\n${excerpt}\n\`\`\`\n\n完整输出：\`${log}\`\nworktree: \`${dir}\`\n\n修好环境后运行 \`linear-autofix publish ${record.identifier}\` 只重跑 push 和开 PR，不会重新实现。`,
     );
   }
   note(record, "pushed", await git.recentLog(dir, base));
@@ -150,7 +188,7 @@ export async function implement(issue, record) {
   } else {
     prInfo = await github.createPr({
       branch: record.branch,
-      title: pr.title.trim(),
+      title: pr.title,
       body: composePrBody({
         body: pr.body,
         identifier: record.identifier,
@@ -168,9 +206,13 @@ export async function implement(issue, record) {
     draft: prInfo.isDraft ?? draft,
   };
   record.review = { rounds: 0 };
+  record.consecutiveErrors = 0;
 
   if (["Backlog", "Todo"].includes(record.linearState)) {
     await linear.setState(record, config.linearStateInProgress);
+  }
+  if (record.stage === "escalated") {
+    await linear.removeLabel(record, config.labels.escalated);
   }
   await linear.comment(
     record,

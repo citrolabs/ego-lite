@@ -11,7 +11,7 @@ import {
 } from "./state.mjs";
 import { reconcile, tick } from "./tick.mjs";
 import { triage } from "./triage.mjs";
-import { implement } from "./implement.mjs";
+import { implement, publish } from "./implement.mjs";
 import { review } from "./review.mjs";
 import { flushTickLog } from "./journal.mjs";
 
@@ -22,7 +22,8 @@ Usage:
   linear-autofix triage <CITRO-123>   triage one ticket now
   linear-autofix implement <ID>       implement a ticket that was triaged as fix
   linear-autofix review <ID>          run one review-loop check for a ticket's PR
-  linear-autofix retry <ID>           reset a skipped/escalated ticket to "new"
+  linear-autofix publish <ID>         push the worktree and open the PR again (after a failed push)
+  linear-autofix retry <ID>           reset a skipped/escalated ticket to "new" (re-triage, re-implement)
   linear-autofix status               list tracked tickets and their stage
   linear-autofix stop | resume        create / remove the STOP file (kill switch)
 
@@ -93,6 +94,14 @@ async function main([command, arg]) {
           `${arg} is in stage ${record.stage}, expected in_review`,
         );
       return review(issue, record);
+    }
+    case "publish": {
+      const { record } = await one(arg);
+      if (!["escalated", "triaged", "implementing"].includes(record.stage))
+        throw new Error(
+          `${arg} is in stage ${record.stage}; publish is for a ticket whose push or PR failed`,
+        );
+      return logged(`publish ${arg}`, () => publish(record));
     }
     case "retry": {
       const record = load(arg);

@@ -126,7 +126,8 @@ Operations:
 node src/cli.mjs status
 node src/cli.mjs stop        # STOP file: running tick finishes its step, later ticks exit
 node src/cli.mjs resume
-node src/cli.mjs retry CITRO-2908
+node src/cli.mjs publish CITRO-2908   # push failed (E2E)? fix the host, then redo only push + PR
+node src/cli.mjs retry CITRO-2908     # start over: re-triage and re-implement
 launchctl bootout gui/$(id -u)/com.citrolabs.linear-autofix   # uninstall the schedule
 ```
 
@@ -174,6 +175,23 @@ timestamps and line numbers) mean the bot is not making progress and it
 escalates instead of pushing again. A round whose outcome is `disputed`
 produces a PR comment and no commit; the next tick sees the same findings and
 escalates, which is intended: a dispute needs a human.
+
+## When a push fails
+
+`git push` runs the pre-push hook, which runs the real-browser E2E suite on
+this host whenever `package/ego-browser/` or `skills/ego-browser/` changed.
+A failed push escalates the ticket with the last lines of the hook output; the
+full output is in `runs/<ID>/<timestamp>-implement/push.log`. The commits stay
+in `worktrees/<ID>`. To see the failure directly:
+
+```sh
+cd ~/.local/state/linear-autofix/worktrees/CITRO-2908
+git push -u origin zhuoweiwang/citro-2908            # or: (cd package/ego-browser && npm run e2e)
+```
+
+Once the host is fixed (ego lite running and in the foreground, nobody
+controlling it), `node src/cli.mjs publish CITRO-2908` redoes only the push
+and the PR; the review loop takes over from there.
 
 ## Limitations
 

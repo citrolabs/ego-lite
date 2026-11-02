@@ -63,7 +63,7 @@ export function run(
       } else if (code !== 0 && !allowFailure) {
         reject(
           new ProcessError(
-            `${cmd} ${args.join(" ").slice(0, 200)} exited ${code}${signal ? ` (${signal})` : ""}\n${tail(stderr || stdout)}`,
+            `${cmd} ${args.join(" ").slice(0, 200)} exited ${code}${signal ? ` (${signal})` : ""}\n${bothTails(stdout, stderr)}`,
             result,
           ),
         );
@@ -88,6 +88,11 @@ export function killTree(child, signal) {
       } catch {}
     }
   }
+}
+
+/** Both streams, each trimmed to its last lines. Hook output (lefthook, E2E) arrives on stdout while git reports on stderr. */
+export function bothTails(stdout, stderr, lines = 40) {
+  return [tail(stdout, lines), tail(stderr, lines)].filter(Boolean).join("\n");
 }
 
 export function tail(text, lines = 40) {
