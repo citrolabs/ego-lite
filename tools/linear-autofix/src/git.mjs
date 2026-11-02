@@ -25,6 +25,7 @@ async function refExists(ref) {
  */
 export async function ensureWorktree(dir, branch) {
   const base = `${config.remote}/${config.baseBranch}`;
+  await assertMainCheckoutNotOn(branch);
   await fetchBase();
   if (fs.existsSync(dir)) {
     const { stdout } = await git(["worktree", "list", "--porcelain"]);
@@ -154,6 +155,21 @@ export async function installDeps(dir) {
     cwd: pkg,
     timeoutMs: 15 * 60_000,
   });
+}
+
+/**
+ * The bot derives everything from `origin/<base>`; the main checkout's own
+ * branch is irrelevant, with one exception: if a human switched it onto the
+ * ticket branch, any pull or reset there moves the branch the bot is about to
+ * push (that is how #630 came to carry the wrong commits). Refuse early.
+ */
+export async function assertMainCheckoutNotOn(branch) {
+  const { stdout } = await git(["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (stdout.trim() === branch) {
+    throw new Error(
+      `the main checkout ${config.repoRoot} has ${branch} checked out; switch it to another branch (for example ${config.baseBranch}) before the bot touches this ticket`,
+    );
+  }
 }
 
 /** Delete the local branch unless a worktree still has it checked out. */

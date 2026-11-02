@@ -147,6 +147,13 @@ node src/cli.mjs reset CITRO-2908 --remote   # forget the ticket entirely: recor
 launchctl bootout gui/$(id -u)/com.citrolabs.linear-autofix   # uninstall the schedule
 ```
 
+Pull requests are always based on `dev`: worktrees are cut from
+`origin/dev`, diffs are measured against it, and `gh pr create --base dev`
+is hard-coded. The branch the main checkout happens to be on does not matter,
+with one rule: never check a ticket branch out in the main checkout. The bot
+refuses to touch a ticket whose branch is checked out there, because a pull
+or reset in that checkout would move the branch it is about to push.
+
 Updating the bot: `git pull` on `dev`; the next tick picks up the new code.
 State in `~/.local/state/linear-autofix` survives updates.
 

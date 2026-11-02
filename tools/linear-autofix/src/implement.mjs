@@ -163,6 +163,7 @@ export async function publish(record) {
   if (!fs.existsSync(dir)) {
     return escalate(record, `worktree 不存在：\`${dir}\``);
   }
+  await git.assertMainCheckoutNotOn(record.branch);
   if (await git.isDirty(dir)) {
     return escalate(
       record,
