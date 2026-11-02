@@ -170,7 +170,8 @@ export async function changedFiles(dir, ref) {
 /**
  * Push the branch. The pre-push hook runs the real-browser E2E suite here
  * unless `skipHookE2e` is set, which the E2E gate does after running the suite
- * itself (see e2e.mjs).
+ * itself, so failed cases can be reported instead of stopping the push (see
+ * e2e.mjs).
  */
 export async function push(dir, branch, { skipHookE2e = false } = {}) {
   if (config.dryRun) {

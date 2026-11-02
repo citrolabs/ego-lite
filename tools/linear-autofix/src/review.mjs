@@ -20,7 +20,7 @@ import {
 } from "./threads.mjs";
 import { escalate, FOOTER } from "./actions.mjs";
 import { CODE_TOOLS, readJson } from "./implement.mjs";
-import { gatedPush } from "./e2e.mjs";
+import { e2eWarning, flushE2eComment, gatedPush, recordE2e } from "./e2e.mjs";
 
 // After a push, Codex's review takes up to 30 minutes. Wait this long for a
 // review of the current head before proceeding on CI and human threads alone.
@@ -99,6 +99,7 @@ export async function review(issue, record) {
   if (pr.state === "CLOSED") {
     return transition(record, "done", `PR closed without merge ${pr.url}`);
   }
+  await flushE2eComment(record, pr.number);
 
   const sha = pr.headRefOid;
   record.review ??= { rounds: 0 };
@@ -153,7 +154,7 @@ export async function review(issue, record) {
       record.review.draftNotified = true;
       await linear.comment(
         record,
-        `**Draft PR 已就绪，等待 Windows 验证** ${pr.url}\n\nCI 通过且没有未处理的评论。请在 Windows 上验证后把 PR 转为 ready for review，机器人会继续跟进 Codex review。\n\n${FOOTER}`,
+        `**Draft PR 已就绪，等待 Windows 验证** ${pr.url}\n\nCI 通过且没有未处理的评论。请在 Windows 上验证后把 PR 转为 ready for review，机器人会继续跟进 Codex review。${e2eWarning(record, sha)}\n\n${FOOTER}`,
       );
     }
     return;
@@ -164,7 +165,7 @@ export async function review(issue, record) {
     }
     await linear.comment(
       record,
-      `**review 意见已清零** ${pr.url}\n\n${verdict.why}。等待人工合并。\n\n${FOOTER}`,
+      `**review 意见已清零** ${pr.url}\n\n${verdict.why}。等待人工合并。${e2eWarning(record, sha)}\n\n${FOOTER}`,
     );
     return transition(record, "done", verdict.why);
   }
@@ -273,14 +274,16 @@ export async function review(issue, record) {
     );
   }
   if (committed) {
+    let gate;
     try {
-      await gatedPush(dir, record.branch);
+      gate = await gatedPush(dir, record.branch);
     } catch (err) {
       return escalate(
         record,
-        `review 修复后 push 或推送前的 E2E 失败：\n\n\`\`\`\n${String(err.message).slice(0, 2500)}\n\`\`\``,
+        `review 修复后 push 失败，或推送前的 E2E 没能跑完（用例失败不会走到这里，只会评论到 PR）：\n\n\`\`\`\n${String(err.message).slice(0, 2500)}\n\`\`\``,
       );
     }
+    recordE2e(record, gate, await git.headSha(dir));
     note(record, "pushed review fix", await git.recentLog(dir, before));
   }
 
@@ -304,4 +307,6 @@ export async function review(issue, record) {
   record.review.lastFingerprint = fingerprint;
   record.review.lastStatus = result.status;
   note(record, `review round ${round} posted`, result.status);
+  // Last, so a failed comment is retried by the next check, not by another round.
+  await flushE2eComment(record, pr.number);
 }
