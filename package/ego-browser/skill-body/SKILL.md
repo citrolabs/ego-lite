@@ -396,16 +396,10 @@ text or selectors; verify those results with a screenshot or an
 application-specific visible state.
 
 `page.screenshot()` can sometimes fail after about 15s with
-`EGO_PAGE_UNRESPONSIVE` and `method: "Page.captureScreenshot"`, even if the Page
-still answers `evaluate()`; the message may blame a navigation. Retry at most
-once. For a canvas, read its pixels instead (tainted canvases throw; WebGL may
-read blank):
-
-```js
-const png = await page.evaluate(() =>
-  document.querySelector("canvas").toDataURL("image/png"),
-);
-```
+`EGO_PAGE_UNRESPONSIVE` on `Page.captureScreenshot`, even if `page.evaluate()`
+still works. Retry at most once. For a canvas, read its pixels through
+`page.evaluate()` with `canvas.toDataURL("image/png")` (tainted canvases throw;
+WebGL may read blank).
 
 ### Page JavaScript and CDP
 
