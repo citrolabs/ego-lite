@@ -395,6 +395,12 @@ it at scale. Canvas-backed editors may not expose visible content through DOM
 text or selectors; verify those results with a screenshot or an
 application-specific visible state.
 
+`page.screenshot()` can sometimes fail after about 15s with
+`EGO_PAGE_UNRESPONSIVE` on `Page.captureScreenshot`, even if `page.evaluate()`
+still works. Retry at most once. For a canvas, read its pixels through
+`page.evaluate()` with `canvas.toDataURL("image/png")` (tainted canvases throw;
+WebGL may read blank).
+
 ### Page JavaScript and CDP
 
 Use `page.evaluate()` for bulk extraction or complex in-page work. It accepts
