@@ -247,5 +247,32 @@ export function pointerCase() {
     await waitForJsValue("window.__fixtureState.checkboxChecked", true, "first click checks the checkbox");
     await click("#checkbox");
     await waitForJsValue("window.__fixtureState.checkboxChecked", false, "second click unchecks the checkbox");
+
+    /* element point outside the viewport: scroll to it, or report it */
+    cliLog(JSON.stringify({ pointerStep: "click below fold" }));
+    const belowFold = await gotoAndWait(baseUrl + "/click-below-fold", { timeout: 10 });
+    assert(belowFold.loaded, "below-fold fixture loaded");
+    await click("#partial");
+    await waitForJsValue("window.__clicked.join()", "partial", "click reaches a button whose center is below the fold");
+    await click("#far");
+    await waitForJsValue("window.__clicked.join()", "partial,far", "click scrolls to a button far below the fold");
+    await js("window.scrollTo({ top: 0, behavior: 'instant' }); return true;");
+    await click("loc=css:#far");
+    await waitForJsValue("window.__clicked.join()", "partial,far,far", "click scrolls a locator target into view");
+    await assertRejects(
+      () => click("#unreachable"),
+      "not visible in the viewport",
+      "click reports an element it cannot bring into the viewport"
+    );
+    await assertRejects(
+      () => click("loc=css:#unreachable"),
+      "not visible in the viewport",
+      "click reports an unreachable locator target"
+    );
+    assertEqual(
+      await js("return window.__clicked.join()"),
+      "partial,far,far",
+      "a rejected click dispatches nothing"
+    );
   `;
 }

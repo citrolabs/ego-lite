@@ -390,6 +390,40 @@ export async function startFixtureServer(taskName) {
         </html>`);
       return;
     }
+    if (url.pathname === "/click-below-fold") {
+      // Mirrors the CITRO-3536 repro: #partial shows its top edge above the
+      // fold while its center sits below it.
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(`<!doctype html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>click below fold</title>
+            <style>
+              html { scroll-behavior: smooth; }
+              body { margin: 0; font: 16px sans-serif; }
+              button { display: block; height: 40px; }
+              #spacer { height: calc(100vh - 12px); }
+              #gap { height: 3000px; }
+              #unreachable { position: fixed; top: -200px; }
+            </style>
+          </head>
+          <body>
+            <div id="spacer"></div>
+            <button id="partial">Partial</button>
+            <div id="gap"></div>
+            <button id="far">Far</button>
+            <button id="unreachable">Unreachable</button>
+            <script>
+              window.__clicked = [];
+              for (const button of document.querySelectorAll("button")) {
+                button.addEventListener("click", () => window.__clicked.push(button.id));
+              }
+            </script>
+          </body>
+        </html>`);
+      return;
+    }
     if (url.pathname === "/wheel-trap") {
       // Mirrors the CITRO-4275 repro: a block that swallows wheel events covers
       // the bottom of the viewport, and the input sits below it. With

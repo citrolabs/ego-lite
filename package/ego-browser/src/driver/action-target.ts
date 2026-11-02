@@ -245,6 +245,37 @@ export const SCROLL_TARGET_HELPERS = `
 `;
 
 /**
+ * Browser-side point for the v1 `click()` helper. A point already inside the
+ * viewport is kept. Otherwise the element is scrolled to the viewport center;
+ * if it cannot get there (fixed position, end of the scroll range), a click
+ * without a caller-chosen offset settles for its visible part. A point that is
+ * still outside is reported, because input dispatched there hits nothing.
+ */
+export const CLICK_POINT_HELPERS = `
+  ${SCROLL_TARGET_HELPERS}
+  function clickPointForElement(element, offset) {
+    const view = element.ownerDocument.defaultView;
+    const inViewport = (point) =>
+      point.x >= 0 && point.y >= 0 &&
+      point.x < view.innerWidth && point.y < view.innerHeight;
+    const elementPoint = () => {
+      const rect = element.getBoundingClientRect();
+      return offset
+        ? { x: rect.x + offset.x, y: rect.y + offset.y }
+        : { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    };
+    let point = elementPoint();
+    if (inViewport(point)) return point;
+    element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+    point = elementPoint();
+    if (inViewport(point)) return point;
+    const visible = offset ? null : actionPointForElement(element);
+    if (visible && inViewport(visible)) return visible;
+    return { error: "element is not visible in the viewport" };
+  }
+`;
+
+/**
  * Scroll targeting plus the enabled check, for a forced click that skips the
  * hit test but still refuses a disabled element.
  */
