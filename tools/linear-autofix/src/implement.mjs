@@ -146,10 +146,14 @@ export async function implement(issue, record) {
 export async function publish(record) {
   const dir = worktreePath(record.identifier);
   const base = `${config.remote}/${config.baseBranch}`;
-  const pr = record.implement?.pr;
-  if (!pr?.title || !pr?.body) {
-    return escalate(record, `没有保存下来的 PR 标题和描述，无法 publish。`);
+  const pr = prMetadata(record);
+  if (!pr) {
+    return escalate(
+      record,
+      `没有保存下来的 PR 标题和描述（record.implement.pr 或 run 目录里的 pr.json），无法 publish。`,
+    );
   }
+  record.implement = { ...record.implement, pr };
   if (!fs.existsSync(dir)) {
     return escalate(record, `worktree 不存在：\`${dir}\``);
   }
@@ -220,6 +224,21 @@ export async function publish(record) {
     `**已开 PR** ${prInfo.url}${draft ? "（draft，待在 Windows 上验证后转正）" : ""}\n\n机器人会跟进 Codex review 和人工评论，直到没有新意见为止。合并由人工完成。\n\n${FOOTER}`,
   );
   transition(record, "in_review", prInfo.url);
+}
+
+/**
+ * PR title/body for a ticket: saved on the record, or read from the implement
+ * run's pr.json (records written before the field existed). Pure apart from
+ * the file read.
+ */
+export function prMetadata(record) {
+  const saved = record.implement?.pr;
+  if (saved?.title && saved?.body) return saved;
+  const runDirectory = record.implement?.runDir;
+  if (!runDirectory) return null;
+  const fromFile = readJson(path.join(runDirectory, "pr.json"));
+  if (!fromFile?.title || !fromFile?.body) return null;
+  return { title: String(fromFile.title).trim(), body: String(fromFile.body) };
 }
 
 function renderTriageForPrompt(t) {

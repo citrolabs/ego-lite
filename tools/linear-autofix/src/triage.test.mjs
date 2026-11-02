@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderTriageComment, validateTriage } from "./triage.mjs";
-import { composePrBody, PR_FOOTER } from "./implement.mjs";
+import { composePrBody, PR_FOOTER, prMetadata } from "./implement.mjs";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { parseJsonBlock, renderPrompt } from "./claude.mjs";
 import { ciStatus } from "./github.mjs";
 
@@ -112,4 +115,22 @@ test("ciStatus folds the rollup into one of four states", () => {
     ]),
     "failure",
   );
+});
+
+test("prMetadata prefers the saved PR fields and falls back to the run's pr.json", () => {
+  const runDir = fs.mkdtempSync(path.join(os.tmpdir(), "autofix-pr-"));
+  assert.equal(prMetadata({ implement: { runDir } }), null);
+  fs.writeFileSync(
+    path.join(runDir, "pr.json"),
+    JSON.stringify({ title: " t ", body: "b" }),
+  );
+  assert.deepEqual(prMetadata({ implement: { runDir } }), {
+    title: "t",
+    body: "b",
+  });
+  assert.deepEqual(
+    prMetadata({ implement: { runDir, pr: { title: "saved", body: "s" } } }),
+    { title: "saved", body: "s" },
+  );
+  assert.equal(prMetadata({}), null);
 });
