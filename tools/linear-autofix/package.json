@@ -1,0 +1,18 @@
+{
+  "name": "linear-autofix",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Unattended Linear → PR → review-loop orchestrator for ego-lite",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "linear-autofix": "./src/cli.mjs"
+  },
+  "scripts": {
+    "tick": "node src/cli.mjs tick",
+    "status": "node src/cli.mjs status",
+    "test": "node --test \"src/**/*.test.mjs\""
+  }
+}

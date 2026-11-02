@@ -7,7 +7,10 @@ import {
 } from "../scripts/real-browser-e2e/ego-browser-cli.mjs";
 import { pageActionabilityCase } from "../scripts/real-browser-e2e/cases/page-actionability.mjs";
 import { pageScrolledScreenshotCase } from "../scripts/real-browser-e2e/cases/page-screenshot.mjs";
-import { parseOnlyCases } from "../scripts/real-browser-e2e/runner.mjs";
+import {
+  extractCaseError,
+  parseOnlyCases,
+} from "../scripts/real-browser-e2e/runner.mjs";
 
 test("real-browser E2E honors an explicit Ego Lite CLI", () => {
   assert.equal(
@@ -89,6 +92,18 @@ test("real-browser E2E rejects an explicitly empty selection", () => {
     () => parseOnlyCases("[]", ["Page API alignment"]),
     /must select at least one/i,
   );
+});
+
+test("real-browser E2E reports the reason a case logged for failing", () => {
+  const stdout = [
+    "[ego-browser:notice] an update is available",
+    '{"ok":false,"assertions":15,"error":"page.click timed out"}',
+    "",
+    "ego's nodejs process exited with code 1.",
+  ].join("\n");
+  assert.equal(extractCaseError(stdout, ""), "page.click timed out");
+  assert.equal(extractCaseError('{"ok":true,"assertions":3}'), null);
+  assert.equal(extractCaseError(undefined, "plain stack trace"), null);
 });
 
 test("the scrolled screenshot fixture is larger than the live viewport", () => {

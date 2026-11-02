@@ -20,12 +20,13 @@ Pass the script to `ego-browser nodejs`.
 
 <!-- mode: ego-run -->
 
-Pass the script to `ego-run --session <id>`. Use one session id per user goal
-(lowercase letters, digits, dashes, up to 64 characters, such as the task space name). The user starts the daemon once with `ego-run daemon start
---detach`; on `EGO_RUN_DAEMON_UNAVAILABLE` ask them to, do not start it
-yourself. Scripts of one session share one Node.js context and run one at a
-time: top-level `const`/`let` declarations, functions, and Page handles from
-earlier scripts stay defined, so use `task`, `page`, or a popup handle directly; do not copy them to `globalThis`.
+Pass the script to `ego-run --session <id>`, one session id per user goal
+(lowercase letters, digits, dashes, up to 64 characters, such as the task space
+name). The user starts the daemon once with `ego-run daemon start --detach`; on
+`EGO_RUN_DAEMON_UNAVAILABLE` ask them to, never start it yourself. Scripts of
+one session share one Node.js context and run one at a time: top-level
+declarations, functions, and Page handles from earlier scripts stay defined, so
+use `task`, `page`, or a popup handle directly instead of `globalThis`.
 
 <!-- /mode -->
 
@@ -81,15 +82,16 @@ await page.snapshot()
 EOF
 ```
 
-The last expression (or `return` value) is printed after the `console.log`
-output: end every script with the observation the next step needs. A later
-script continues with the same `page`:
+The last expression (or `return` value) prints after the `console.log` output,
+so end each script with the observation the next step needs. A later script
+reuses `page`:
 
 ```bash
 ego-run --session inspect-example -e 'await page.click("@3"); await page.snapshot()'
 ```
 
-A popup caught in one script (`const preview = await popupPromise`) stays `preview` in later scripts.
+A popup caught in one script (`const preview = await popupPromise`) stays
+`preview` later.
 
 When a sandbox blocks heredoc input, use `-e` or `--file <absolute path>`.
 
@@ -243,13 +245,11 @@ stop and ask the user.
 
 <!-- mode: ego-run -->
 
-- The session context is rebuilt when a script exceeds its deadline
-  (`--timeout-ms`, default 60000) or blocks the event loop; `ego-run` prints
-  `[ego-run] session ... was rebuilt`, and the next script gets its handles
-  again with `taskSpace(name)` and `task.page(label)`. Spaces, tabs, and labels
-  persist.
-- Keep a whole loop (paging, polling) in one script; raise its deadline with
-  `--timeout-ms <ms>` (max 180000).
+- A script that exceeds its deadline (`--timeout-ms`, default 60000, max
+  180000) or blocks the event loop rebuilds the session context: `ego-run`
+  prints `[ego-run] session ... was rebuilt`, and the next script reacquires
+  its handles with `taskSpace(name)` and `task.page(label)`. Spaces, tabs, and
+  labels persist. Keep a whole loop (paging, polling) in one script.
 
 <!-- /mode -->
 
@@ -269,7 +269,8 @@ await source.goto("https://example.com/releases");
 
 <!-- /mode -->
 
-Do not inspect or select profiles unless the user explicitly asks for a particular Ego Lite profile; a `profileId` applies only when creating a space (`help("profiles")`).
+Do not inspect or select profiles unless the user explicitly asks for one; a
+`profileId` applies only when creating a space (`help("profiles")`).
 
 Supported TaskSpace API:
 
@@ -279,15 +280,16 @@ Supported TaskSpace API:
 - Control: `waitForControl(options)`, `handOff()`, `finish({ keep })`
 - Advanced: `cdp(method, params, options)`
 
-Pages receive permanent labels such as `p1`, `p2`, `p3`; prefer them to custom `{ as }` values. Reuse or close Pages as the task proceeds; the runtime
-reports the configured Page budget when it is reached.
+Pages receive permanent labels such as `p1`, `p2`, `p3`; prefer them to custom
+`{ as }` values. Reuse or close Pages as the task proceeds; the runtime reports
+the Page budget when it is reached.
 
 `task.newPage()` creates another blank Page when several Pages must stay open; navigate it with `page.goto()`.
 
-`task.page(label)` only refers to a Page that already exists; it never creates
-one, and its handle is always truthy, so `task.page("p2") || await task.newPage()`
-and `if (!page)` do not detect a missing label. Use labels printed by earlier
-output or by `await task.pages()`, and call `await task.newPage()` to create one.
+`task.page(label)` only refers to an existing Page and its handle is always
+truthy, so `task.page("p2") || await task.newPage()` and `if (!page)` do not
+detect a missing label. Use labels printed earlier or by `await task.pages()`,
+and `await task.newPage()` to create one.
 
 `await task.pages()` returns managed Pages. `await task.tabs()` returns every tab in the
 space as `{ label?, page, targetId, title, url, active, openedBy }`. A tab
@@ -324,9 +326,9 @@ ego-browser provides the following Page API:
 - Page code and protocols: `evaluate(fnOrString, argument)`,
   `fetch(url, options)`, `cdp(method, params, options)`
 
-`page.evaluate()` callbacks run only inside the Page; they cannot read variables
-or Node.js modules from the surrounding script. Define browser-side helpers
-inside the callback or pass one JSON-serializable value as its second argument.
+`page.evaluate()` callbacks run only inside the Page and cannot read variables
+or Node.js modules from the script: define browser-side helpers inside the
+callback or pass one JSON-serializable value as its second argument.
 
 `goto()` and `reload()` stop a navigation that has not committed by their
 timeout, so the Page stays usable on its previous document; retry with a longer
@@ -342,9 +344,8 @@ Work efficiently:
 - Each time you observe, collect only the cheapest page state sufficient to
   choose the next action. Use a snapshot for semantic or locator ground truth
   and a screenshot for visual confirmation; do not request both by default.
-- If an action does not produce the expected result, inspect the current page
-  before deciding whether to retry. Do not blindly repeat it or immediately
-  fall back to coordinates or raw CDP.
+- If an action does not produce the expected result, inspect the page before
+  retrying; do not blindly repeat it or fall back to coordinates or raw CDP.
 - Once the page clearly shows the requested result, stop; do not confirm the
   same result through multiple surfaces.
 
@@ -354,23 +355,21 @@ Prefer snapshots and semantic selectors for ordinary DOM pages. Use screenshots
 and coordinates only when useful DOM semantics are unavailable.
 
 Before choosing an unfamiliar target, take a snapshot. When the current state
-is sufficient to plan several actions on the same Page, complete them in one
-script invocation, then observe the result once. Observe between actions only when an
+suffices to plan several actions on the same Page, complete them in one script
+invocation, then observe once. Observe between actions only when an
 intermediate result changes what should happen next. Keep the action sequence,
 the wait for its final expected state, and the next snapshot in the same
 script invocation. Print the snapshot last so the next round can act on it directly.
-The final snapshot is the next round's starting view of the changed page;
-without it, that round usually has to spend a separate browser call observing
-before it can choose the next target, which wastes compute.
+The final snapshot is the next round's starting view; without it, that round
+spends a separate browser call observing before it can act.
 
 Wait for the expected result: use `waitForURL()` for navigation,
 `waitForSelector()` for element state, or `waitForFunction()` for application
 state. Avoid fixed delays when an observable condition exists. Actions stop
 waiting for a missing target once the page is idle, so `waitForSelector()`
 first when an element is expected later. A snapshot captures the current
-moment; it does not wait for the page to become stable.
-`page.snapshot()` captures the current viewport. For content outside it, use
-`page.snapshot({ scope: "full_page" })`. When the document scrolls past the
+moment; it does not wait for the page to become stable, and it covers only the
+viewport. For content outside it, use `page.snapshot({ scope: "full_page" })`. When the document scrolls past the
 viewport, the snapshot ends with a `[more content below the viewport: ...]`
 line: nodes are omitted, not absent. If the expected result may land below
 the fold, scroll or use `full_page` before concluding it did not appear.
@@ -502,6 +501,12 @@ For rich-text editors and editable grids, validate a small edit before repeating
 it at scale. Canvas-backed editors may not expose visible content through DOM
 text or selectors; verify those results with a screenshot or an
 application-specific visible state.
+
+`page.screenshot()` can sometimes fail after about 15s with
+`EGO_PAGE_UNRESPONSIVE` on `Page.captureScreenshot`, even if `page.evaluate()`
+still works. Retry at most once. For a canvas, read its pixels through
+`page.evaluate()` with `canvas.toDataURL("image/png")` (tainted canvases throw;
+WebGL may read blank).
 
 ### Page JavaScript and CDP
 

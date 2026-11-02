@@ -96,6 +96,21 @@ test("each platform guide keeps only its own passages", async () => {
   assert.ok(guides.macos.length < guides.windows.length);
 });
 
+test("the visual pages guide says how to recover from a screenshot timeout", async () => {
+  const guide = await readFile(join(outDir, "ego-browser/SKILL.md"), "utf8");
+  const section = /^### Visual pages:[\s\S]*?(?=^### )/m.exec(guide)?.[0] ?? "";
+  assert.match(section, /EGO_PAGE_UNRESPONSIVE/);
+  assert.match(section, /Page\.captureScreenshot/);
+  assert.match(section, /at most once/);
+  assert.match(section, /\.toDataURL\("image\/png"\)/);
+  assert.match(section, /page\.evaluate\(/);
+  assert.match(section, /tainted/);
+  assert.match(section, /WebGL/);
+  // The cause of the hang is not established, so the guide must stay conditional.
+  assert.match(section, /can sometimes/);
+  assert.doesNotMatch(section, /minimi[sz]ed|occluded|background window/i);
+});
+
 test("the ego-run guide swaps the direct-execution passages for session ones", async () => {
   const source = await readFile(guideSource, "utf8");
   const version = /^version: "([^"]+)"$/m.exec(source)[1];
