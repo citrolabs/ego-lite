@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.mjs";
-import { loadPrompt, renderPrompt, runClaude } from "./claude.mjs";
+import {
+  loadPrompt,
+  renderPrompt,
+  runClaude,
+  UsageLimitError,
+} from "./claude.mjs";
 import * as git from "./git.mjs";
 import * as github from "./github.mjs";
 import * as linear from "./linear.mjs";
@@ -44,6 +49,28 @@ export const CODE_TOOLS = [
   "Bash(git rm *)",
   "Bash(git mv *)",
 ];
+
+/**
+ * Run Claude with the code tools in a worktree. A run cut off by the usage limit
+ * leaves half-finished work, so it is dropped: the retry after the reset starts
+ * from the same commit as this run, and never mistakes it for a finished fix.
+ */
+export async function runCodeClaude(dir, options) {
+  const before = await git.headSha(dir);
+  try {
+    return await runClaude({
+      ...options,
+      cwd: dir,
+      allowedTools: CODE_TOOLS,
+      addDirs: [options.runDir],
+    });
+  } catch (err) {
+    if (err instanceof UsageLimitError && err.duringRun) {
+      await git.discardTo(dir, before);
+    }
+    throw err;
+  }
+}
 
 export const PR_FOOTER =
   "🤖 Generated with [Claude Code](https://claude.com/claude-code)";
@@ -91,13 +118,10 @@ export async function implement(issue, record) {
     outDir: out,
     identifier: record.identifier,
   });
-  const res = await runClaude({
+  const res = await runCodeClaude(dir, {
     prompt,
-    cwd: dir,
     runDir: out,
     label: "implement",
-    allowedTools: CODE_TOOLS,
-    addDirs: [out],
     budgetUsd: config.implementBudgetUsd,
     timeoutMs: config.implementTimeoutMs,
   });

@@ -1,3 +1,4 @@
+import { UsageLimitError } from "./claude.mjs";
 import { config } from "./config.mjs";
 import * as github from "./github.mjs";
 import * as linear from "./linear.mjs";
@@ -9,6 +10,7 @@ import {
   stopRequested,
   transition,
   upsertFromIssue,
+  usagePausedUntil,
 } from "./state.mjs";
 import { triage } from "./triage.mjs";
 import { implement } from "./implement.mjs";
@@ -59,6 +61,12 @@ async function guarded(record, fn) {
     await fn();
     clearErrors(record);
   } catch (err) {
+    // Not the ticket's fault: it does not count toward escalation, and it
+    // resumes from its current stage once the pause ends.
+    if (err instanceof UsageLimitError) {
+      note(record, "usage limit", err.message);
+      return;
+    }
     await recordError(record, err);
   }
 }
@@ -101,11 +109,19 @@ export async function tick() {
       await guarded(record, () => review(issue, record));
     }
 
+    const pausedUntil = usagePausedUntil();
+    if (pausedUntil) {
+      console.log(
+        `Claude usage paused until ${new Date(pausedUntil).toISOString()}; skipping triage and implementation`,
+      );
+      return;
+    }
+
     // 2. Triage new tickets; adopt tickets whose branch already has an open PR.
     for (const { issue, record } of work.filter(
       (w) => w.record.stage === "new",
     )) {
-      if (stopRequested()) return;
+      if (stopRequested() || usagePausedUntil()) return;
       await guarded(record, async () => {
         const existing = await github.findPr(record.branch);
         if (existing?.state === "OPEN") {
@@ -132,7 +148,7 @@ export async function tick() {
     for (const { issue, record } of work.filter(
       (w) => w.record.stage === "triaged",
     )) {
-      if (stopRequested()) return;
+      if (stopRequested() || usagePausedUntil()) return;
       if (open() >= config.maxImplementing) {
         note(
           record,

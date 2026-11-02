@@ -15,6 +15,7 @@ export const STAGES = Object.freeze([
 const issuesDir = () => path.join(config.stateDir, "issues");
 const lockPath = () => path.join(config.stateDir, "tick.lock");
 const stopPath = () => path.join(config.stateDir, "STOP");
+const usagePausePath = () => path.join(config.stateDir, "usage-pause.json");
 
 export function ensureStateDir() {
   fs.mkdirSync(issuesDir(), { recursive: true });
@@ -55,6 +56,32 @@ export function loadAll() {
     .readdirSync(issuesDir())
     .filter((f) => f.endsWith(".json"))
     .map((f) => JSON.parse(fs.readFileSync(path.join(issuesDir(), f), "utf8")));
+}
+
+/** When the Claude usage pause ends (ms), or null when there is none. */
+export function usagePausedUntil(now = Date.now()) {
+  try {
+    const until = new Date(
+      JSON.parse(fs.readFileSync(usagePausePath(), "utf8")).until,
+    ).getTime();
+    return until > now ? until : null;
+  } catch (err) {
+    if (err.code === "ENOENT") return null;
+    throw err;
+  }
+}
+
+/** Stop calling Claude until `until` (ms). Shared by every ticket and process. */
+export function setUsagePause(until, reason) {
+  ensureStateDir();
+  fs.writeFileSync(
+    usagePausePath(),
+    JSON.stringify({ until: new Date(until).toISOString(), reason }, null, 2),
+  );
+}
+
+export function clearUsagePause() {
+  fs.rmSync(usagePausePath(), { force: true });
 }
 
 export function save(record) {
