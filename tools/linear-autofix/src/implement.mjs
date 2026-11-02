@@ -177,6 +177,13 @@ export async function publish(record) {
     );
   }
 
+  note(
+    record,
+    "push",
+    config.e2eKnownFailures.length
+      ? `E2E gate: the bot runs the suite without ${config.e2eKnownFailures.join(", ")} and pushes with the hook excluded`
+      : "no AUTOFIX_E2E_KNOWN_FAILURES set: the pre-push hook runs the full E2E suite",
+  );
   let gate;
   try {
     gate = await gatedPush(dir, record.branch);
