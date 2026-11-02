@@ -6,15 +6,17 @@ import {
   load,
   loadAll,
   remove,
+  clearUsagePause,
   setStop,
   stopRequested,
+  usagePausedUntil,
   transition,
   upsertFromIssue,
   worktreePath,
 } from "./state.mjs";
 import * as git from "./git.mjs";
 import * as github from "./github.mjs";
-import { daemon, reconcile, tick } from "./tick.mjs";
+import { daemon, reconcile, tick, timestampLogs } from "./tick.mjs";
 import { triage } from "./triage.mjs";
 import { implement, publish } from "./implement.mjs";
 import { review } from "./review.mjs";
@@ -135,6 +137,11 @@ function status() {
   );
   if (stopRequested())
     console.log("STOP file present: ticks exit immediately\n");
+  const pausedUntil = usagePausedUntil();
+  if (pausedUntil)
+    console.log(
+      `Claude usage limit: no Claude runs until ${new Date(pausedUntil).toISOString()} (resume clears this)\n`,
+    );
   const width = Math.max(10, ...records.map((r) => r.identifier.length));
   for (const r of records) {
     const extra = r.pr?.url ?? r.triage?.verdict ?? "";
@@ -148,8 +155,10 @@ function status() {
 async function main([command, arg]) {
   switch (command) {
     case "tick":
+      timestampLogs();
       return tick();
     case "daemon":
+      timestampLogs();
       return daemon();
     case "triage": {
       const { issue, record } = await one(arg);
@@ -206,7 +215,8 @@ async function main([command, arg]) {
       );
     case "resume":
       setStop(false);
-      return console.log("STOP file removed");
+      clearUsagePause();
+      return console.log("STOP file and usage pause removed");
     default:
       process.stdout.write(USAGE);
       process.exitCode = command ? 1 : 0;

@@ -158,6 +158,11 @@ export async function recentLog(dir, ref) {
   return (await gitIn(dir, ["log", "--oneline", `${ref}..HEAD`])).stdout.trim();
 }
 
+/** `git diff --stat` of the branch relative to `ref`. */
+export async function diffStat(dir, ref) {
+  return (await gitIn(dir, ["diff", "--stat", `${ref}...HEAD`])).stdout.trim();
+}
+
 /** Files changed on the branch relative to `ref`. */
 export async function changedFiles(dir, ref) {
   const { stdout } = await gitIn(dir, ["diff", "--name-only", `${ref}...HEAD`]);
@@ -180,10 +185,17 @@ export async function push(dir, branch, { skipHookE2e = false } = {}) {
     );
     return;
   }
+  console.log(`git push ${branch}`);
   await gitIn(dir, ["push", "--set-upstream", config.remote, branch], {
     timeoutMs: config.pushTimeoutMs,
     env: skipHookE2e ? { LEFTHOOK_EXCLUDE: "e2e-test" } : {},
   });
+}
+
+/** Drop whatever a run left in the worktree: commits after `sha` and untracked files (ignored ones stay). */
+export async function discardTo(dir, sha) {
+  await gitIn(dir, ["reset", "--hard", sha]);
+  await gitIn(dir, ["clean", "-fd"]);
 }
 
 export async function remoteSha(dir, branch) {
@@ -198,6 +210,7 @@ export async function remoteSha(dir, branch) {
 export async function installDeps(dir) {
   const pkg = `${dir}/${config.packageDir}`;
   if (fs.existsSync(`${pkg}/node_modules/.bin/prettier`)) return;
+  console.log(`npm ci in ${pkg}`);
   await run("npm", ["ci", "--no-audit", "--no-fund"], {
     cwd: pkg,
     timeoutMs: 15 * 60_000,

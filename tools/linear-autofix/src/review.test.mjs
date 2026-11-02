@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assessHead } from "./review.mjs";
+import { assessHead, pendingFeedback } from "./review.mjs";
 
 const clean = {
   body: "<!-- codex-review -->\n## 🤖 Codex Review · `abcd1234`\n<sub>x</sub>\nNo issues found that require changes.",
@@ -154,4 +154,13 @@ test("new human PR conversation comments start a fix round", () => {
   });
   assert.deepEqual(r.problems, ["comments"]);
   assert.equal(r.action, "fix");
+});
+
+test("a finished PR reopens on new threads or comments, and only then", () => {
+  assert.equal(pendingFeedback([], []), null);
+  assert.equal(pendingFeedback([{ id: "t" }], []), "1 review thread(s)");
+  assert.equal(
+    pendingFeedback([{ id: "t" }], [{ body: "a" }, { body: "b" }]),
+    "1 review thread(s), 2 comment(s)",
+  );
 });

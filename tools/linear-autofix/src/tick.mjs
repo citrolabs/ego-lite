@@ -1,3 +1,4 @@
+import { UsageLimitError } from "./claude.mjs";
 import { config } from "./config.mjs";
 import * as github from "./github.mjs";
 import * as linear from "./linear.mjs";
@@ -9,10 +10,11 @@ import {
   stopRequested,
   transition,
   upsertFromIssue,
+  usagePausedUntil,
 } from "./state.mjs";
 import { triage } from "./triage.mjs";
 import { implement } from "./implement.mjs";
-import { review } from "./review.mjs";
+import { review, watchDone } from "./review.mjs";
 import { clearErrors, recordError } from "./actions.mjs";
 import { flushTickLog } from "./journal.mjs";
 
@@ -54,11 +56,33 @@ export function reconcile(record, issue) {
   return record;
 }
 
+/** "in_review 2, new 1" for the log. Pure. */
+export function stageCounts(records) {
+  const counts = new Map();
+  for (const r of records) counts.set(r.stage, (counts.get(r.stage) ?? 0) + 1);
+  return [...counts].map(([stage, n]) => `${stage} ${n}`).join(", ") || "none";
+}
+
+/** Prefix console output with the local time, so a quiet stretch is visible as one. */
+export function timestampLogs() {
+  for (const method of ["log", "warn", "error"]) {
+    const original = console[method].bind(console);
+    console[method] = (...args) =>
+      original(new Date().toLocaleString("sv"), ...args);
+  }
+}
+
 async function guarded(record, fn) {
   try {
     await fn();
     clearErrors(record);
   } catch (err) {
+    // Not the ticket's fault: it does not count toward escalation, and it
+    // resumes from its current stage once the pause ends.
+    if (err instanceof UsageLimitError) {
+      note(record, "usage limit", err.message);
+      return;
+    }
     await recordError(record, err);
   }
 }
@@ -92,6 +116,13 @@ export async function tick() {
       issue,
       record: reconcile(upsertFromIssue(issue), issue),
     }));
+    console.log(`stages: ${stageCounts(work.map((w) => w.record))}`);
+
+    // 0. Finished PRs that are still open: a human comment reopens the loop.
+    for (const { record } of work.filter((w) => w.record.stage === "done")) {
+      if (stopRequested()) return;
+      await guarded(record, () => watchDone(record));
+    }
 
     // 1. Review loops first: cheap checks that may finish a PR.
     for (const { issue, record } of work.filter(
@@ -101,11 +132,19 @@ export async function tick() {
       await guarded(record, () => review(issue, record));
     }
 
+    const pausedUntil = usagePausedUntil();
+    if (pausedUntil) {
+      console.log(
+        `Claude usage paused until ${new Date(pausedUntil).toISOString()}; skipping triage and implementation`,
+      );
+      return;
+    }
+
     // 2. Triage new tickets; adopt tickets whose branch already has an open PR.
     for (const { issue, record } of work.filter(
       (w) => w.record.stage === "new",
     )) {
-      if (stopRequested()) return;
+      if (stopRequested() || usagePausedUntil()) return;
       await guarded(record, async () => {
         const existing = await github.findPr(record.branch);
         if (existing?.state === "OPEN") {
@@ -132,7 +171,7 @@ export async function tick() {
     for (const { issue, record } of work.filter(
       (w) => w.record.stage === "triaged",
     )) {
-      if (stopRequested()) return;
+      if (stopRequested() || usagePausedUntil()) return;
       if (open() >= config.maxImplementing) {
         note(
           record,
@@ -154,6 +193,9 @@ export async function tick() {
       error: failure,
     });
     releaseLock();
+    console.log(
+      `tick finished in ${Math.round((Date.now() - startedAt) / 1000)} s`,
+    );
   }
 }
 
