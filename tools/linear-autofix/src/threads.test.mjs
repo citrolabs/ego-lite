@@ -134,4 +134,9 @@ test("freshPrComments keeps only human conversation comments newer than the base
   );
   assert.equal(freshPrComments(comments, "2026-11-02T05:00:00Z").length, 0);
   assert.equal(freshPrComments(comments, null).length, 3);
+  assert.equal(
+    freshPrComments(comments, "").length,
+    3,
+    "an empty baseline sees every human comment",
+  );
 });

@@ -122,8 +122,9 @@ export async function review(issue, record) {
     );
   }
   // Conversation comments are answered once: everything up to the newest one
-  // handled so far has been seen. Adopted/created PRs start from now.
-  record.review.commentsSeenAt ??= new Date().toISOString();
+  // handled so far has been seen. The baseline is set when the PR is created
+  // (publish) or adopted (tick); a record without one sees every comment.
+  record.review.commentsSeenAt ??= "";
   const prComments = freshPrComments(pr.comments, record.review.commentsSeenAt);
   const verdict = assessHead({
     pr,

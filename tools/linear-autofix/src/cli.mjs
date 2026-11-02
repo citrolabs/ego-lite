@@ -99,6 +99,9 @@ async function reset(requested, deleteRemote) {
       `${pr.url} is still open; close it before resetting ${identifier}`,
     );
   }
+  // Refuse before anything is removed: with the branch checked out in the main
+  // checkout, deleting it would fail after the worktree was already gone.
+  await git.assertMainCheckoutNotOn(branch);
   const dir = worktreePath(identifier);
   await git.removeWorktree(dir);
   console.log(`worktree removed: ${dir}`);

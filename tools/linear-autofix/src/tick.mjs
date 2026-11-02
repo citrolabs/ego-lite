@@ -114,7 +114,8 @@ export async function tick() {
             url: existing.url,
             draft: existing.isDraft,
           };
-          record.review = { rounds: 0 };
+          // Adopted PRs may already carry human comments: see them all.
+          record.review = { rounds: 0, commentsSeenAt: "" };
           transition(
             record,
             "in_review",

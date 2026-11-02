@@ -226,6 +226,7 @@ export async function publish(record) {
       }),
       draft,
     });
+    prInfo.createdNow = true;
     note(record, "pr created", prInfo.url);
   }
   record.pr = {
@@ -233,7 +234,12 @@ export async function publish(record) {
     url: prInfo.url,
     draft: prInfo.isDraft ?? draft,
   };
-  record.review = { rounds: 0 };
+  // Comments cannot predate the PR, so "now" misses nothing for a PR the bot
+  // just created; a PR that already existed keeps its earlier comments visible.
+  record.review = {
+    rounds: 0,
+    commentsSeenAt: prInfo.createdNow ? new Date().toISOString() : "",
+  };
   record.consecutiveErrors = 0;
 
   if (["Backlog", "Todo"].includes(record.linearState)) {
