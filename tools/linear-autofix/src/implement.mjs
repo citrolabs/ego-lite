@@ -54,9 +54,12 @@ export const CODE_TOOLS = [
  * Run Claude with the code tools in a worktree. A run cut off by the usage limit
  * leaves half-finished work, so it is dropped: the retry after the reset starts
  * from the same commit as this run, and never mistakes it for a finished fix.
+ * Only a worktree that was clean before the run is rolled back; changes already
+ * there may be someone's, so a dirty one is left as it is for a human.
  */
 export async function runCodeClaude(dir, options) {
   const before = await git.headSha(dir);
+  const cleanBefore = !(await git.isDirty(dir));
   try {
     return await runClaude({
       ...options,
@@ -66,7 +69,11 @@ export async function runCodeClaude(dir, options) {
     });
   } catch (err) {
     if (err instanceof UsageLimitError && err.duringRun) {
-      await git.discardTo(dir, before);
+      if (cleanBefore) await git.discardTo(dir, before);
+      else
+        console.warn(
+          `${dir} had uncommitted changes before the run; leaving the cut-off run's work in place`,
+        );
     }
     throw err;
   }

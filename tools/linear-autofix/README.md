@@ -235,8 +235,11 @@ reports none. During the pause:
 - Triage and implementation are skipped, and no review fix round starts.
 - Review checks keep running, since they do not need Claude: merged PRs,
   finished reviews and waiting PRs are still handled.
-- A ticket cut off mid-run loses that run's commits and uncommitted changes.
-  The first tick after the reset starts it again from where the run started.
+- A ticket cut off mid-run loses that run's commits and uncommitted changes,
+  provided its worktree was clean when the run started. The first tick after
+  the reset starts it again from where the run started. A worktree that already
+  had uncommitted changes is left untouched, since they may be someone's; the
+  ticket then stops on the dirty worktree and needs a human.
 
 `node src/cli.mjs status` shows the pause, and `node src/cli.mjs resume` clears
 it early (for example after adding usage). The run's own `AUTOFIX_*_BUDGET_USD`

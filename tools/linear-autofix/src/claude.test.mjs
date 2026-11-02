@@ -208,6 +208,20 @@ process.stdin.on("end", () => {
   fs.writeFileSync(path.join(repo, "a.txt"), "by hand\n");
   await assert.rejects(runCodeClaude(repo, run), UsageLimitError);
   assert.equal(fs.readFileSync(path.join(repo, "a.txt"), "utf8"), "by hand\n");
+
+  // Dirty before the run: the run is cut off, but nothing is discarded.
+  clearUsagePause();
+  fs.writeFileSync(path.join(repo, "mine.txt"), "untracked by hand\n");
+  const original = console.warn;
+  console.warn = () => {};
+  try {
+    await assert.rejects(runCodeClaude(repo, run), UsageLimitError);
+  } finally {
+    console.warn = original;
+  }
+  assert.notEqual(git("rev-parse", "HEAD"), start);
+  assert.ok(fs.existsSync(path.join(repo, "mine.txt")));
+  assert.ok(fs.existsSync(path.join(repo, "new.txt")));
   clearUsagePause();
 });
 
