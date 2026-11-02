@@ -14,7 +14,7 @@ import {
 } from "./state.mjs";
 import { triage } from "./triage.mjs";
 import { implement } from "./implement.mjs";
-import { review } from "./review.mjs";
+import { review, watchDone } from "./review.mjs";
 import { clearErrors, recordError } from "./actions.mjs";
 import { flushTickLog } from "./journal.mjs";
 
@@ -117,6 +117,12 @@ export async function tick() {
       record: reconcile(upsertFromIssue(issue), issue),
     }));
     console.log(`stages: ${stageCounts(work.map((w) => w.record))}`);
+
+    // 0. Finished PRs that are still open: a human comment reopens the loop.
+    for (const { record } of work.filter((w) => w.record.stage === "done")) {
+      if (stopRequested()) return;
+      await guarded(record, () => watchDone(record));
+    }
 
     // 1. Review loops first: cheap checks that may finish a PR.
     for (const { issue, record } of work.filter(
