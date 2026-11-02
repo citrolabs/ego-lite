@@ -175,7 +175,8 @@ the ticket stays readable. Set `AUTOFIX_LOG_ISSUE=` (empty) to disable.
 | `AUTOFIX_LINEAR_STATES`      | `Backlog,Todo,In Progress,Pending Review` | states polled                                                |
 | `AUTOFIX_BASE_BRANCH`        | `dev`                                     | PR base and worktree base                                    |
 | `AUTOFIX_MAX_IMPLEMENTING`   | `2`                                       | bot PRs allowed in review at once                            |
-| `AUTOFIX_MAX_REVIEW_ROUNDS`  | `5`                                       | fix rounds per PR before escalating                          |
+| `AUTOFIX_MAX_REVIEW_ROUNDS`  | `10`                                      | fix rounds per PR before escalating                          |
+| `AUTOFIX_INTERVAL_MS`        | `600000` (10 min)                         | pause between ticks in `daemon` mode                         |
 | `AUTOFIX_*_BUDGET_USD`       | triage 2 / implement 25 / review 15       | `--max-budget-usd` per Claude run                            |
 | `AUTOFIX_*_TIMEOUT_MS`       | triage 10 min / implement 90 / review 60  | wall-clock limit per Claude run                              |
 | `AUTOFIX_PUSH_TIMEOUT_MS`    | 45 min                                    | covers the pre-push E2E suite                                |
@@ -200,7 +201,7 @@ the ticket stays readable. Set `AUTOFIX_LOG_ISSUE=` (empty) to disable.
 
 The bot's own comments start with `<!-- linear-autofix -->` and are never fed
 back to it. Feedback is picked up on the next tick (every 10 minutes by
-default), so a comment is acted on within about half an hour.
+default), so a comment is acted on within about ten minutes.
 
 ## Review-loop termination
 
