@@ -158,6 +158,11 @@ export async function recentLog(dir, ref) {
   return (await gitIn(dir, ["log", "--oneline", `${ref}..HEAD`])).stdout.trim();
 }
 
+/** `git diff --stat` of the branch relative to `ref`. */
+export async function diffStat(dir, ref) {
+  return (await gitIn(dir, ["diff", "--stat", `${ref}...HEAD`])).stdout.trim();
+}
+
 /** Files changed on the branch relative to `ref`. */
 export async function changedFiles(dir, ref) {
   const { stdout } = await gitIn(dir, ["diff", "--name-only", `${ref}...HEAD`]);

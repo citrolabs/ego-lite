@@ -219,6 +219,12 @@ the ticket stays readable. Set `AUTOFIX_LOG_ISSUE=` (empty) to disable.
   is no resolve state, so write a new comment to ask for more.
 - **CI failures**: the failing check output.
 
+Every kind of feedback is read against the PR's own diff: the fix prompt
+carries the branch's commits and diffstat and tells Claude to read the full
+diff first, so "can we shorten this file?" means the parts the PR changed, not
+the whole file. A repository-wide change happens only when a comment asks for
+one explicitly.
+
 The bot's own comments start with `<!-- linear-autofix -->` and are never fed
 back to it. Feedback is picked up on the next tick (every 10 minutes by
 default), so a comment is acted on within about ten minutes.
@@ -233,6 +239,11 @@ A thread the bot answered without resolving still counts as unresolved: it
 blocks `done` and waits for a human, but does not trigger another fix round.
 If CI or the Codex review has not reported for a head within two hours the
 ticket escalates rather than finishing, since both run on every PR here.
+
+`done` is not final while the PR is open: every tick still looks at finished
+PRs, and a new human review thread or conversation comment puts the ticket back
+into the review loop, so a comment left after the bot declared the PR clean is
+still acted on. Once the PR is merged or closed the ticket is left alone.
 
 Codex skips draft PRs, so a draft (Windows ticket) with green CI and no threads
 is reported on Linear as _ready for Windows verification_ and waits for a human
