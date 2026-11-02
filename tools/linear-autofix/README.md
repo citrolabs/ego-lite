@@ -219,6 +219,12 @@ the ticket stays readable. Set `AUTOFIX_LOG_ISSUE=` (empty) to disable.
   is no resolve state, so write a new comment to ask for more.
 - **CI failures**: the failing check output.
 
+Every kind of feedback is read against the PR's own diff: the fix prompt
+carries the branch's commits and diffstat and tells Claude to read the full
+diff first, so "can we shorten this file?" means the parts the PR changed, not
+the whole file. A repository-wide change happens only when a comment asks for
+one explicitly.
+
 The bot's own comments start with `<!-- linear-autofix -->` and are never fed
 back to it. Feedback is picked up on the next tick (every 10 minutes by
 default), so a comment is acted on within about ten minutes.

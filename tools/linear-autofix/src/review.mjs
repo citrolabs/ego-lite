@@ -266,12 +266,15 @@ export async function review(issue, record) {
     );
   }
   const before = await git.headSha(dir);
+  const base = `${config.remote}/${config.baseBranch}`;
   const out = runDir(record.identifier, `review-${round}`);
   const prompt = renderPrompt(loadPrompt("review-fix"), {
     prNumber: pr.number,
     prUrl: pr.url,
     branch: record.branch,
-    baseBranch: `${config.remote}/${config.baseBranch}`,
+    baseBranch: base,
+    prCommits: (await git.recentLog(dir, base)) || "(none)",
+    prDiffStat: (await git.diffStat(dir, base)) || "(no changes)",
     packageDir: config.packageDir,
     outDir: out,
     issue: linear.renderIssue(issue),
