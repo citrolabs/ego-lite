@@ -8,19 +8,23 @@ import * as linear from "./linear.mjs";
 import { note, runDir, transition, worktreePath } from "./state.mjs";
 import { escalate, FOOTER } from "./actions.mjs";
 
+/**
+ * Tools the implementer and the review fixer may use. The list keeps Claude on
+ * rails and out of `git push`, `gh` and anything with network side effects; it
+ * is not a sandbox against a hostile model (Edit plus `npm run` can execute
+ * arbitrary code). Containment comes from the dedicated host and its limited
+ * credentials. No `cd`, so every command runs at the worktree root; no bare
+ * `node`/`npx`, which would allow arbitrary code outside the test runner.
+ */
 export const CODE_TOOLS = [
   "Read",
   "Edit",
   "Write",
   "Grep",
   "Glob",
-  "Bash(cd *)",
-  "Bash(ls *)",
-  "Bash(cat *)",
-  "Bash(npm *)",
-  "Bash(npx *)",
-  "Bash(node *)",
-  "Bash(*/node_modules/.bin/*)",
+  "Bash(npm --prefix package/ego-browser *)",
+  "Bash(npm --prefix plugins/ego *)",
+  "Bash(package/ego-browser/node_modules/.bin/prettier *)",
   "Bash(git add *)",
   "Bash(git commit *)",
   "Bash(git diff *)",

@@ -9,8 +9,14 @@ export class ProcessError extends Error {
 }
 
 /**
- * Run a child process to completion. Rejects on a non-zero exit or on timeout
- * (SIGTERM, then SIGKILL 10 s later). `input` is written to stdin.
+ * Run a child process to completion. Rejects on a non-zero exit or on timeout.
+ * `input` is written to stdin.
+ *
+ * The child is started in its own process group (`detached`), so a timeout
+ * terminates the whole tree: Claude's npm, node and shell descendants go with
+ * it (SIGTERM, then SIGKILL 10 s later). The promise settles only when every
+ * holder of the stdio pipes has exited, so a worktree is quiet by the time a
+ * timeout is reported.
  */
 export function run(
   cmd,
@@ -22,6 +28,7 @@ export function run(
       cwd,
       env: { ...process.env, ...env },
       stdio: ["pipe", "pipe", "pipe"],
+      detached: true,
     });
     let stdout = "";
     let stderr = "";
@@ -30,8 +37,8 @@ export function run(
     child.stderr.on("data", (d) => (stderr += d));
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 10_000).unref();
+      killTree(child, "SIGTERM");
+      setTimeout(() => killTree(child, "SIGKILL"), 10_000).unref();
     }, timeoutMs);
     child.on("error", (err) => {
       clearTimeout(timer);
@@ -67,6 +74,20 @@ export function run(
     if (input !== undefined) child.stdin.end(input);
     else child.stdin.end();
   });
+}
+
+/** Signal the child's whole process group; fall back to the child alone. */
+export function killTree(child, signal) {
+  if (!child.pid) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch (err) {
+    if (err.code !== "ESRCH") {
+      try {
+        child.kill(signal);
+      } catch {}
+    }
+  }
 }
 
 export function tail(text, lines = 40) {

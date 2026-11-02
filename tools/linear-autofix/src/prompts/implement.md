@@ -11,11 +11,11 @@ about them.
 
 1. Reproduce first: write a failing colocated `*.test.mjs` test (or extend an
    existing one) that captures the defect. Tests run against the build, so
-   `cd {{packageDir}} && npm test` builds, typechecks and runs them.
+   `npm --prefix {{packageDir}} test` builds, typechecks and runs them.
 2. Fix the root cause with the smallest change that is honest and complete.
    Keep `public-api-schema.ts`, `help()` JSDoc and `skill-body/SKILL.md` in
    sync if the public surface or its documentation changes.
-3. Run `cd {{packageDir}} && npm test` until it passes. Format changed files
+3. Run `npm --prefix {{packageDir}} test` until it passes. Stay at the worktree root: `cd` is not permitted, so use paths and `npm --prefix` from here. Format changed files
    with `{{packageDir}}/node_modules/.bin/prettier --write <files>`.
 4. Commit everything on this branch. Use one or a few focused commits. The
    subject follows the repository style, for example

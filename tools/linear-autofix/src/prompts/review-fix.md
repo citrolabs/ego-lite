@@ -12,7 +12,7 @@ Do not modify `AGENTS.md`, `CLAUDE.md`, `lefthook.yml` or anything under
 
 1. For each finding, either fix it or decide, with a concrete reason, that it
    is not a defect. Prefer fixing. A reviewer asking for a test gets a test.
-2. Run `cd {{packageDir}} && npm test` until it passes. Format changed files
+2. Run `npm --prefix {{packageDir}} test` until it passes. Stay at the worktree root: `cd` is not permitted, so use paths and `npm --prefix` from here. Format changed files
    with `{{packageDir}}/node_modules/.bin/prettier --write <files>`.
 3. Commit on this branch with the repository's commit style and the trailer
    `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`. Do **not** push.
