@@ -34,14 +34,22 @@ export async function cdp(method, params: any = {}, sessionId = undefined) {
   return result;
 }
 
+// The only CDP commands whose protocol parameters include sessionId.
+const COMMANDS_WITH_SESSION_ID_PARAM = new Set([
+  "Target.detachFromTarget",
+  "Target.sendMessageToTarget",
+]);
+
 /**
  * A session is selected by the CDP message envelope, not by params. Chromium
  * ignores an unknown params.sessionId, so the command would run in the default
- * session and return a plausible result from the wrong target. Only the Target
- * domain defines sessionId as a real parameter.
+ * session and return a plausible result from the wrong target.
  */
 export function assertNoSessionIdInParams(apiName, method, params, remedy) {
-  if (params?.sessionId === undefined || String(method).startsWith("Target.")) {
+  if (
+    params?.sessionId === undefined ||
+    COMMANDS_WITH_SESSION_ID_PARAM.has(method)
+  ) {
     return;
   }
   throw new TypeError(

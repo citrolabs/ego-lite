@@ -5322,6 +5322,10 @@ test("Page and TaskSpace CDP reject a sessionId they would not honour", async ()
       () => task.cdp("Browser.getVersion", { sessionId: "other" }),
       /TaskSpace\.cdp.*Browser\.getVersion/,
     );
+    await assert.rejects(
+      () => task.cdp("Target.getTargets", { sessionId: "other" }),
+      /TaskSpace\.cdp.*Target\.getTargets/,
+    );
     assert.deepEqual(
       fixture.calls.filter(([kind]) => kind === "cdp"),
       [],

@@ -66,6 +66,26 @@ test("cdp keeps Target commands whose protocol params define sessionId", async (
   });
 });
 
+test("cdp rejects a sessionId on Target commands that do not define it", async () => {
+  await withRecordedCdp(async (calls) => {
+    for (const [method, params] of [
+      ["Target.getTargets", {}],
+      ["Target.attachToTarget", { targetId: "t1", flatten: true }],
+      ["Target.getTargetInfo", { targetId: "t1" }],
+    ]) {
+      await assert.rejects(
+        () => cdp(method, { ...params, sessionId: "s1" }),
+        (error) => {
+          assert(error instanceof TypeError);
+          assert(error.message.includes(method));
+          return true;
+        },
+      );
+    }
+    assert.deepEqual(calls, [], "the command must never reach the browser");
+  });
+});
+
 test("hasReturnStatement ignores returns inside nested functions", () => {
   for (const expression of [
     "[1, 2].map(x => { return x * 2; })",
