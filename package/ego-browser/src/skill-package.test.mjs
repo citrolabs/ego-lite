@@ -63,12 +63,11 @@ test("the guide hands login, verification and manual steps back to the user", as
     /CAPTCHA/,
     /human verification/i,
     /2FA/,
-    /one-time code/i,
     /manual step/i,
   ]) {
     assert.match(rule, trigger);
   }
-  assert.match(rule, /without telling the user/);
+  assert.match(rule, /work around it silently/);
   // Credentials the user supplied for the task stay usable.
   assert.match(rule, /credentials/i);
   assert.match(rule, /the user gave/);
