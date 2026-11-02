@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Runs one scheduler pass every 30 minutes. A pass that is still running
+    when the next one fires makes the newcomer exit at once (tick.lock).
+
+    Install (edit the paths and the API key first):
+      cp tools/linear-autofix/launchd/com.citrolabs.linear-autofix.plist ~/Library/LaunchAgents/
+      launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.citrolabs.linear-autofix.plist
+    Stop:
+      launchctl bootout gui/$(id -u)/com.citrolabs.linear-autofix
+  -->
+  <key>Label</key>
+  <string>com.citrolabs.linear-autofix</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>cd ~/code/ego-lite/tools/linear-autofix && exec node src/cli.mjs tick</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>LINEAR_API_KEY</key>
+    <string>lin_api_REPLACE_ME</string>
+    <!-- Optional overrides; see README. -->
+    <key>AUTOFIX_MAX_IMPLEMENTING</key>
+    <string>2</string>
+  </dict>
+
+  <key>StartInterval</key>
+  <integer>1800</integer>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/linear-autofix.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/linear-autofix.err.log</string>
+
+  <!-- The tick talks to Linear, GitHub and runs the real-browser E2E suite. -->
+  <key>Nice</key>
+  <integer>5</integer>
+</dict>
+</plist>
