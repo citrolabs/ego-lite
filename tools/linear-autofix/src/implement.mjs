@@ -211,6 +211,9 @@ export async function publish(record) {
   note(record, "pushed", await git.recentLog(dir, base));
 
   const draft = record.triage?.needs_windows === true;
+  // Taken before the PR exists, so no comment can slip in between creation
+  // and the baseline.
+  const beforeCreate = new Date().toISOString();
   let prInfo = await github.findPr(record.branch);
   if (prInfo?.state === "OPEN") {
     note(record, "pr exists", prInfo.url);
@@ -234,11 +237,11 @@ export async function publish(record) {
     url: prInfo.url,
     draft: prInfo.isDraft ?? draft,
   };
-  // Comments cannot predate the PR, so "now" misses nothing for a PR the bot
-  // just created; a PR that already existed keeps its earlier comments visible.
+  // Comments cannot predate the PR, so a timestamp taken before creation
+  // misses nothing; a PR that already existed keeps its earlier comments visible.
   record.review = {
     rounds: 0,
-    commentsSeenAt: prInfo.createdNow ? new Date().toISOString() : "",
+    commentsSeenAt: prInfo.createdNow ? beforeCreate : "",
   };
   record.consecutiveErrors = 0;
 
