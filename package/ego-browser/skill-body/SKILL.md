@@ -126,7 +126,8 @@ file: never put it in a `-e` argument.
 ego-run --session <id> --file C:/Users/<name>/ego/task.mjs
 ```
 
-`--file` reads UTF-8: the whole task, non-ASCII text included, belongs in the file, never in `-e`.
+`--file` reads UTF-8: put the whole task, non-ASCII text included, in the file,
+never in `-e`.
 
 <!-- /mode -->
 
@@ -201,12 +202,11 @@ working directory, so use absolute paths for every file, and it does not
 inherit your shell's environment variables (`process.env` lacks values set
 before running `ego-browser`), so write every input directly into the script.
 
-Ego-browser exposes a small custom API. It is not Playwright, even where method
-names and options look similar: use only the TaskSpace, Page, FileChooser,
-mouse, and keyboard APIs listed in this Skill, and do not infer Playwright
-methods such as `locator()`, `getByRole()`, `context()`, `expect()`, or
-`route()`. When the listed API does not cover an operation, use `page.evaluate()`
-or `page.cdp()` instead of guessing another method.
+Ego-browser exposes a small custom API. It is not Playwright, even where names
+look similar: use only the TaskSpace, Page, FileChooser, mouse, and keyboard
+APIs listed here, never inferred Playwright methods such as `locator()`,
+`getByRole()`, `context()`, `expect()`, or `route()`. When the listed API does
+not cover an operation, use `page.evaluate()` or `page.cdp()`.
 
 Only these pointer actions accept an optional `label` option, a concise 3-6
 word description shown next to the visible agent cursor: `click()`,
@@ -217,8 +217,8 @@ word description shown next to the visible agent cursor: `click()`,
 different: it selects the option whose visible text matches.
 
 `click()` and `dblclick()` accept `{ hover: false }` to skip the pointer move
-before the press, for example `await page.click("#next", { hover: false })` in
-a paging loop; keep the default for controls that appear or change on hover.
+before the press (useful in a paging loop); keep the default for controls that
+appear or change on hover.
 
 When the user explicitly asks for ego-browser, start with a real browser command
 and diagnose the CLI or installation only if it fails.
@@ -382,9 +382,9 @@ line:
 console.log(await page.snapshot({ scope: "subtree", root: "@12" }));
 ```
 
-Use the refs returned by the subtree for actions inside the iframe. A subtree
-snapshot does not scope later locator actions; they still prefer actionable
-matches in the top document before searching frames.
+Use the subtree's refs for actions inside the iframe. A subtree snapshot does
+not scope later locator actions, which still prefer the top document before
+searching frames.
 
 `waitForLoadState()` defaults to `load`. `waitForFunction()` follows the
 Playwright argument order; pass `undefined` before options when there is no Page
