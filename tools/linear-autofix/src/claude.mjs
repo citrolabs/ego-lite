@@ -2,11 +2,100 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.mjs";
 import { run, tail } from "./proc.mjs";
+import { setUsagePause, usagePausedUntil } from "./state.mjs";
+
+// How long to wait when a usage limit did not come with a reset time.
+const USAGE_RETRY_MS = 30 * 60_000;
+// Resume just after the reset, not at the instant the server may still refuse.
+const USAGE_RESET_MARGIN_MS = 60_000;
+const USAGE_LIMIT_TEXT =
+  /you've hit your .*(limit|budget)|usage limit reached|out of usage credits/i;
+
+/** The account is out of Claude usage; retrying before `until` (ms) is pointless. */
+export class UsageLimitError extends Error {
+  constructor(until, { reason, duringRun = false } = {}) {
+    super(
+      `Claude usage limit: paused until ${new Date(until).toISOString()}${reason ? ` (${reason})` : ""}`,
+    );
+    this.name = "UsageLimitError";
+    this.until = until;
+    // False when the run was refused before starting, so it changed nothing.
+    this.duringRun = duringRun;
+  }
+}
+
+/**
+ * Pick the final result and the last rejected rate-limit event out of
+ * `--output-format stream-json` output. Pure.
+ */
+export function parseClaudeStream(stdout) {
+  let result = null;
+  let rejected = null;
+  for (const line of String(stdout ?? "").split("\n")) {
+    if (!line.trim()) continue;
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (message.type === "result") result = message;
+    if (
+      message.type === "rate_limit_event" &&
+      message.rate_limit_info?.status === "rejected"
+    ) {
+      rejected = message.rate_limit_info;
+    }
+  }
+  return { result, rejected };
+}
+
+/**
+ * Whether a run stopped because the account ran out of usage, and when to try
+ * again (ms). A rejected event alone is not enough: a run can finish normally
+ * after one, and the run's own `--max-budget-usd` is a different limit. `stderr`
+ * is only consulted without a result; assistant text never is, since a ticket
+ * can talk about limits. Pure. Returns { until, reason } or null.
+ */
+export function detectUsageLimit({ result, rejected, stderr = "", now }) {
+  if (result && result.is_error !== true) return null;
+  if (/budget/i.test(result?.subtype ?? "")) return null;
+  const text = result ? String(result.result ?? "") : String(stderr);
+  if (
+    !rejected &&
+    result?.api_error_status !== 429 &&
+    !USAGE_LIMIT_TEXT.test(text)
+  ) {
+    return null;
+  }
+  const resetsAt = Number(rejected?.resetsAt) * 1000;
+  return {
+    until:
+      resetsAt > now ? resetsAt + USAGE_RESET_MARGIN_MS : now + USAGE_RETRY_MS,
+    reason: text.trim().slice(0, 200),
+  };
+}
+
+function pauseIfUsageLimit(stdout, stderr) {
+  const limit = detectUsageLimit({
+    ...parseClaudeStream(stdout),
+    stderr,
+    now: Date.now(),
+  });
+  if (!limit) return;
+  setUsagePause(limit.until, limit.reason);
+  throw new UsageLimitError(limit.until, {
+    reason: limit.reason,
+    duringRun: true,
+  });
+}
 
 /**
  * Run `claude -p` headless. The prompt goes in on stdin. Returns
  * { text, structured, costUsd, turns, raw }. Throws on timeout or a non-zero
- * exit; a Claude-side `is_error` result is returned with `isError: true`.
+ * exit, and throws UsageLimitError (after recording the pause) when the account
+ * is out of usage; any other Claude-side `is_error` result is returned with
+ * `isError: true`. stream-json is used because only it carries the reset time.
  *
  * Permission model: `dontAsk` denies every tool call outside `allowedTools`,
  * which is how the orchestrator keeps `git push` and `gh` in its own hands.
@@ -29,10 +118,14 @@ export async function runClaude({
   schema,
   addDirs = [],
 }) {
+  const pausedUntil = usagePausedUntil();
+  if (pausedUntil) throw new UsageLimitError(pausedUntil);
+
   const args = [
     "-p",
     "--output-format",
-    "json",
+    "stream-json",
+    "--verbose",
     "--no-session-persistence",
     "--strict-mcp-config",
   ];
@@ -65,17 +158,17 @@ export async function runClaude({
         err.stderr ?? "",
       );
     }
+    pauseIfUsageLimit(err.stdout, err.stderr);
     throw err;
   }
   if (runDir)
-    fs.writeFileSync(path.join(runDir, `${label}.stdout.json`), result.stdout);
+    fs.writeFileSync(path.join(runDir, `${label}.stdout.jsonl`), result.stdout);
 
-  let parsed;
-  try {
-    parsed = JSON.parse(result.stdout);
-  } catch {
+  pauseIfUsageLimit(result.stdout, result.stderr);
+  const { result: parsed } = parseClaudeStream(result.stdout);
+  if (!parsed) {
     throw new Error(
-      `claude returned non-JSON output:\n${tail(result.stdout)}\n${tail(result.stderr)}`,
+      `claude returned no result message:\n${tail(result.stdout)}\n${tail(result.stderr)}`,
     );
   }
   const text =

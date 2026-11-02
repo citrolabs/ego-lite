@@ -1,6 +1,6 @@
 import path from "node:path";
 import { config } from "./config.mjs";
-import { loadPrompt, renderPrompt, runClaude } from "./claude.mjs";
+import { loadPrompt, renderPrompt } from "./claude.mjs";
 import {
   classifyReview,
   extractFindings,
@@ -11,7 +11,13 @@ import {
 import * as git from "./git.mjs";
 import * as github from "./github.mjs";
 import * as linear from "./linear.mjs";
-import { note, runDir, transition, worktreePath } from "./state.mjs";
+import {
+  note,
+  runDir,
+  transition,
+  usagePausedUntil,
+  worktreePath,
+} from "./state.mjs";
 import {
   freshPrComments,
   renderPrComments,
@@ -19,7 +25,7 @@ import {
   splitThreads,
 } from "./threads.mjs";
 import { escalate, FOOTER } from "./actions.mjs";
-import { CODE_TOOLS, readJson } from "./implement.mjs";
+import { readJson, runCodeClaude } from "./implement.mjs";
 import { e2eWarning, flushE2eComment, gatedPush, recordE2e } from "./e2e.mjs";
 
 // After a push, Codex's review takes up to 30 minutes. Wait this long for a
@@ -127,7 +133,7 @@ export async function review(issue, record) {
   // (publish) or adopted (tick); a record without one sees every comment.
   record.review.commentsSeenAt ??= "";
   const prComments = freshPrComments(pr.comments, record.review.commentsSeenAt);
-  const verdict = assessHead({
+  const assessed = assessHead({
     pr,
     codex,
     ci,
@@ -136,6 +142,12 @@ export async function review(issue, record) {
     prComments,
     headSeenAt: record.review.headSeenAt,
   });
+  // Fixing needs Claude. Everything else (merged, done, draft ready) does not,
+  // so the check itself keeps running through a usage pause.
+  const verdict =
+    assessed.action === "fix" && usagePausedUntil()
+      ? { ...assessed, action: "wait" }
+      : assessed;
   note(
     record,
     `review check ${sha.slice(0, 8)}`,
@@ -223,13 +235,10 @@ export async function review(issue, record) {
     prComments: prComments.length ? renderPrComments(prComments) : "(none)",
     ciText: ci === "failure" ? await github.checksText(pr.number) : `(${ci})`,
   });
-  const res = await runClaude({
+  const res = await runCodeClaude(dir, {
     prompt,
-    cwd: dir,
     runDir: out,
     label: "review-fix",
-    allowedTools: CODE_TOOLS,
-    addDirs: [out],
     budgetUsd: config.reviewBudgetUsd,
     timeoutMs: config.reviewTimeoutMs,
   });

@@ -141,7 +141,7 @@ Operations:
 ```sh
 node src/cli.mjs status
 node src/cli.mjs stop        # STOP file: running tick finishes its step, later ticks exit
-node src/cli.mjs resume
+node src/cli.mjs resume      # also clears a Claude usage pause
 node src/cli.mjs publish CITRO-2908   # push failed or E2E did not finish? fix the host, then redo only E2E + push + PR
 node src/cli.mjs retry CITRO-2908     # start over: re-triage and re-implement (keeps worktree and branch)
 node src/cli.mjs reset CITRO-2908 --remote   # forget the ticket entirely: record, worktree, branches, bot labels
@@ -224,6 +224,26 @@ timestamps and line numbers) mean the bot is not making progress and it
 escalates instead of pushing again. A round whose outcome is `disputed`
 produces a PR comment and no commit; the next tick sees the same findings and
 escalates, which is intended: a dispute needs a human.
+
+## When Claude usage runs out
+
+A `claude -p` run that stops on the account's usage limit does not count as a
+ticket error. The bot records a pause in `usage-pause.json` in the state dir,
+until the reset time Claude reports plus one minute, or for 30 minutes when it
+reports none. During the pause:
+
+- Triage and implementation are skipped, and no review fix round starts.
+- Review checks keep running, since they do not need Claude: merged PRs,
+  finished reviews and waiting PRs are still handled.
+- A ticket cut off mid-run loses that run's commits and uncommitted changes,
+  provided its worktree was clean when the run started. The first tick after
+  the reset starts it again from where the run started. A worktree that already
+  had uncommitted changes is left untouched, since they may be someone's; the
+  ticket then stops on the dirty worktree and needs a human.
+
+`node src/cli.mjs status` shows the pause, and `node src/cli.mjs resume` clears
+it early (for example after adding usage). The run's own `AUTOFIX_*_BUDGET_USD`
+limit is different: it still escalates.
 
 ## E2E failures
 

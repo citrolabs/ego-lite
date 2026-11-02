@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.mjs";
-import { loadPrompt, renderPrompt, runClaude } from "./claude.mjs";
+import {
+  loadPrompt,
+  renderPrompt,
+  runClaude,
+  UsageLimitError,
+} from "./claude.mjs";
 import * as git from "./git.mjs";
 import * as github from "./github.mjs";
 import * as linear from "./linear.mjs";
@@ -44,6 +49,35 @@ export const CODE_TOOLS = [
   "Bash(git rm *)",
   "Bash(git mv *)",
 ];
+
+/**
+ * Run Claude with the code tools in a worktree. A run cut off by the usage limit
+ * leaves half-finished work, so it is dropped: the retry after the reset starts
+ * from the same commit as this run, and never mistakes it for a finished fix.
+ * Only a worktree that was clean before the run is rolled back; changes already
+ * there may be someone's, so a dirty one is left as it is for a human.
+ */
+export async function runCodeClaude(dir, options) {
+  const before = await git.headSha(dir);
+  const cleanBefore = !(await git.isDirty(dir));
+  try {
+    return await runClaude({
+      ...options,
+      cwd: dir,
+      allowedTools: CODE_TOOLS,
+      addDirs: [options.runDir],
+    });
+  } catch (err) {
+    if (err instanceof UsageLimitError && err.duringRun) {
+      if (cleanBefore) await git.discardTo(dir, before);
+      else
+        console.warn(
+          `${dir} had uncommitted changes before the run; leaving the cut-off run's work in place`,
+        );
+    }
+    throw err;
+  }
+}
 
 export const PR_FOOTER =
   "🤖 Generated with [Claude Code](https://claude.com/claude-code)";
@@ -91,13 +125,10 @@ export async function implement(issue, record) {
     outDir: out,
     identifier: record.identifier,
   });
-  const res = await runClaude({
+  const res = await runCodeClaude(dir, {
     prompt,
-    cwd: dir,
     runDir: out,
     label: "implement",
-    allowedTools: CODE_TOOLS,
-    addDirs: [out],
     budgetUsd: config.implementBudgetUsd,
     timeoutMs: config.implementTimeoutMs,
   });

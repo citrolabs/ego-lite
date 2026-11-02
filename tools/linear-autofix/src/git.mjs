@@ -186,6 +186,12 @@ export async function push(dir, branch, { skipHookE2e = false } = {}) {
   });
 }
 
+/** Drop whatever a run left in the worktree: commits after `sha` and untracked files (ignored ones stay). */
+export async function discardTo(dir, sha) {
+  await gitIn(dir, ["reset", "--hard", sha]);
+  await gitIn(dir, ["clean", "-fd"]);
+}
+
 export async function remoteSha(dir, branch) {
   const { stdout, code } = await gitIn(
     dir,
