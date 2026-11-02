@@ -177,6 +177,14 @@ export async function review(issue, record) {
 
   const dir = worktreePath(record.identifier);
   await git.ensureWorktree(dir, record.branch);
+  const sync = await git.syncWorktreeToRemote(dir, record.branch);
+  if (sync === "reset-to-remote") {
+    note(
+      record,
+      "worktree reset to the remote branch",
+      "the PR branch was rewritten outside the bot",
+    );
+  }
   await git.installDeps(dir);
   try {
     await git.mergeBase(dir);

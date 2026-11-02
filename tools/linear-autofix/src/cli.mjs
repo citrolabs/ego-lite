@@ -91,6 +91,7 @@ async function reset(identifier, deleteRemote) {
   console.log(`worktree removed: ${dir}`);
   if (await git.deleteLocalBranch(branch))
     console.log(`local branch deleted: ${branch}`);
+  await git.deleteTrackingRef(branch);
   if (deleteRemote) {
     await git.deleteRemoteBranch(branch);
     console.log(`remote branch deleted: ${config.remote}/${branch}`);
