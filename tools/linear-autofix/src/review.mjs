@@ -2,6 +2,7 @@ import path from "node:path";
 import { config } from "./config.mjs";
 import { loadPrompt, renderPrompt, runClaude } from "./claude.mjs";
 import {
+  classifyReview,
   extractFindings,
   findCodexReview,
   findingsFingerprint,
@@ -102,7 +103,17 @@ export async function review(issue, record) {
   const { fresh: threads, awaitingHuman } = splitThreads(
     await github.reviewThreads(pr.number),
   );
-  const codex = pr.isDraft ? null : findCodexReview(pr.comments, sha);
+  const codexComment = pr.isDraft ? null : findCodexReview(pr.comments, sha);
+  const inconclusive =
+    codexComment && classifyReview(codexComment.body) === "inconclusive";
+  const codex = inconclusive ? null : codexComment;
+  if (inconclusive) {
+    note(
+      record,
+      "codex review inconclusive",
+      extractFindings(codexComment.body).slice(0, 300),
+    );
+  }
   const verdict = assessHead({
     pr,
     codex,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  classifyReview,
   extractFindings,
   findCodexReview,
   findingsFingerprint,
@@ -62,4 +63,11 @@ test("findingsFingerprint ignores sha, timestamp and line drift but not content"
       findings("aaaaaaaa", 12).replace("never cleared", "cleared twice"),
     ),
   );
+});
+
+test("classifyReview tells clean, findings and a reviewer that could not run apart", () => {
+  assert.equal(classifyReview(clean("abcd1234")), "clean");
+  assert.equal(classifyReview(findings("abcd1234", 3)), "findings");
+  const failed = `<!-- codex-review -->\n\n## 🤖 Codex Review · \`abcd1234\`\n\n<sub>x</sub>\n\nI can't review the PR in this session because no shell tool is available.`;
+  assert.equal(classifyReview(failed), "inconclusive");
 });
