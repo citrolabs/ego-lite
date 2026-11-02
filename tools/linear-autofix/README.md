@@ -234,6 +234,11 @@ blocks `done` and waits for a human, but does not trigger another fix round.
 If CI or the Codex review has not reported for a head within two hours the
 ticket escalates rather than finishing, since both run on every PR here.
 
+`done` is not final while the PR is open: every tick still looks at finished
+PRs, and a new human review thread or conversation comment puts the ticket back
+into the review loop, so a comment left after the bot declared the PR clean is
+still acted on. Once the PR is merged or closed the ticket is left alone.
+
 Codex skips draft PRs, so a draft (Windows ticket) with green CI and no threads
 is reported on Linear as _ready for Windows verification_ and waits for a human
 to mark it ready; the loop then resumes.

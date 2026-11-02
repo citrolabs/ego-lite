@@ -14,6 +14,7 @@ import * as linear from "./linear.mjs";
 import {
   note,
   runDir,
+  save,
   transition,
   usagePausedUntil,
   worktreePath,
@@ -95,14 +96,58 @@ export function assessHead({
   };
 }
 
+/**
+ * Describe feedback that arrived on a finished PR, or null when there is none.
+ * Pure. `threads` are the fresh unresolved review threads, `prComments` the
+ * conversation comments newer than the bot's baseline.
+ */
+export function pendingFeedback(threads, prComments) {
+  const parts = [];
+  if (threads.length) parts.push(`${threads.length} review thread(s)`);
+  if (prComments.length) parts.push(`${prComments.length} comment(s)`);
+  return parts.length ? parts.join(", ") : null;
+}
+
+/**
+ * A `done` ticket is finished only until a human comments on its PR again.
+ * While the PR is open, look for new review threads or conversation comments
+ * and put the ticket back into the review loop when there are any. Once the PR
+ * is merged or closed, remember that and stop asking GitHub.
+ */
+export async function watchDone(record) {
+  if (!record.pr?.number || record.pr.state) return false;
+  const pr = await github.viewPr(record.pr.number);
+  if (pr.state !== "OPEN") {
+    record.pr.state = pr.state;
+    save(record);
+    return false;
+  }
+  const { fresh } = splitThreads(await github.reviewThreads(pr.number));
+  const prComments = freshPrComments(
+    pr.comments,
+    record.review?.commentsSeenAt ?? "",
+  );
+  const feedback = pendingFeedback(fresh, prComments);
+  if (!feedback) return false;
+  record.review ??= { rounds: 0 };
+  transition(
+    record,
+    "in_review",
+    `new feedback on the finished PR ${pr.url}: ${feedback}`,
+  );
+  return true;
+}
+
 export async function review(issue, record) {
   const pr = await github.viewPr(record.pr.number);
   record.pr.draft = pr.isDraft;
   if (pr.state === "MERGED") {
+    record.pr.state = pr.state;
     await git.removeWorktree(worktreePath(record.identifier));
     return transition(record, "done", `PR merged ${pr.url}`);
   }
   if (pr.state === "CLOSED") {
+    record.pr.state = pr.state;
     return transition(record, "done", `PR closed without merge ${pr.url}`);
   }
   await flushE2eComment(record, pr.number);
