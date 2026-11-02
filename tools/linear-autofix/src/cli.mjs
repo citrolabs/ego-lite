@@ -9,7 +9,7 @@ import {
   transition,
   upsertFromIssue,
 } from "./state.mjs";
-import { reconcile, tick } from "./tick.mjs";
+import { daemon, reconcile, tick } from "./tick.mjs";
 import { triage } from "./triage.mjs";
 import { implement, publish } from "./implement.mjs";
 import { review } from "./review.mjs";
@@ -19,6 +19,7 @@ const USAGE = `linear-autofix — Linear ticket → PR → review loop, unattend
 
 Usage:
   linear-autofix tick                 one scheduler pass over all assigned tickets
+  linear-autofix daemon               run ticks forever, AUTOFIX_INTERVAL_MS apart (for screen/tmux)
   linear-autofix triage <CITRO-123>   triage one ticket now
   linear-autofix implement <ID>       implement a ticket that was triaged as fix
   linear-autofix review <ID>          run one review-loop check for a ticket's PR
@@ -77,6 +78,8 @@ async function main([command, arg]) {
   switch (command) {
     case "tick":
       return tick();
+    case "daemon":
+      return daemon();
     case "triage": {
       const { issue, record } = await one(arg);
       return triage(issue, record);

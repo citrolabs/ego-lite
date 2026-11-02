@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderTriageComment, validateTriage } from "./triage.mjs";
-import { composePrBody, PR_FOOTER, prMetadata } from "./implement.mjs";
+import {
+  composePrBody,
+  PR_FOOTER,
+  prMetadata,
+  sharesScope,
+} from "./implement.mjs";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -133,4 +138,23 @@ test("prMetadata prefers the saved PR fields and falls back to the run's pr.json
     { title: "saved", body: "s" },
   );
   assert.equal(prMetadata({}), null);
+});
+
+test("sharesScope compares the first two path segments and refuses empty branches", () => {
+  assert.equal(
+    sharesScope(
+      ["package/ego-browser/src/a.ts"],
+      ["package/ego-browser/src/b.ts"],
+    ),
+    true,
+  );
+  assert.equal(
+    sharesScope(
+      ["tools/linear-autofix/src/cli.mjs"],
+      ["package/ego-browser/src/b.ts"],
+    ),
+    false,
+  );
+  assert.equal(sharesScope(["docs/x.md"], []), true);
+  assert.equal(sharesScope([], ["package/ego-browser/src/b.ts"]), false);
 });

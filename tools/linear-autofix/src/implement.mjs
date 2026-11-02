@@ -168,6 +168,15 @@ export async function publish(record) {
     return escalate(record, `分支上没有领先 ${base} 的提交，无法 publish。`);
   }
 
+  const changed = await git.changedFiles(dir, base);
+  const expected = record.triage?.affected_paths ?? [];
+  if (!sharesScope(changed, expected)) {
+    return escalate(
+      record,
+      `分支上的改动（${changed.slice(0, 8).join(", ")}${changed.length > 8 ? ", …" : ""}）与分诊预期的路径（${expected.join(", ")}）完全不相交，怀疑分支指向了错误的提交，已停止 publish。worktree: \`${dir}\``,
+    );
+  }
+
   let gate;
   try {
     gate = await gatedPush(dir, record.branch);
@@ -224,6 +233,19 @@ export async function publish(record) {
     `**已开 PR** ${prInfo.url}${draft ? "（draft，待在 Windows 上验证后转正）" : ""}\n\n机器人会跟进 Codex review 和人工评论，直到没有新意见为止。合并由人工完成。\n\n${FOOTER}`,
   );
   transition(record, "in_review", prInfo.url);
+}
+
+/**
+ * Whether the branch's changed files land in the same top-level area as the
+ * triage's expected paths (first two path segments). Guards against pushing a
+ * branch that was moved onto unrelated commits. Empty expectations pass.
+ */
+export function sharesScope(changedFiles, expectedPaths) {
+  if (!expectedPaths.length || !changedFiles.length)
+    return changedFiles.length > 0;
+  const area = (p) => p.split("/").slice(0, 2).join("/");
+  const expected = new Set(expectedPaths.map(area));
+  return changedFiles.some((f) => expected.has(area(f)));
 }
 
 /**

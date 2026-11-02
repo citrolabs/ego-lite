@@ -50,6 +50,8 @@ export const config = Object.freeze({
   // without them and pushes with the pre-push hook excluded; the PR body says so.
   e2eKnownFailures: list("AUTOFIX_E2E_KNOWN_FAILURES", []),
 
+  // `daemon` mode: pause between ticks.
+  intervalMs: num("AUTOFIX_INTERVAL_MS", 30 * 60_000),
   maxImplementing: num("AUTOFIX_MAX_IMPLEMENTING", 2),
   maxReviewRounds: num("AUTOFIX_MAX_REVIEW_ROUNDS", 5),
 

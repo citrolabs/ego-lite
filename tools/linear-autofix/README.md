@@ -108,7 +108,21 @@ AUTOFIX_ISSUE=CITRO-2908 node src/cli.mjs tick             # one real ticket end
 ```
 
 Watch that PR through a full review loop (`node src/cli.mjs status`, the tick
-log comments on the log ticket), then schedule:
+log comments on the log ticket), then keep it running. Two options.
+
+**Option A, a `screen` session** (no launchd; the process paces itself):
+
+```sh
+screen -dmS linear-autofix /bin/zsh -lc 'source ~/.config/linear-autofix/env && cd ~/code/ego-lite/tools/linear-autofix && exec node src/cli.mjs daemon 2>&1 | tee -a /tmp/linear-autofix.log'
+screen -r linear-autofix      # attach; Ctrl-A D detaches again
+```
+
+`daemon` runs a tick, sleeps `AUTOFIX_INTERVAL_MS` (default 30 min), repeats.
+Ctrl-C or SIGTERM lets the current tick finish, then exits. The STOP file
+skips ticks without killing the loop. A `screen` session does not survive a
+reboot or a logout, so after either one start it again (or keep Option B).
+
+**Option B, launchd** (survives reboots once the GUI session is back):
 
 ```sh
 cp launchd/com.citrolabs.linear-autofix.plist ~/Library/LaunchAgents/

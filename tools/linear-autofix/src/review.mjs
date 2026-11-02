@@ -22,7 +22,11 @@ const CODEX_WAIT_MS = 2 * 60 * 60_000;
 
 /**
  * Decide what the review loop should do for the PR's current head. Pure.
- * Returns { action: 'wait' | 'done' | 'draft_ready' | 'fix', problems }.
+ * Returns { action: 'wait' | 'done' | 'draft_ready' | 'fix' | 'escalate', problems, why }.
+ *
+ * `done` requires CI to have reported success. A head with no checks at all
+ * (`none`) is treated as not reported yet; after the wait window it escalates
+ * instead of finishing, since this repository runs CI on every PR.
  */
 export function assessHead({
   pr,
@@ -36,13 +40,22 @@ export function assessHead({
   if (ci === "failure") problems.push("ci");
   if (codex && !isCleanReview(codex.body)) problems.push("codex");
   if (threads.length) problems.push("threads");
-
-  if (ci === "pending" && !problems.length)
-    return { action: "wait", problems, why: "CI still running" };
   if (problems.length) return { action: "fix", problems };
+
+  const waited = headSeenAt ? now - new Date(headSeenAt).getTime() : 0;
+  if (ci === "pending")
+    return { action: "wait", problems, why: "CI still running" };
+  if (ci !== "success") {
+    if (waited < CODEX_WAIT_MS)
+      return { action: "wait", problems, why: "no CI result reported yet" };
+    return {
+      action: "escalate",
+      problems,
+      why: "no CI result was reported for this head within the wait window",
+    };
+  }
   if (pr.isDraft) return { action: "draft_ready", problems };
   if (!codex) {
-    const waited = headSeenAt ? now - new Date(headSeenAt).getTime() : 0;
     if (waited < CODEX_WAIT_MS)
       return { action: "wait", problems, why: "waiting for the Codex review" };
     return {
@@ -92,6 +105,12 @@ export async function review(issue, record) {
   );
 
   if (verdict.action === "wait") return;
+  if (verdict.action === "escalate") {
+    return escalate(
+      record,
+      `review 循环无法继续：${verdict.why}。PR: ${pr.url}`,
+    );
+  }
   if (verdict.action === "draft_ready") {
     if (!record.review.draftNotified) {
       record.review.draftNotified = true;

@@ -10,8 +10,10 @@ const dirty = {
 };
 const ready = { isDraft: false };
 const now = Date.parse("2026-11-02T12:00:00Z");
+const recent = "2026-11-02T11:30:00Z";
+const old = "2026-11-02T09:00:00Z";
 
-test("waits while CI runs or while the Codex review is pending", () => {
+test("waits while CI runs, has not reported, or while the Codex review is pending", () => {
   assert.equal(
     assessHead({ pr: ready, codex: null, ci: "pending", threads: [], now })
       .action,
@@ -20,39 +22,54 @@ test("waits while CI runs or while the Codex review is pending", () => {
   assert.equal(
     assessHead({
       pr: ready,
+      codex: clean,
+      ci: "none",
+      threads: [],
+      headSeenAt: recent,
+      now,
+    }).action,
+    "wait",
+  );
+  assert.equal(
+    assessHead({
+      pr: ready,
       codex: null,
       ci: "success",
       threads: [],
-      headSeenAt: "2026-11-02T11:30:00Z",
+      headSeenAt: recent,
       now,
     }).action,
     "wait",
   );
 });
 
-test("finishes when Codex is clean, CI green and no threads are open", () => {
+test("finishes only when CI reported success", () => {
   assert.equal(
     assessHead({ pr: ready, codex: clean, ci: "success", threads: [], now })
       .action,
     "done",
   );
   assert.equal(
-    assessHead({ pr: ready, codex: clean, ci: "none", threads: [], now })
-      .action,
+    assessHead({
+      pr: ready,
+      codex: null,
+      ci: "success",
+      threads: [],
+      headSeenAt: old,
+      now,
+    }).action,
     "done",
   );
-});
-
-test("finishes without Codex once the wait window has passed", () => {
-  const r = assessHead({
+  const noCi = assessHead({
     pr: ready,
-    codex: null,
-    ci: "success",
+    codex: clean,
+    ci: "none",
     threads: [],
-    headSeenAt: "2026-11-02T09:00:00Z",
+    headSeenAt: old,
     now,
   });
-  assert.equal(r.action, "done");
+  assert.equal(noCi.action, "escalate");
+  assert.match(noCi.why, /no CI result/);
 });
 
 test("fixes on CI failure, Codex findings or open human threads, even while CI is pending", () => {
@@ -103,5 +120,16 @@ test("a draft PR with nothing to fix is reported as ready for manual verificatio
       now,
     }).action,
     "fix",
+  );
+  assert.equal(
+    assessHead({
+      pr: { isDraft: true },
+      codex: null,
+      ci: "none",
+      threads: [],
+      headSeenAt: recent,
+      now,
+    }).action,
+    "wait",
   );
 });

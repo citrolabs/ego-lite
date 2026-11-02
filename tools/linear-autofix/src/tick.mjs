@@ -83,6 +83,7 @@ export async function tick() {
     if (config.onlyIssue)
       issues = issues.filter((i) => i.identifier === config.onlyIssue);
     issues.sort(byPriority);
+    issueCount = issues.length;
     console.log(
       `${issues.length} assigned issue(s) in ${config.linearStates.join("/")}`,
     );
@@ -152,5 +153,37 @@ export async function tick() {
       error: failure,
     });
     releaseLock();
+  }
+}
+
+/**
+ * Run ticks forever with `config.intervalMs` between them. For hosts without
+ * launchd: `screen -dmS linear-autofix … node src/cli.mjs daemon`. SIGINT and
+ * SIGTERM finish the current tick, then exit. The STOP file skips ticks but
+ * keeps the loop alive, so `resume` takes effect without a restart.
+ */
+export async function daemon() {
+  let stopping = false;
+  const onSignal = (signal) => {
+    console.log(`${signal} received; finishing the current tick, then exiting`);
+    stopping = true;
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  console.log(
+    `daemon: tick every ${Math.round(config.intervalMs / 60_000)} min, state in ${config.stateDir}`,
+  );
+  while (!stopping) {
+    const started = Date.now();
+    try {
+      await tick();
+    } catch (err) {
+      console.error(`tick failed: ${err?.stack ?? err}`);
+    }
+    const wait = Math.max(60_000, config.intervalMs - (Date.now() - started));
+    console.log(`next tick at ${new Date(Date.now() + wait).toISOString()}`);
+    for (let waited = 0; waited < wait && !stopping; waited += 1000) {
+      await new Promise((r) => setTimeout(r, Math.min(1000, wait - waited)));
+    }
   }
 }
