@@ -22,8 +22,18 @@ export function ensureStateDir() {
   fs.mkdirSync(path.join(config.stateDir, "runs"), { recursive: true });
 }
 
+const IDENTIFIER = /^[A-Z][A-Z0-9]{0,15}-\d{1,8}$/;
+
+/** A Linear identifier such as CITRO-2908; anything else is refused before it reaches a path. */
+export function assertIdentifier(identifier) {
+  if (typeof identifier !== "string" || !IDENTIFIER.test(identifier)) {
+    throw new Error(`invalid issue identifier: ${JSON.stringify(identifier)}`);
+  }
+  return identifier;
+}
+
 export function recordPath(identifier) {
-  return path.join(issuesDir(), `${identifier}.json`);
+  return path.join(issuesDir(), `${assertIdentifier(identifier)}.json`);
 }
 
 export function load(identifier) {
@@ -186,7 +196,7 @@ export function runDir(identifier, stage) {
   const dir = path.join(
     config.stateDir,
     "runs",
-    identifier,
+    assertIdentifier(identifier),
     `${new Date().toISOString().replace(/[:.]/g, "-")}-${stage}`,
   );
   fs.mkdirSync(dir, { recursive: true });
@@ -194,7 +204,7 @@ export function runDir(identifier, stage) {
 }
 
 export function worktreePath(identifier) {
-  return path.join(config.stateDir, "worktrees", identifier);
+  return path.join(config.stateDir, "worktrees", assertIdentifier(identifier));
 }
 
 export function truncate(text, max = 160) {

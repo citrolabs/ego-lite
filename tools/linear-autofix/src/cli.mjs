@@ -2,6 +2,7 @@
 import { config } from "./config.mjs";
 import * as linear from "./linear.mjs";
 import {
+  assertIdentifier,
   load,
   loadAll,
   remove,
@@ -57,8 +58,13 @@ async function logged(label, fn) {
 
 async function one(identifier) {
   if (!identifier) throw new Error("issue identifier required");
+  assertIdentifier(identifier);
   const issue = await linear.fetchIssue(identifier);
   if (!issue) throw new Error(`Linear has no issue ${identifier}`);
+  if (issue.identifier !== identifier)
+    throw new Error(
+      `Linear resolved ${identifier} to ${issue.identifier}; use the canonical identifier`,
+    );
   return { issue, record: reconcile(upsertFromIssue(issue), issue) };
 }
 
@@ -68,11 +74,18 @@ async function one(identifier) {
  * labels. The remote branch goes only with --remote, and only when no PR on
  * it is open.
  */
-async function reset(identifier, deleteRemote) {
-  if (!identifier) throw new Error("issue identifier required");
+async function reset(requested, deleteRemote) {
+  if (!requested) throw new Error("issue identifier required");
+  assertIdentifier(requested);
+  const issue = await linear.fetchIssue(requested);
+  if (!issue) throw new Error(`Linear has no issue ${requested}`);
+  // Every path below is built from Linear's canonical identifier, not from argv.
+  const identifier = assertIdentifier(issue.identifier);
+  if (identifier !== requested)
+    throw new Error(
+      `Linear resolved ${requested} to ${identifier}; rerun with the canonical identifier`,
+    );
   const record = load(identifier);
-  const issue = await linear.fetchIssue(identifier);
-  if (!issue) throw new Error(`Linear has no issue ${identifier}`);
   const branch = record?.branch ?? issue.branchName;
   const ref = {
     id: issue.id,
@@ -164,7 +177,7 @@ async function main([command, arg]) {
     case "reset":
       return reset(arg, process.argv.includes("--remote"));
     case "retry": {
-      const record = load(arg);
+      const record = load(assertIdentifier(arg));
       if (!record) throw new Error(`no record for ${arg}`);
       record.consecutiveErrors = 0;
       const open = await github.findPr(record.branch);

@@ -108,3 +108,20 @@ test("the tick lock is exclusive, stale locks are reclaimed and the STOP file is
   assert.equal(state.stopRequested(), true);
   state.setStop(false);
 });
+
+test("identifiers are validated before they become paths", () => {
+  assert.throws(
+    () => state.recordPath("../etc/passwd"),
+    /invalid issue identifier/,
+  );
+  assert.throws(
+    () => state.worktreePath("CITRO-1/../x"),
+    /invalid issue identifier/,
+  );
+  assert.throws(
+    () => state.assertIdentifier("citro-1"),
+    /invalid issue identifier/,
+  );
+  assert.equal(state.assertIdentifier("CL-556"), "CL-556");
+  assert.equal(state.assertIdentifier("CITRO-2908"), "CITRO-2908");
+});
