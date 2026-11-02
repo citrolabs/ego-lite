@@ -414,6 +414,11 @@ export async function startFixtureServer(taskName) {
             <div id="gap"></div>
             <button id="far">Far</button>
             <button id="unreachable">Unreachable</button>
+            <iframe
+              title="framed"
+              style="display: block; height: 120px; border: 2px solid"
+              srcdoc="<button onclick='parent.__clicked.push(&quot;framed&quot;)'>Framed</button>"
+            ></iframe>
             <script>
               window.__clicked = [];
               for (const button of document.querySelectorAll("button")) {

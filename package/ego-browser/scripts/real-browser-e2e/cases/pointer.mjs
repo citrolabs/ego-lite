@@ -274,5 +274,12 @@ export function pointerCase() {
       "partial,far,far",
       "a rejected click dispatches nothing"
     );
+    await js("window.scrollTo({ top: 0, behavior: 'instant' }); return true;");
+    await click("loc=role:button[name='Framed']");
+    await waitForJsValue(
+      "window.__clicked.join()",
+      "partial,far,far,framed",
+      "click scrolls a same-process iframe target into view and lands on it"
+    );
   `;
 }

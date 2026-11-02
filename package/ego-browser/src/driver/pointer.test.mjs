@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { setOverrides } from "../../dist/src/state.js";
+import { CLICK_POINT_HELPERS } from "../../dist/src/driver/action-target.js";
 import { click, scroll } from "../../dist/src/driver/pointer.js";
 
 test("click resolves selector offsets without the public elementEval helper", async () => {
@@ -359,6 +360,76 @@ test("click scrolls a selector-relative point back into the viewport", async () 
   assert.equal(scrolls.length, 1);
   // Centered element: left 350, top 280, plus the caller's offset.
   assert.deepEqual(dispatchedPoints(calls)[0], [354, 286]);
+});
+
+/**
+ * Run the real page-side click point against an element in a same-process
+ * iframe. Input is dispatched in the top viewport, so that is the coordinate
+ * space the result has to be in.
+ */
+function framedClickPoint({ rect, frame, offset = null, afterScroll = rect }) {
+  const top = { innerWidth: 800, innerHeight: 600, frameElement: null };
+  const view = {
+    innerWidth: 300,
+    innerHeight: 200,
+    frameElement: {
+      clientLeft: 2,
+      clientTop: 3,
+      getBoundingClientRect: () => frame,
+    },
+    parent: top,
+  };
+  let current = rect;
+  const domRect = () => ({
+    ...current,
+    x: current.left,
+    y: current.top,
+    right: current.left + current.width,
+    bottom: current.top + current.height,
+  });
+  const element = {
+    ownerDocument: { defaultView: view },
+    getBoundingClientRect: domRect,
+    getClientRects: () => [domRect()],
+    scrollIntoView() {
+      current = afterScroll;
+    },
+  };
+  return new Function(
+    "element",
+    "offset",
+    `${CLICK_POINT_HELPERS}; return clickPointForElement(element, offset);`,
+  )(element, offset);
+}
+
+test("click translates a scrolled same-process iframe point to the top viewport", () => {
+  assert.deepEqual(
+    framedClickPoint({
+      frame: { left: 50, top: 100 },
+      rect: { left: 10, top: 500, width: 100, height: 40 },
+      afterScroll: { left: 10, top: 20, width: 100, height: 40 },
+    }),
+    { x: 112, y: 143 },
+  );
+  assert.deepEqual(
+    framedClickPoint({
+      frame: { left: 50, top: 100 },
+      rect: { left: 10, top: 500, width: 100, height: 40 },
+      afterScroll: { left: 10, top: 20, width: 100, height: 40 },
+      offset: { x: 4, y: 6 },
+    }),
+    { x: 66, y: 129 },
+  );
+});
+
+test("click reports an iframe point that stays outside the top viewport", () => {
+  assert.deepEqual(
+    framedClickPoint({
+      frame: { left: 50, top: 900 },
+      rect: { left: 10, top: 20, width: 100, height: 40 },
+    }),
+    { error: "element is not visible in the viewport" },
+  );
 });
 
 test("click does not second-guess explicit coordinates", async () => {
