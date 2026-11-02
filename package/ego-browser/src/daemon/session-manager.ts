@@ -161,8 +161,7 @@ export class SessionManager {
         }
         // Queue time counts against the deadline, so the client never waits
         // longer than its own timeout for a program that has not started.
-        const remainingMs = timeoutMs - queueMs;
-        if (remainingMs <= 0) {
+        if (timeoutMs - queueMs <= 0) {
           throw new ProtocolError(
             ErrorCodes.DEADLINE,
             `the ${timeoutMs} ms deadline passed while waiting ${queueMs} ms for session ${session.id}; the program did not start`,
@@ -179,6 +178,16 @@ export class SessionManager {
             this.#discard(session, "closed");
             this.#assertOpen(session);
           }
+        }
+        // Starting the REPL (up to the banner timeout) is charged to the same
+        // deadline, so the budget is measured again here. A deadline that
+        // passed during startup leaves the fresh REPL for the next program.
+        const remainingMs = timeoutMs - (this.#now() - queuedAt);
+        if (remainingMs <= 0) {
+          throw new ProtocolError(
+            ErrorCodes.DEADLINE,
+            `the ${timeoutMs} ms deadline passed while session ${session.id} started its REPL (${this.#now() - queuedAt} ms since the request was queued); the program did not start`,
+          );
         }
         const connection = session.connection!;
         // The result marker carries a per-request secret: a program that

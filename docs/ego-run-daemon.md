@@ -91,16 +91,21 @@ session's lifetime; `EGO_BROWSER_BIN` picks the executable the daemon starts.
   parallel. At most 8 sessions; the least recently used idle one is evicted.
 - A deadline (`--timeout-ms`, default 60 s, max 180 s) returns early to the
   agent, but the program keeps running in the context, so one deadline marks
-  the session for rebuild and kills its REPL. The same happens when no result
-  arrives at all (a program blocking the event loop) or when the REPL exits.
-  The next call on that session starts a fresh context and `ego-run` prints
+  the session for rebuild and kills its REPL before the result is returned; the
+  wrapper skips program-scope teardown on a deadline so the kill follows the
+  timeout as closely as possible, and the next program on that session queues
+  behind the kill. The same happens when no result arrives at all (a program
+  blocking the event loop) or when the REPL exits. The next call on that session
+  starts a fresh context and `ego-run` prints
   `[ego-run] session "<id>" was rebuilt (<reason>)`.
 - Sessions idle for 10 minutes are closed; the daemon exits after 30 minutes
   without sessions. `ego-browser --version` is checked every minute and a
   version change closes every session.
-- A program's deadline counts the time it waited in the session queue, so a
-  caller never waits longer than its own timeout; a program whose client has
-  disconnected while it was queued is skipped and leaves the context untouched.
+- A program's deadline counts the time it waited in the session queue and the
+  time its REPL took to start, so a caller never waits longer than its own
+  timeout; a program whose deadline passed before it could start is refused
+  with `EGO_RUN_DEADLINE` and leaves the context (and a freshly started REPL)
+  intact, and one whose client has disconnected while it was queued is skipped.
 - Programs run inside the browser's Node Service, exactly like a direct
   `ego-browser nodejs` script. Neither the daemon's nor the client's working
   directory applies to the script (the guide requires absolute paths), so the

@@ -112,8 +112,13 @@ test("the wrapper itself parses as a REPL cell with top-level await", async () =
 async function runCell(cell, requestId) {
   const write = process.stdout.write.bind(process.stdout);
   let out = "";
+  // Capture only the cell's own output: the test reporter writes to the same
+  // stream asynchronously, and swallowing its lines would drop earlier tests
+  // from the report.
   process.stdout.write = (chunk) => {
-    out += String(chunk);
+    const text = String(chunk);
+    if (!text.includes(RESULT_MARKER)) return write(chunk);
+    out += text;
     return true;
   };
   try {
@@ -126,6 +131,35 @@ async function runCell(cell, requestId) {
   }
   return extractResult(out, requestId).envelope;
 }
+
+test("a deadline result is written without waiting for program-scope teardown", async () => {
+  const calls = [];
+  globalThis.__egoBeginProgram = () => calls.push("begin");
+  globalThis.__egoEndProgram = async () => {
+    calls.push("end");
+  };
+  try {
+    const cell = wrapProgram(
+      rewriteProgram("await new Promise((r) => setTimeout(r, 200));\n1"),
+      { requestId: "late", timeoutMs: 20, spillDir: "/s", inlineLimit: 1_000 },
+    );
+    const envelope = await runCell(cell, "late");
+    assert.equal(envelope.ok, false);
+    assert.equal(envelope.error.code, "EGO_RUN_DEADLINE");
+    assert.deepEqual(calls, ["begin"], "the REPL is about to be killed");
+    const quick = wrapProgram(rewriteProgram("2"), {
+      requestId: "quick",
+      timeoutMs: 1_000,
+      spillDir: "/s",
+      inlineLimit: 1_000,
+    });
+    assert.equal((await runCell(quick, "quick")).value, 2);
+    assert.deepEqual(calls, ["begin", "begin", "end"]);
+  } finally {
+    delete globalThis.__egoBeginProgram;
+    delete globalThis.__egoEndProgram;
+  }
+});
 
 test("wrapper bookkeeping never collides with the program's own names", async () => {
   const program = [

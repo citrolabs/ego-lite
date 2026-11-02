@@ -250,7 +250,11 @@ ${program.body}
     clearTimeout(${P}timer);
     process.exit = ${P}exit;
     globalThis.console = ${P}console;
-    try { if (typeof globalThis.__egoEndProgram === "function") await Promise.race([globalThis.__egoEndProgram(), new Promise((resolve) => setTimeout(resolve, 2000))]); } catch {}
+    // After a deadline the program is still running and the daemon kills this
+    // REPL as soon as it reads the result, so nothing waits for program-scope
+    // teardown: the result goes out at once to shorten the time the orphaned
+    // program can still act.
+    try { if (typeof globalThis.__egoEndProgram === "function" && ${P}result.error?.code !== "EGO_RUN_DEADLINE") await Promise.race([globalThis.__egoEndProgram(), new Promise((resolve) => setTimeout(resolve, 2000))]); } catch {}
     try { if (typeof ${P}flush === "function") ${P}flush(${P}sink, !${P}result.ok); } catch (error) { ${P}s.logs.push("[ego-run] flush failed: " + (error?.message ?? error) + "\\n"); }
     ${P}result.logs = ${P}s.logs.join("");
     let json;

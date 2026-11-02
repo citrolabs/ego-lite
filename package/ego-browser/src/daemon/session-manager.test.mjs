@@ -75,7 +75,7 @@ function fakeTransport(behavior = {}) {
       return;
     }
     transport.emit("ego-browser nodejs REPL. Type .exit to quit\r\nrepl> ");
-  }, 2);
+  }, behavior.startupDelayMs ?? 2);
   return transport;
 }
 
@@ -281,6 +281,36 @@ test("queue time counts against the deadline and a late program never starts", a
     "req-3",
   );
   assert.equal(next.session.fresh, false);
+});
+
+test("REPL startup time counts against the deadline and leaves the fresh REPL for the next program", async () => {
+  const { sessions, transports } = manager({
+    behavior: { startupDelayMs: 1200 },
+  });
+  await assert.rejects(
+    sessions.exec(
+      { cmd: "exec", session: "s", program: "1", timeoutMs: 1000 },
+      "req-1",
+    ),
+    (error) =>
+      error.code === "EGO_RUN_DEADLINE" &&
+      /started its REPL/.test(error.message) &&
+      /did not start/.test(error.message),
+  );
+  assert.equal(transports.length, 1);
+  assert.equal(transports[0].cells.length, 0, "req-1 was never sent");
+  assert.equal(transports[0].killed, false, "the started REPL is kept");
+  const next = await sessions.exec(
+    { cmd: "exec", session: "s", program: "2" },
+    "req-2",
+  );
+  assert.equal(next.ok, true);
+  assert.equal(
+    next.session.fresh,
+    false,
+    "req-2 reuses the REPL req-1 started",
+  );
+  assert.equal(transports.length, 1);
 });
 
 test("a program whose client disconnected while queued is skipped", async () => {
