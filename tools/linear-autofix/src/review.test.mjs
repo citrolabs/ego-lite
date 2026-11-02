@@ -142,3 +142,16 @@ test("a draft PR with nothing to fix is reported as ready for manual verificatio
     "wait",
   );
 });
+
+test("new human PR conversation comments start a fix round", () => {
+  const r = assessHead({
+    pr: ready,
+    codex: clean,
+    ci: "success",
+    threads: [],
+    prComments: [{ body: "x" }],
+    now,
+  });
+  assert.deepEqual(r.problems, ["comments"]);
+  assert.equal(r.action, "fix");
+});

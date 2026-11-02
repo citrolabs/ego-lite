@@ -185,11 +185,29 @@ the ticket stays readable. Set `AUTOFIX_LOG_ISSUE=` (empty) to disable.
 | `AUTOFIX_DRY_RUN`            | unset                                     | `1`: no Linear/GitHub writes, no push                        |
 | `AUTOFIX_ISSUE`              | unset                                     | restrict a tick to one identifier                            |
 
+## What counts as review feedback
+
+- **Codex**: the review comment for the current head, parsed for findings.
+- **Inline review comments** (Files changed → a line → comment, or a review
+  with comments): every unresolved thread. The bot fixes or answers, replies in
+  the thread, and resolves the threads it addressed. A thread it answered
+  without resolving waits for a human.
+- **PR conversation comments** from humans: every comment newer than the last
+  one the bot handled. The bot treats each as a review request, acts on it
+  within the ticket's scope, and answers in its round summary comment. There
+  is no resolve state, so write a new comment to ask for more.
+- **CI failures**: the failing check output.
+
+The bot's own comments start with `<!-- linear-autofix -->` and are never fed
+back to it. Feedback is picked up on the next tick (every 30 minutes by
+default), so a comment is acted on within about half an hour.
+
 ## Review-loop termination
 
 A PR is finished when, for its current head commit, CI reported success, the
 Codex review comment (tagged `<!-- codex-review -->` with the 8-char SHA) says
-`No issues found that require changes.`, and no review thread is unresolved.
+`No issues found that require changes.`, no review thread is unresolved, and
+no human conversation comment is unanswered.
 A thread the bot answered without resolving still counts as unresolved: it
 blocks `done` and waits for a human, but does not trigger another fix round.
 If CI or the Codex review has not reported for a head within two hours the

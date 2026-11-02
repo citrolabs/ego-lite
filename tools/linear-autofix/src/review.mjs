@@ -12,7 +12,12 @@ import * as git from "./git.mjs";
 import * as github from "./github.mjs";
 import * as linear from "./linear.mjs";
 import { note, runDir, transition, worktreePath } from "./state.mjs";
-import { renderThreads, splitThreads } from "./threads.mjs";
+import {
+  freshPrComments,
+  renderPrComments,
+  renderThreads,
+  splitThreads,
+} from "./threads.mjs";
 import { escalate, FOOTER } from "./actions.mjs";
 import { CODE_TOOLS, readJson } from "./implement.mjs";
 import { gatedPush } from "./e2e.mjs";
@@ -37,6 +42,7 @@ export function assessHead({
   ci,
   threads,
   awaitingHuman = [],
+  prComments = [],
   headSeenAt,
   now = Date.now(),
 }) {
@@ -44,6 +50,7 @@ export function assessHead({
   if (ci === "failure") problems.push("ci");
   if (codex && !isCleanReview(codex.body)) problems.push("codex");
   if (threads.length) problems.push("threads");
+  if (prComments.length) problems.push("comments");
   if (problems.length) return { action: "fix", problems };
 
   const waited = headSeenAt ? now - new Date(headSeenAt).getTime() : 0;
@@ -114,18 +121,23 @@ export async function review(issue, record) {
       extractFindings(codexComment.body).slice(0, 300),
     );
   }
+  // Conversation comments are answered once: everything up to the newest one
+  // handled so far has been seen. Adopted/created PRs start from now.
+  record.review.commentsSeenAt ??= new Date().toISOString();
+  const prComments = freshPrComments(pr.comments, record.review.commentsSeenAt);
   const verdict = assessHead({
     pr,
     codex,
     ci,
     threads,
     awaitingHuman,
+    prComments,
     headSeenAt: record.review.headSeenAt,
   });
   note(
     record,
     `review check ${sha.slice(0, 8)}`,
-    `ci=${ci} codex=${codex ? (isCleanReview(codex.body) ? "clean" : "findings") : "none"} threads=${threads.length}+${awaitingHuman.length} -> ${verdict.action}`,
+    `ci=${ci} codex=${codex ? (isCleanReview(codex.body) ? "clean" : "findings") : "none"} threads=${threads.length}+${awaitingHuman.length} comments=${prComments.length} -> ${verdict.action}`,
   );
 
   if (verdict.action === "wait") return;
@@ -206,6 +218,7 @@ export async function review(issue, record) {
     issue: linear.renderIssue(issue),
     codexFindings: codex ? extractFindings(codex.body) : "(none for this head)",
     humanThreads: threads.length ? renderThreads(threads) : "(none)",
+    prComments: prComments.length ? renderPrComments(prComments) : "(none)",
     ciText: ci === "failure" ? await github.checksText(pr.number) : `(${ci})`,
   });
   const res = await runClaude({
@@ -251,7 +264,7 @@ export async function review(issue, record) {
   if (
     !committed &&
     result.status === "fixed" &&
-    verdict.problems.some((p) => p !== "threads")
+    verdict.problems.some((p) => p !== "threads" && p !== "comments")
   ) {
     return escalate(
       record,
@@ -285,6 +298,8 @@ export async function review(issue, record) {
   }
 
   record.review.rounds = round;
+  if (prComments.length)
+    record.review.commentsSeenAt = prComments.at(-1).createdAt;
   record.review.lastFingerprint = fingerprint;
   record.review.lastStatus = result.status;
   note(record, `review round ${round} posted`, result.status);

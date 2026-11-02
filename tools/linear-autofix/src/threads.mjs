@@ -49,3 +49,33 @@ export function renderThreads(threads) {
     })
     .join("\n\n");
 }
+
+/**
+ * Human comments in the PR conversation (not review threads) newer than
+ * `since`: everything that is not a bot comment and not a Codex review. The
+ * bot answers them with its round summary and remembers the newest timestamp,
+ * so each comment is acted on once. Pure.
+ */
+export function freshPrComments(
+  comments,
+  since,
+  { botMarker = config.botMarker, codexMarker = config.codexMarker } = {},
+) {
+  return (comments ?? [])
+    .filter((c) => {
+      const body = String(c.body ?? "");
+      if (body.includes(botMarker) || body.includes(codexMarker)) return false;
+      if (c.author?.login?.endsWith("[bot]")) return false;
+      return !since || String(c.createdAt ?? "") > since;
+    })
+    .sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+}
+
+export function renderPrComments(comments) {
+  return comments
+    .map(
+      (c) =>
+        `### ${c.author?.login ?? "unknown"} · ${c.createdAt}\n\n${String(c.body ?? "").trim()}`,
+    )
+    .join("\n\n");
+}

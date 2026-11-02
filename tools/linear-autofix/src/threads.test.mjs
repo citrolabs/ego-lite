@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { actionableThreads, renderThreads, splitThreads } from "./threads.mjs";
+import {
+  actionableThreads,
+  freshPrComments,
+  renderThreads,
+  splitThreads,
+} from "./threads.mjs";
 
 const thread = (
   id,
@@ -92,4 +97,41 @@ test("splitThreads picks the newest comment by createdAt, whatever the array ord
     splitThreads([t]).fresh.map((x) => x.id),
     ["t9"],
   );
+});
+
+test("freshPrComments keeps only human conversation comments newer than the baseline, oldest first", () => {
+  const comments = [
+    {
+      author: { login: "joway" },
+      body: "<!-- linear-autofix -->\nround 1",
+      createdAt: "2026-11-02T03:00:00Z",
+    },
+    {
+      author: { login: "github-actions[bot]" },
+      body: "<!-- codex-review -->\n...",
+      createdAt: "2026-11-02T03:10:00Z",
+    },
+    {
+      author: { login: "reviewer" },
+      body: "please rename the helper",
+      createdAt: "2026-11-02T04:00:00Z",
+    },
+    {
+      author: { login: "reviewer" },
+      body: "old remark",
+      createdAt: "2026-11-02T01:00:00Z",
+    },
+    {
+      author: { login: "reviewer" },
+      body: "and add a test",
+      createdAt: "2026-11-02T03:30:00Z",
+    },
+  ];
+  const fresh = freshPrComments(comments, "2026-11-02T02:00:00Z");
+  assert.deepEqual(
+    fresh.map((c) => c.body),
+    ["and add a test", "please rename the helper"],
+  );
+  assert.equal(freshPrComments(comments, "2026-11-02T05:00:00Z").length, 0);
+  assert.equal(freshPrComments(comments, null).length, 3);
 });
