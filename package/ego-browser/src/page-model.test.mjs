@@ -7741,6 +7741,31 @@ test("screenshot stops a pending navigation when the Page never answers its rend
   });
 });
 
+test("a screenshot capture timeout reports EGO_PAGE_UNRESPONSIVE naming Page.captureScreenshot", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a", {
+      async screenshot(path, options, sessionId) {
+        throw new CdpRequestTimeoutError(
+          "Page.captureScreenshot",
+          15_000,
+          sessionId,
+        );
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/canvas");
+
+    await assert.rejects(
+      () => page.screenshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_UNRESPONSIVE");
+        assert.equal(error.method, "Page.captureScreenshot");
+        assert.equal(error.waitedMs, 15_000);
+        return true;
+      },
+    );
+  });
+});
+
 test("a browser-level command timeout is not treated as an unresponsive Page", async () => {
   await withFixture(async (fixture) => {
     let stops = 0;
