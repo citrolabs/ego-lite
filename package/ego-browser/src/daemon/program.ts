@@ -8,7 +8,8 @@
 //
 //   const page = task.page("p1");   →   var page;          (outside the wrapper)
 //                                        void (page = task.page("p1"));
-//   function helper() {}            →   kept; `globalThis.helper = helper;` prepended
+//   function helper() {}            →   kept; `globalThis.helper = helper;` inserted
+//                                        after the directive prologue
 //   class Model {}                  →   var Model; Model = class Model {};
 //   last expression statement       →   return (expression);
 //
@@ -60,6 +61,18 @@ export function rewriteProgram(source: string): RewrittenProgram {
   const edits: { start: number; end: number; text: string }[] = [];
   const prelude: string[] = [];
   const body: AnyNode[] = program.body;
+  // Function declarations hoist within the wrapper, so their global copies can
+  // be assigned first thing; placed after the directive prologue so a leading
+  // "use strict" still governs the program.
+  let prologueEnd = 0;
+  for (const node of body) {
+    if (
+      node.type !== "ExpressionStatement" ||
+      typeof node.directive !== "string"
+    )
+      break;
+    prologueEnd = node.end;
+  }
 
   body.forEach((node, index) => {
     const last = index === body.length - 1;
@@ -124,16 +137,22 @@ export function rewriteProgram(source: string): RewrittenProgram {
     }
   });
 
+  if (prelude.length) {
+    edits.push({
+      start: prologueEnd,
+      end: prologueEnd,
+      text: `${prologueEnd ? "\n" : ""}${prelude.join("\n")}\n`,
+    });
+  }
+  // Later edits first, so earlier offsets stay valid; at one offset a
+  // replacement precedes a pure insertion, which then lands before it.
   edits.sort((a, b) => b.start - a.start || b.end - a.end);
   let rewritten = source;
   for (const edit of edits) {
     rewritten =
       rewritten.slice(0, edit.start) + edit.text + rewritten.slice(edit.end);
   }
-  return {
-    hoisted: [...new Set(hoisted)],
-    body: prelude.length ? `${prelude.join("\n")}\n${rewritten}` : rewritten,
-  };
+  return { hoisted: [...new Set(hoisted)], body: rewritten };
 }
 
 function patternNames(pattern: AnyNode, out: string[] = []): string[] {

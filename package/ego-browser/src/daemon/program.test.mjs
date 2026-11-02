@@ -256,6 +256,35 @@ test("a lone string literal is the value, not a directive", () => {
   assert.equal(rewriteProgram('"use strict"').body, '"use strict"');
 });
 
+test('a leading "use strict" still governs a program that declares functions', async () => {
+  const rewritten = rewriteProgram(
+    '"use strict";\nconst n = 1;\nfunction f() { return this === undefined; }\n[f(), n]',
+  );
+  assert.ok(
+    rewritten.body.startsWith('"use strict";\nglobalThis["f"] = f;\n'),
+    rewritten.body.slice(0, 60),
+  );
+  const cell = wrapProgram(rewritten, {
+    requestId: "strict",
+    timeoutMs: 1_000,
+    spillDir: "/s",
+    inlineLimit: 1_000,
+  });
+  const envelope = await runCell(cell, "strict");
+  assert.equal(envelope.ok, true, envelope.error?.message);
+  assert.deepEqual(envelope.value, [true, 1]);
+  // Without a prologue the copies come first; a trailing string is a value.
+  assert.ok(
+    rewriteProgram('function g() {}\n"done"').body.startsWith(
+      'globalThis["g"] = g;\nfunction g() {}\nreturn ("done");',
+    ),
+  );
+  assert.equal(
+    rewriteProgram('const y = 5; "use strict";').body,
+    'void ((y = 5)); return ("use strict");',
+  );
+});
+
 test("a program with top-level destructuring runs and keeps its bindings", async () => {
   // The REPL header declares the bound names (`var a, c, d, rest;`), never
   // the pattern; the body assigns through the original pattern.
