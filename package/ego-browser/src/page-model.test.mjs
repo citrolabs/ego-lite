@@ -731,6 +731,7 @@ function createFixture(rootDir) {
         if (activeTarget === params.targetId) activeTarget = null;
         return { success: true };
       }
+      if (method === "Target.detachFromTarget") return {};
       throw new Error(`unexpected CDP method ${method}`);
     },
     async showAgentMousePosition(x, y) {
@@ -5297,6 +5298,46 @@ test("Page and TaskSpace CDP commands preserve their intended scope", async () =
           timeout === 987,
       ),
       "task.cdp must use the selected space without a Page session",
+    );
+  });
+});
+
+test("Page and TaskSpace CDP reject a sessionId they would not honour", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+    fixture.calls.length = 0;
+
+    await assert.rejects(
+      () =>
+        page.cdp("Runtime.evaluate", { expression: "1", sessionId: "other" }),
+      (error) => {
+        assert(error instanceof TypeError);
+        assert.match(error.message, /Page\.cdp/);
+        assert.match(error.message, /Runtime\.evaluate/);
+        return true;
+      },
+    );
+    await assert.rejects(
+      () => task.cdp("Browser.getVersion", { sessionId: "other" }),
+      /TaskSpace\.cdp.*Browser\.getVersion/,
+    );
+    assert.deepEqual(
+      fixture.calls.filter(([kind]) => kind === "cdp"),
+      [],
+      "a rejected command must never reach the browser",
+    );
+
+    await task.cdp("Target.detachFromTarget", { sessionId: "other" });
+    assert(
+      fixture.calls.some(
+        ([kind, method, params, sessionId]) =>
+          kind === "cdp" &&
+          method === "Target.detachFromTarget" &&
+          params.sessionId === "other" &&
+          sessionId === undefined,
+      ),
+      "Target commands that define params.sessionId must still pass through",
     );
   });
 });

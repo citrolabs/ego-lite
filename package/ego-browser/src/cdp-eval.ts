@@ -8,11 +8,17 @@ let hasWarnedAboutFunctionJs = false;
 /**
  * Send a raw Chrome DevTools Protocol command.
  * @param {string} method CDP method name, for example Runtime.evaluate.
- * @param {object} [params] CDP command parameters.
- * @param {string} [sessionId] Optional attached target session id.
+ * @param {object} [params] CDP command parameters. A sessionId here is rejected, except on Target commands that define it.
+ * @param {string} [sessionId] Optional attached target session id. Defaults to the current page session.
  * @returns {Promise<object>} CDP result object.
  */
 export async function cdp(method, params: any = {}, sessionId = undefined) {
+  assertNoSessionIdInParams(
+    "cdp",
+    method,
+    params,
+    "Pass it as the third argument: cdp(method, params, sessionId).",
+  );
   const result = state.cdpOverride
     ? await state.cdpOverride(method, params, sessionId)
     : (await browserCdp(method, params, sessionId)).result || {};
@@ -26,6 +32,21 @@ export async function cdp(method, params: any = {}, sessionId = undefined) {
     state.networkDomainEnabled = method === "Network.enable";
   }
   return result;
+}
+
+/**
+ * A session is selected by the CDP message envelope, not by params. Chromium
+ * ignores an unknown params.sessionId, so the command would run in the default
+ * session and return a plausible result from the wrong target. Only the Target
+ * domain defines sessionId as a real parameter.
+ */
+export function assertNoSessionIdInParams(apiName, method, params, remedy) {
+  if (params?.sessionId === undefined || String(method).startsWith("Target.")) {
+    return;
+  }
+  throw new TypeError(
+    `${apiName}: ${method} does not take sessionId in params; it would be ignored and the command would run in the wrong session. ${remedy}`,
+  );
 }
 
 /**

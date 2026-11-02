@@ -418,8 +418,10 @@ whether an unsafe follow-up requires reloading or closing the Page first.
 Use documented Page methods first. If a wrapper is missing or does not work
 reliably on the current page, use `page.cdp()` as a lower-level path for
 diagnosis or control. It accepts Page, Runtime, DOM, Network, Input, and similar
-commands; use `task.cdp()` for Target and Browser commands. Raw CDP invalidates
-refs. Do not persist `page.targetId` across rounds.
+commands; use `task.cdp()` for Target and Browser commands. Both choose their own
+session: a `sessionId` in params is rejected, except on Target commands that
+define it, such as `Target.detachFromTarget`. Raw CDP invalidates refs. Do not
+persist `page.targetId` across rounds.
 
 ## Action receipts, popups, and dialogs
 
