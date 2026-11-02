@@ -110,18 +110,22 @@ file it reads or writes. It also does not inherit your shell's environment
 variables: `process.env` will not contain values you set before running
 `ego-browser`, so write every input directly into the script.
 
-Ego-browser is a small custom API, not Playwright, even where method names and
-options look similar. Use only the TaskSpace, Page, FileChooser, mouse, and
-keyboard APIs listed in this Skill; do not infer Playwright methods such as
-`locator()`, `getByRole()`, `context()`, `expect()`, or `route()`. When the
-listed API does not cover an operation, use `page.evaluate()` or `page.cdp()`
-instead of guessing another method.
+Ego-browser deliberately exposes a small custom API. It is not Playwright, even
+where method names and options look similar. Use only the TaskSpace, Page,
+FileChooser, mouse, and keyboard APIs explicitly listed in this Skill. Do not
+infer Playwright methods such as `locator()`, `getByRole()`, `context()`,
+`expect()`, or `route()`. When the listed API does not cover an operation, use
+the documented `page.evaluate()` or `page.cdp()` escape hatches instead of
+guessing another method.
 
-Only `click()`, `dblclick()`, `hover()`, `dragAndDrop()`, `mouse.click()`,
-`mouse.move()`, and `mouse.wheel()` accept a `label` option: a concise 3-6 word
-description shown next to the visible agent cursor. Every other method rejects
-it. The `label` in `selectOption(selector, { label })` is different: it selects
-the option whose visible text matches.
+Only these pointer actions accept an optional `label` option: `click()`,
+`dblclick()`, `hover()`, `dragAndDrop()`, `mouse.click()`, `mouse.move()`, and
+`mouse.wheel()`. Pass a concise 3-6 word description to keep the action text
+next to the visible agent cursor in sync with the action. Other methods, such
+as `fill()`, `press()`, `focus()`, `selectOption()`, `waitForSelector()`,
+`keyboard.*()`, `mouse.down()`, and `mouse.up()`, reject a `label` option.
+The `label` in `selectOption(selector, { label })` is different: it selects the
+option whose visible text matches.
 
 When the user explicitly asks for ego-browser, start with a real browser command
 and diagnose the CLI or installation only if it fails.
@@ -141,8 +145,9 @@ and diagnose the CLI or installation only if it fails.
   stop and ask the user.
 - Every invocation starts a new Node.js process. Task spaces, tabs, and Page labels
   persist; JavaScript variables do not.
-- A new task space starts with Page `p1`. Navigate it and reuse Pages with
-  `goto()` instead of opening a new Page for every URL.
+- A new task space starts with Page `p1`; navigate it instead of opening
+  another Page.
+- Reuse a Page with `goto()` instead of opening a new Page for every URL.
 - All time values are milliseconds.
 
 ```js
@@ -168,11 +173,13 @@ Pages receive permanent labels such as `p1`, `p2`, and `p3`. Prefer these labels
 to custom `{ as }` values. Reuse or close Pages as the task proceeds; the runtime
 reports the configured Page budget when it is reached.
 
-`await task.newPage()` creates another blank Page when multiple Pages must stay
-open; navigate it with `page.goto()`. `task.page(label)` only refers to a Page
-that already exists, and its handle is always truthy, so
-`task.page("p2") || await task.newPage()` and `if (!page)` do not detect a
-missing label. Use labels printed by earlier output or by `await task.pages()`.
+`task.newPage()` creates another blank Page when multiple Pages must stay open.
+Navigate it separately with `page.goto()`.
+
+`task.page(label)` only refers to a Page that already exists; it never creates
+one, and its handle is always truthy, so `task.page("p2") || await task.newPage()`
+and `if (!page)` do not detect a missing label. Use labels printed by earlier
+output or by `await task.pages()`, and call `await task.newPage()` to create one.
 
 `await task.pages()` returns managed Pages. `await task.tabs()` returns every tab in the
 space as `{ label?, page, targetId, title, url, active, openedBy }`. A tab
@@ -240,10 +247,13 @@ and coordinates only when useful DOM semantics are unavailable.
 
 Before choosing an unfamiliar target, take a snapshot. When the current state
 is sufficient to plan several actions on the same Page, complete them in one
-script invocation; observe between actions only when an intermediate result
-changes what should happen next. End that script with the wait for the final
-expected state, then print a snapshot, so the next round can act on it without
-spending a separate browser call to observe.
+script invocation, then observe the result once. Observe between actions only when an
+intermediate result changes what should happen next. Keep the action sequence,
+the wait for its final expected state, and the next snapshot in the same
+script invocation. Print the snapshot last so the next round can act on it directly.
+The final snapshot is the next round's starting view of the changed page;
+without it, that round usually has to spend a separate browser call observing
+before it can choose the next target, which wastes compute.
 
 Wait for the expected result: use `waitForURL()` for navigation,
 `waitForSelector()` for element state, or `waitForFunction()` for application
@@ -251,11 +261,11 @@ state. Avoid fixed delays when an observable condition exists. Actions stop
 waiting for a missing target once the page is idle, so `waitForSelector()`
 first when an element is expected later. A snapshot captures the current
 moment; it does not wait for the page to become stable.
-`page.snapshot()` captures the current viewport; use
-`page.snapshot({ scope: "full_page" })` for content outside it. When the
-document scrolls past the viewport, the snapshot ends with a
-`[more content below the viewport: ...]` line: nodes are omitted, not absent, so
-scroll or use `full_page` before concluding a result did not appear.
+`page.snapshot()` captures the current viewport. For content outside it, use
+`page.snapshot({ scope: "full_page" })`. When the document scrolls past the
+viewport, the snapshot ends with a `[more content below the viewport: ...]`
+line: nodes are omitted, not absent. If the expected result may land below
+the fold, scroll or use `full_page` before concluding it did not appear.
 
 The default viewport snapshot includes visible iframe content returned by the
 browser. To focus on a frame's subtree, reuse the ref printed on its `iframe`
@@ -266,7 +276,8 @@ console.log(await page.snapshot({ scope: "subtree", root: "@12" }));
 ```
 
 Use the refs returned by the subtree for actions inside the iframe. A subtree
-snapshot does not scope later locator actions.
+snapshot does not scope later locator actions; they still prefer actionable
+matches in the top document before searching frames.
 
 `waitForLoadState()` defaults to `load`. `waitForFunction()` follows the
 Playwright argument order; pass `undefined` before options when there is no Page
@@ -279,7 +290,13 @@ await page.waitForFunction(() => window.appReady, undefined, {
 ```
 
 ```js
-// Act using the previous round's snapshot, verify, then prepare the next round.
+// Round 1: inspect and choose targets from this output.
+const page = task.page("p1");
+console.log(await page.snapshot());
+```
+
+```js
+// Next round: act using the previous output, verify, then prepare the next round.
 const page = task.page("p1");
 await page.fill("@21", "user@example.com");
 await page.click("loc=role:button[name='Sign in']");
@@ -366,6 +383,13 @@ then restores the user's clipboard. Pass `{ text, html }` when a rich editor
 needs structured clipboard content; `text` is the plain-text fallback. On other
 platforms, use `keyboard.insertText()` for plain text.
 
+```js
+await page.keyboard.paste({
+  text: "Name\tStatus",
+  html: "<table><tr><td>Name</td><td>Status</td></tr></table>",
+});
+```
+
 For rich-text editors and editable grids, validate a small edit before repeating
 it at scale. Canvas-backed editors may not expose visible content through DOM
 text or selectors; verify those results with a screenshot or an
@@ -373,8 +397,8 @@ application-specific visible state.
 
 ### Page JavaScript and CDP
 
-Use `page.evaluate()` for bulk extraction or complex in-page work. It returns a
-JSON-serializable value:
+Use `page.evaluate()` for bulk extraction or complex in-page work. It accepts
+one JSON-serializable argument and returns a JSON-serializable value:
 
 ```js
 const rows = await page.evaluate(
@@ -486,8 +510,11 @@ const response = await page.fetch("/api/items", {
 });
 ```
 
-Pass `saveAs: "/absolute/path/image.png"` to save a binary response without
-converting it to text.
+Save binary responses without converting them to text:
+
+```js
+await page.fetch("/image.png", { saveAs: "/absolute/path/image.png" });
+```
 
 Use standard Node.js `fetch()` for background requests that do not need Page
 browser semantics.
@@ -531,12 +558,18 @@ When the task succeeds, close the TaskSpace by default with
 to resolve before reporting completion.
 
 `finish()` ends the task and all of its Page labels, including Pages kept for the
-user. Put it last in the final round only; do not operate any Page after it.
+user. Put it last in the final round only; do not operate any Page after it in
+the same script or in later rounds.
 
-Keeping Pages is a rare exception, such as `await task.finish({ keep: ["p2"] })`:
-retain only necessary Pages when the user explicitly asks, or when the result
-must remain in the browser for the user to view or continue working with. Pages
-merely visited, search results, and intermediate steps do not qualify.
+Keeping Pages is a rare exception: retain only necessary Pages when the user
+explicitly asks, or when the result must remain in the browser for the user to
+view or continue working with. Pages merely visited, search results, and
+intermediate steps do not need to remain open.
+
+```js
+await task.finish({ keep: [] }); // Default: keep no Agent-managed Pages.
+await task.finish({ keep: ["p2"] }); // Exception: keep only the result Page for the user.
+```
 
 User-created and unknown-origin tabs are protected; if any remain, `keep: []`
 does not close the whole space. The blank tab that `page.close()` leaves when it
