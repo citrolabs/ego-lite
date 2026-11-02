@@ -316,6 +316,32 @@ test("REPL startup counts against the deadline; the start continues for the next
   assert.equal(transports[0].cells.length, 1);
 });
 
+test("a program whose client disconnected while its REPL started is skipped", async () => {
+  const { sessions, transports } = manager({
+    behavior: { startupDelayMs: 100 },
+  });
+  const gone = new AbortController();
+  const first = sessions.exec(
+    { cmd: "exec", session: "s", program: "1" },
+    "req-1",
+    { signal: gone.signal },
+  );
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  gone.abort();
+  await assert.rejects(first, (error) =>
+    /client disconnected while session s started its REPL/.test(error.message),
+  );
+  assert.equal(transports.length, 1);
+  assert.equal(transports[0].cells.length, 0, "the program was never sent");
+  assert.equal(transports[0].killed, false, "the REPL is kept");
+  const next = await sessions.exec(
+    { cmd: "exec", session: "s", program: "2" },
+    "req-2",
+  );
+  assert.equal(next.ok, true);
+  assert.equal(transports.length, 1, "req-2 runs in the REPL req-1 started");
+});
+
 test("closing a session while its REPL starts kills the REPL once it is up", async () => {
   const { sessions, transports } = manager({
     behavior: { startupDelayMs: 100 },

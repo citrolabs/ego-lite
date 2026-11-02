@@ -175,6 +175,14 @@ export class SessionManager {
           fresh = true;
           rebuiltReason = session.pendingReason ?? undefined;
           await this.#openWithin(session, timeoutMs - (this.#now() - queuedAt));
+          // The client may have left while the REPL started; the program must
+          // not run unseen. The REPL stays for the next program.
+          if (signal?.aborted) {
+            throw new ProtocolError(
+              ErrorCodes.BAD_REQUEST,
+              `client disconnected while session ${session.id} started its REPL; the program did not start`,
+            );
+          }
         }
         // Starting the REPL is charged to the same deadline (openWithin fails
         // when it passes), so the budget is measured again here.
