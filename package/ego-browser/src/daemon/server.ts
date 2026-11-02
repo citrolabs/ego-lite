@@ -4,6 +4,7 @@
 import { randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import {
+  chmodSync,
   closeSync,
   existsSync,
   mkdirSync,
@@ -102,8 +103,17 @@ export class Daemon {
   }
 
   async start(): Promise<void> {
+    // The directories hold the token and the socket, so they are private to
+    // this user. mkdir's mode applies only to directories it creates (and is
+    // subject to the umask), so an existing or shared directory is tightened
+    // explicitly; chmod has no effect on Windows, where the pipe is protected
+    // by its own ACL.
     mkdirSync(this.paths.stateDir, { recursive: true, mode: 0o700 });
     mkdirSync(this.paths.spillDir, { recursive: true, mode: 0o700 });
+    if (process.platform !== "win32") {
+      chmodSync(this.paths.stateDir, 0o700);
+      chmodSync(this.paths.spillDir, 0o700);
+    }
     // The lock is created exclusively, so two daemons starting at once cannot
     // both pass the check and overwrite each other's lock; a live socket (the
     // lock can be missing while a daemon still owns the socket) is refused
@@ -136,7 +146,6 @@ export class Daemon {
     }
     if (process.platform !== "win32") {
       try {
-        const { chmodSync } = await import("node:fs");
         chmodSync(this.paths.endpoint, 0o600);
       } catch {
         // best effort
@@ -236,15 +245,28 @@ export class Daemon {
     }
   }
 
+  // The token file must be readable by this user only. An existing token is
+  // reused only when its mode has no group or other bits; one another local
+  // user could have read is replaced rather than merely re-protected, since
+  // it may already be known. On Windows the mode carries no such bits and the
+  // state directory under %LOCALAPPDATA% is private by ACL.
   #loadOrCreateToken(): string {
+    const posix = process.platform !== "win32";
     try {
-      const token = readFileSync(this.paths.tokenFile, "utf8").trim();
-      if (token.length >= 32) return token;
+      const exposed =
+        posix && (statSync(this.paths.tokenFile).mode & 0o077) !== 0;
+      if (!exposed) {
+        const token = readFileSync(this.paths.tokenFile, "utf8").trim();
+        if (token.length >= 32) return token;
+      }
     } catch {
       // create below
     }
     const token = randomBytes(24).toString("hex");
+    // `mode` applies only when the file is created; an existing file keeps its
+    // mode until the explicit chmod.
     writeFileSync(this.paths.tokenFile, `${token}\n`, { mode: 0o600 });
+    if (posix) chmodSync(this.paths.tokenFile, 0o600);
     return token;
   }
 

@@ -28,7 +28,9 @@ package/ego-browser/src/daemon/
 State lives in `~/.local/share/ego/daemon/` (macOS), `$XDG_STATE_HOME/ego/daemon/`
 (Linux) or `%LOCALAPPDATA%\ego\daemon\` (Windows); `EGO_RUN_STATE_DIR`
 overrides it. The thin CLI reaches the daemon over a Unix socket (named pipe on
-Windows) and authenticates with the random token file next to it.
+Windows) and authenticates with the random token file next to it. On start the
+daemon makes the state directory `0700` and the token `0600` even when they
+already exist, and replaces a token whose mode let other users read it.
 
 ## Usage
 

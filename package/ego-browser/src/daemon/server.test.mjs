@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -136,6 +138,48 @@ test("exec round-trips through the socket with token and protocol checks", async
     0,
   );
 });
+
+test(
+  "the daemon keeps its state directory and token private",
+  { skip: process.platform === "win32" },
+  async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "ego-run-test-"));
+    const paths = daemonPaths({ EGO_RUN_STATE_DIR: stateDir });
+    // A state directory and token left world-readable by an earlier tool.
+    chmodSync(stateDir, 0o755);
+    const planted = "a".repeat(48);
+    writeFileSync(paths.tokenFile, `${planted}\n`, { mode: 0o644 });
+    const make = () =>
+      new Daemon({
+        paths,
+        bin: "ego-browser",
+        watchVersion: false,
+        sessions: { connect: fakeConnect() },
+      });
+    const daemon = make();
+    await daemon.start();
+    try {
+      assert.equal(statSync(stateDir).mode & 0o777, 0o700);
+      assert.equal(statSync(paths.spillDir).mode & 0o777, 0o700);
+      assert.equal(statSync(paths.tokenFile).mode & 0o777, 0o600);
+      // An exposed token is replaced, not reused.
+      assert.notEqual(daemon.token, planted);
+      assert.equal(readFileSync(paths.tokenFile, "utf8").trim(), daemon.token);
+    } finally {
+      await daemon.stop();
+    }
+    // A private token is reused across restarts.
+    const again = make();
+    await again.start();
+    try {
+      assert.equal(again.token, daemon.token);
+      assert.equal(statSync(paths.tokenFile).mode & 0o777, 0o600);
+    } finally {
+      await again.stop();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  },
+);
 
 test("a daemon refuses to start while another live process holds the lock", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "ego-run-test-"));
