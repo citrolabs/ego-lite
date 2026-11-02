@@ -638,9 +638,11 @@ Stop when the user takes control or the space is inactive or unassigned. Do not
 retry or route around the stop. Permission prompts, device choosers, and
 other browser-owned prompts require the user to handle them.
 
-When the user must act in the browser, call `await task.handOff()`, end the
-round, and explain what they should do. After the user confirms, resume the
-same space:
+When the user must act in the browser (login without credentials the user gave,
+CAPTCHA or human verification, 2FA, or other manual step), call
+`await task.handOff()`, end the round, and explain what they should do. Do not
+guess credentials or work around it silently.
+After the user confirms, resume the same space:
 
 ```js
 const task = await takeOverTaskSpace(7);
