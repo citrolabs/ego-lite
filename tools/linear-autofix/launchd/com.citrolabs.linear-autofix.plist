@@ -6,7 +6,8 @@
     Runs one scheduler pass every 30 minutes. A pass that is still running
     when the next one fires makes the newcomer exit at once (tick.lock).
 
-    Install (edit the paths and the API key first):
+    Secrets live in ~/.config/linear-autofix/env (chmod 600), not here.
+    Install (edit the repository path first if it differs):
       cp tools/linear-autofix/launchd/com.citrolabs.linear-autofix.plist ~/Library/LaunchAgents/
       launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.citrolabs.linear-autofix.plist
     Stop:
@@ -19,17 +20,8 @@
   <array>
     <string>/bin/zsh</string>
     <string>-lc</string>
-    <string>cd ~/code/ego-lite/tools/linear-autofix && exec node src/cli.mjs tick</string>
+    <string>source ~/.config/linear-autofix/env &amp;&amp; cd ~/code/ego-lite/tools/linear-autofix &amp;&amp; exec node src/cli.mjs tick</string>
   </array>
-
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>LINEAR_API_KEY</key>
-    <string>lin_api_REPLACE_ME</string>
-    <!-- Optional overrides; see README. -->
-    <key>AUTOFIX_MAX_IMPLEMENTING</key>
-    <string>2</string>
-  </dict>
 
   <key>StartInterval</key>
   <integer>1800</integer>

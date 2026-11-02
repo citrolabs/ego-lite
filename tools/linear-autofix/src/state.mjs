@@ -52,6 +52,17 @@ export function save(record) {
   return record;
 }
 
+/** Events of the current process, drained into the Linear execution log. */
+const journal = [];
+
+export function journalEvents() {
+  return journal.slice();
+}
+
+export function clearJournal() {
+  journal.length = 0;
+}
+
 /** Append a history event and persist. */
 export function note(record, event, detail) {
   record.history ??= [];
@@ -62,6 +73,11 @@ export function note(record, event, detail) {
   });
   if (record.history.length > 200)
     record.history.splice(0, record.history.length - 200);
+  journal.push({
+    identifier: record.identifier,
+    event,
+    detail: detail ? String(detail) : "",
+  });
   console.log(
     `[${record.identifier}] ${event}${detail ? `: ${truncate(detail)}` : ""}`,
   );

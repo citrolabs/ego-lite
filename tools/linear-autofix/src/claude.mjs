@@ -11,6 +11,12 @@ import { run, tail } from "./proc.mjs";
  * Permission model: `dontAsk` denies every tool call outside `allowedTools`,
  * which is how the orchestrator keeps `git push` and `gh` in its own hands.
  */
+let processCostUsd = 0;
+/** Total `claude -p` cost of this process so far. */
+export function claudeCostUsd() {
+  return processCostUsd;
+}
+
 export async function runClaude({
   prompt,
   cwd,
@@ -78,6 +84,8 @@ export async function runClaude({
       : JSON.stringify(parsed.result ?? "");
   let structured = parsed.structured_output ?? null;
   if (schema && !structured) structured = parseJsonBlock(text);
+  if (typeof parsed.total_cost_usd === "number")
+    processCostUsd += parsed.total_cost_usd;
   return {
     text,
     structured,

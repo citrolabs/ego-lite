@@ -14,6 +14,7 @@ import { triage } from "./triage.mjs";
 import { implement } from "./implement.mjs";
 import { review } from "./review.mjs";
 import { clearErrors, recordError } from "./actions.mjs";
+import { flushTickLog } from "./journal.mjs";
 
 /** Linear priority: 0 = none, 1 = urgent … 4 = low. Sort none last. */
 export function byPriority(a, b) {
@@ -67,6 +68,9 @@ export async function tick() {
     console.log("another tick is running; exiting");
     return;
   }
+  const startedAt = Date.now();
+  let issueCount;
+  let failure;
   try {
     if (stopRequested()) {
       console.log(`STOP file present in ${config.stateDir}; exiting`);
@@ -137,7 +141,16 @@ export async function tick() {
       }
       await guarded(record, () => implement(issue, record));
     }
+  } catch (err) {
+    failure = err?.message ?? String(err);
+    throw err;
   } finally {
+    await flushTickLog({
+      label: "tick",
+      startedAt,
+      issueCount,
+      error: failure,
+    });
     releaseLock();
   }
 }

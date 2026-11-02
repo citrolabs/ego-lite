@@ -38,6 +38,10 @@ export const config = Object.freeze({
   linearStatePendingReview:
     process.env.AUTOFIX_LINEAR_STATE_PENDING_REVIEW ?? "Pending Review",
 
+  // Linear ticket that receives one summary comment per tick that did
+  // something. Empty disables it.
+  logIssue: process.env.AUTOFIX_LOG_ISSUE ?? "CITRO-4786",
+
   remote: process.env.AUTOFIX_REMOTE ?? "origin",
   baseBranch: process.env.AUTOFIX_BASE_BRANCH ?? "dev",
   packageDir: "package/ego-browser",

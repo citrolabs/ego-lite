@@ -13,6 +13,7 @@ import { reconcile, tick } from "./tick.mjs";
 import { triage } from "./triage.mjs";
 import { implement } from "./implement.mjs";
 import { review } from "./review.mjs";
+import { flushTickLog } from "./journal.mjs";
 
 const USAGE = `linear-autofix — Linear ticket → PR → review loop, unattended
 
@@ -25,9 +26,26 @@ Usage:
   linear-autofix status               list tracked tickets and their stage
   linear-autofix stop | resume        create / remove the STOP file (kill switch)
 
-Environment: LINEAR_API_KEY (required), AUTOFIX_DRY_RUN=1, AUTOFIX_ISSUE=<ID>,
+Environment: LINEAR_API_KEY (required), AUTOFIX_DRY_RUN=1, AUTOFIX_ISSUE=<ID>, AUTOFIX_LOG_ISSUE,
 AUTOFIX_STATE_DIR, AUTOFIX_MAX_IMPLEMENTING, AUTOFIX_MAX_REVIEW_ROUNDS, … see README.
 `;
+
+/** Run a single-ticket stage and post its events to the log ticket. */
+async function logged(label, fn) {
+  const startedAt = Date.now();
+  try {
+    await fn();
+  } catch (err) {
+    await flushTickLog({
+      label,
+      startedAt,
+      issueCount: 1,
+      error: err?.message ?? String(err),
+    });
+    throw err;
+  }
+  await flushTickLog({ label, startedAt, issueCount: 1 });
+}
 
 async function one(identifier) {
   if (!identifier) throw new Error("issue identifier required");
