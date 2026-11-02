@@ -8,6 +8,7 @@ import * as linear from "./linear.mjs";
 import { note, runDir, transition, worktreePath } from "./state.mjs";
 import { escalate, FOOTER } from "./actions.mjs";
 import { bothTails } from "./proc.mjs";
+import { e2eNote, gatedPush } from "./e2e.mjs";
 
 /**
  * Tools the implementer and the review fixer may use. The list keeps Claude on
@@ -163,8 +164,9 @@ export async function publish(record) {
     return escalate(record, `分支上没有领先 ${base} 的提交，无法 publish。`);
   }
 
+  let gate;
   try {
-    await git.push(dir, record.branch);
+    gate = await gatedPush(dir, record.branch);
   } catch (err) {
     const logDir =
       record.implement?.runDir ?? runDir(record.identifier, "publish");
@@ -176,7 +178,7 @@ export async function publish(record) {
     const excerpt = bothTails(err.stdout, err.stderr, 60).slice(-2200);
     return escalate(
       record,
-      `push 失败（pre-push 会跑真浏览器 E2E，通常是 E2E 未通过）：\n\n\`\`\`\n${excerpt}\n\`\`\`\n\n完整输出：\`${log}\`\nworktree: \`${dir}\`\n\n修好环境后运行 \`linear-autofix publish ${record.identifier}\` 只重跑 push 和开 PR，不会重新实现。`,
+      `push 或推送前的 E2E 失败（通常是 E2E 用例未通过）：\n\n\`\`\`\n${excerpt}\n\`\`\`\n\n完整输出：\`${log}\`\nworktree: \`${dir}\`\n\n修好环境后运行 \`linear-autofix publish ${record.identifier}\` 只重跑 push 和开 PR，不会重新实现。`,
     );
   }
   note(record, "pushed", await git.recentLog(dir, base));
@@ -193,8 +195,7 @@ export async function publish(record) {
         body: pr.body,
         identifier: record.identifier,
         draft,
-        e2eNote:
-          "The pre-push real-browser E2E suite ran on the bot machine before this push.",
+        e2eNote: e2eNote(gate),
       }),
       draft,
     });

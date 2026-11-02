@@ -92,6 +92,7 @@ mkdir -p ~/.config/linear-autofix
 cat > ~/.config/linear-autofix/env <<'ENV'
 export LINEAR_API_KEY=lin_api_…
 # export AUTOFIX_LOG_ISSUE=CITRO-4786          # where tick logs are posted (default)
+export AUTOFIX_E2E_KNOWN_FAILURES="Page keyboard interface"   # browser-side paste bug, see below
 # export AUTOFIX_MAX_IMPLEMENTING=2
 ENV
 chmod 600 ~/.config/linear-autofix/env
@@ -144,22 +145,23 @@ the ticket stays readable. Set `AUTOFIX_LOG_ISSUE=` (empty) to disable.
 
 ## Configuration
 
-| Variable                    | Default                                   | Meaning                                                 |
-| --------------------------- | ----------------------------------------- | ------------------------------------------------------- |
-| `LINEAR_API_KEY`            | —                                         | required                                                |
-| `AUTOFIX_REPO`              | this checkout                             | repository the worktrees are created from               |
-| `AUTOFIX_STATE_DIR`         | `~/.local/state/linear-autofix`           | records, runs, worktrees, lock, STOP                    |
-| `AUTOFIX_LINEAR_STATES`     | `Backlog,Todo,In Progress,Pending Review` | states polled                                           |
-| `AUTOFIX_BASE_BRANCH`       | `dev`                                     | PR base and worktree base                               |
-| `AUTOFIX_MAX_IMPLEMENTING`  | `2`                                       | bot PRs allowed in review at once                       |
-| `AUTOFIX_MAX_REVIEW_ROUNDS` | `5`                                       | fix rounds per PR before escalating                     |
-| `AUTOFIX_*_BUDGET_USD`      | triage 2 / implement 25 / review 15       | `--max-budget-usd` per Claude run                       |
-| `AUTOFIX_*_TIMEOUT_MS`      | triage 10 min / implement 90 / review 60  | wall-clock limit per Claude run                         |
-| `AUTOFIX_PUSH_TIMEOUT_MS`   | 45 min                                    | covers the pre-push E2E suite                           |
-| `AUTOFIX_CLAUDE_MODEL`      | Claude Code default                       | `--model`                                               |
-| `AUTOFIX_LOG_ISSUE`         | `CITRO-4786`                              | Linear ticket that receives one comment per active tick |
-| `AUTOFIX_DRY_RUN`           | unset                                     | `1`: no Linear/GitHub writes, no push                   |
-| `AUTOFIX_ISSUE`             | unset                                     | restrict a tick to one identifier                       |
+| Variable                     | Default                                   | Meaning                                                      |
+| ---------------------------- | ----------------------------------------- | ------------------------------------------------------------ |
+| `LINEAR_API_KEY`             | —                                         | required                                                     |
+| `AUTOFIX_REPO`               | this checkout                             | repository the worktrees are created from                    |
+| `AUTOFIX_STATE_DIR`          | `~/.local/state/linear-autofix`           | records, runs, worktrees, lock, STOP                         |
+| `AUTOFIX_LINEAR_STATES`      | `Backlog,Todo,In Progress,Pending Review` | states polled                                                |
+| `AUTOFIX_BASE_BRANCH`        | `dev`                                     | PR base and worktree base                                    |
+| `AUTOFIX_MAX_IMPLEMENTING`   | `2`                                       | bot PRs allowed in review at once                            |
+| `AUTOFIX_MAX_REVIEW_ROUNDS`  | `5`                                       | fix rounds per PR before escalating                          |
+| `AUTOFIX_*_BUDGET_USD`       | triage 2 / implement 25 / review 15       | `--max-budget-usd` per Claude run                            |
+| `AUTOFIX_*_TIMEOUT_MS`       | triage 10 min / implement 90 / review 60  | wall-clock limit per Claude run                              |
+| `AUTOFIX_PUSH_TIMEOUT_MS`    | 45 min                                    | covers the pre-push E2E suite                                |
+| `AUTOFIX_CLAUDE_MODEL`       | Claude Code default                       | `--model`                                                    |
+| `AUTOFIX_E2E_KNOWN_FAILURES` | (empty)                                   | E2E cases the bot leaves out, pushing with the hook excluded |
+| `AUTOFIX_LOG_ISSUE`          | `CITRO-4786`                              | Linear ticket that receives one comment per active tick      |
+| `AUTOFIX_DRY_RUN`            | unset                                     | `1`: no Linear/GitHub writes, no push                        |
+| `AUTOFIX_ISSUE`              | unset                                     | restrict a tick to one identifier                            |
 
 ## Review-loop termination
 
@@ -175,6 +177,17 @@ timestamps and line numbers) mean the bot is not making progress and it
 escalates instead of pushing again. A round whose outcome is `disputed`
 produces a PR comment and no commit; the next tick sees the same findings and
 escalates, which is intended: a dispute needs a human.
+
+## Known-failing E2E cases
+
+Some real-browser E2E cases fail for reasons outside this repository (today:
+`Page keyboard interface`, whose paste assertion hits a browser-side clipboard
+race). Left alone, that blocks every bot push that touches
+`package/ego-browser/`. Name such cases in `AUTOFIX_E2E_KNOWN_FAILURES`
+(comma-separated). When the diff is inside the E2E scope, the bot then runs the
+suite itself with those cases left out (`EGO_BROWSER_REAL_E2E_ONLY`) and pushes
+with `LEFTHOOK_EXCLUDE=e2e-test`; the PR body names the excluded cases. Remove
+a name as soon as the underlying bug ships, so the case guards again.
 
 ## When a push fails
 

@@ -45,6 +45,10 @@ export const config = Object.freeze({
   remote: process.env.AUTOFIX_REMOTE ?? "origin",
   baseBranch: process.env.AUTOFIX_BASE_BRANCH ?? "dev",
   packageDir: "package/ego-browser",
+  // Real-browser E2E cases known to fail on this host for reasons outside the
+  // SDK (browser-side bugs). With this set, the bot runs the suite itself
+  // without them and pushes with the pre-push hook excluded; the PR body says so.
+  e2eKnownFailures: list("AUTOFIX_E2E_KNOWN_FAILURES", []),
 
   maxImplementing: num("AUTOFIX_MAX_IMPLEMENTING", 2),
   maxReviewRounds: num("AUTOFIX_MAX_REVIEW_ROUNDS", 5),

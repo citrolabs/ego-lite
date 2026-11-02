@@ -14,6 +14,7 @@ import { note, runDir, transition, worktreePath } from "./state.mjs";
 import { actionableThreads, renderThreads } from "./threads.mjs";
 import { escalate, FOOTER } from "./actions.mjs";
 import { CODE_TOOLS, readJson } from "./implement.mjs";
+import { gatedPush } from "./e2e.mjs";
 
 // After a push, Codex's review takes up to 30 minutes. Wait this long for a
 // review of the current head before proceeding on CI and human threads alone.
@@ -202,11 +203,11 @@ export async function review(issue, record) {
   }
   if (committed) {
     try {
-      await git.push(dir, record.branch);
+      await gatedPush(dir, record.branch);
     } catch (err) {
       return escalate(
         record,
-        `review 修复后 push 失败：\n\n\`\`\`\n${String(err.message).slice(0, 2500)}\n\`\`\``,
+        `review 修复后 push 或推送前的 E2E 失败：\n\n\`\`\`\n${String(err.message).slice(0, 2500)}\n\`\`\``,
       );
     }
     note(record, "pushed review fix", await git.recentLog(dir, before));

@@ -111,14 +111,30 @@ export async function recentLog(dir, ref) {
   return (await gitIn(dir, ["log", "--oneline", `${ref}..HEAD`])).stdout.trim();
 }
 
-/** Push the branch. The pre-push hook runs the real-browser E2E suite here. */
-export async function push(dir, branch) {
+/** Files changed on the branch relative to `ref`. */
+export async function changedFiles(dir, ref) {
+  const { stdout } = await gitIn(dir, ["diff", "--name-only", `${ref}...HEAD`]);
+  return stdout
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Push the branch. The pre-push hook runs the real-browser E2E suite here
+ * unless `skipHookE2e` is set, which the E2E gate does after running the suite
+ * itself (see e2e.mjs).
+ */
+export async function push(dir, branch, { skipHookE2e = false } = {}) {
   if (config.dryRun) {
-    console.log(`[dry-run] git push ${config.remote} ${branch} (from ${dir})`);
+    console.log(
+      `[dry-run] git push ${config.remote} ${branch} (from ${dir}${skipHookE2e ? ", hook E2E excluded" : ""})`,
+    );
     return;
   }
   await gitIn(dir, ["push", "--set-upstream", config.remote, branch], {
     timeoutMs: config.pushTimeoutMs,
+    env: skipHookE2e ? { LEFTHOOK_EXCLUDE: "e2e-test" } : {},
   });
 }
 
