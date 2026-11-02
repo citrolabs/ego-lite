@@ -10,7 +10,8 @@ export class ProcessError extends Error {
 
 /**
  * Run a child process to completion. Rejects on a non-zero exit or on timeout.
- * `input` is written to stdin.
+ * `input` is written to stdin. `onLine` sees each complete output line as it
+ * arrives, from either stream, for long runs that should show progress.
  *
  * The child is started in its own process group (`detached`), so a timeout
  * terminates the whole tree: Claude's npm, node and shell descendants go with
@@ -21,7 +22,7 @@ export class ProcessError extends Error {
 export function run(
   cmd,
   args,
-  { cwd, input, timeoutMs = 120_000, env, allowFailure = false } = {},
+  { cwd, input, timeoutMs = 120_000, env, allowFailure = false, onLine } = {},
 ) {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
@@ -33,8 +34,18 @@ export function run(
     let stdout = "";
     let stderr = "";
     let timedOut = false;
-    child.stdout.on("data", (d) => (stdout += d));
-    child.stderr.on("data", (d) => (stderr += d));
+    const lines = onLine ? lineSplitter(onLine) : () => {};
+    const linesErr = onLine ? lineSplitter(onLine) : () => {};
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (d) => {
+      stdout += d;
+      lines(d);
+    });
+    child.stderr.on("data", (d) => {
+      stderr += d;
+      linesErr(d);
+    });
     const timer = setTimeout(() => {
       timedOut = true;
       killTree(child, "SIGTERM");
@@ -74,6 +85,23 @@ export function run(
     if (input !== undefined) child.stdin.end(input);
     else child.stdin.end();
   });
+}
+
+/** Turn chunks into complete lines. A progress callback never breaks the run. */
+export function lineSplitter(onLine) {
+  let buffer = "";
+  return (chunk) => {
+    buffer += chunk;
+    const parts = buffer.split("\n");
+    buffer = parts.pop();
+    for (const line of parts) {
+      try {
+        onLine(line);
+      } catch (err) {
+        console.error(`progress callback failed: ${err.message}`);
+      }
+    }
+  };
 }
 
 /** Signal the child's whole process group; fall back to the child alone. */

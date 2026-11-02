@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config } from "./config.mjs";
 import { run, tail } from "./proc.mjs";
-import { setUsagePause, usagePausedUntil } from "./state.mjs";
+import { setUsagePause, truncate, usagePausedUntil } from "./state.mjs";
 
 // How long to wait when a usage limit did not come with a reset time.
 const USAGE_RETRY_MS = 30 * 60_000;
@@ -91,6 +91,31 @@ function pauseIfUsageLimit(stdout, stderr) {
 }
 
 /**
+ * What one stream-json line says Claude is doing, for the log: each tool call
+ * and the first line of each text block. Pure. Returns a list of short strings.
+ */
+export function describeClaudeLine(line) {
+  let message;
+  try {
+    message = JSON.parse(line);
+  } catch {
+    return [];
+  }
+  if (message.type !== "assistant") return [];
+  const steps = [];
+  for (const block of message.message?.content ?? []) {
+    if (block.type === "tool_use") {
+      const input = block.input ?? {};
+      const target = input.command ?? input.file_path ?? input.pattern ?? "";
+      steps.push(truncate(`${block.name}${target ? `: ${target}` : ""}`, 200));
+    } else if (block.type === "text" && block.text?.trim()) {
+      steps.push(truncate(block.text.trim().split("\n")[0], 200));
+    }
+  }
+  return steps;
+}
+
+/**
  * Run `claude -p` headless. The prompt goes in on stdin. Returns
  * { text, structured, costUsd, turns, raw }. Throws on timeout or a non-zero
  * exit, and throws UsageLimitError (after recording the pause) when the account
@@ -111,6 +136,7 @@ export async function runClaude({
   cwd,
   runDir,
   label,
+  identifier,
   allowedTools = [],
   restricted = false,
   budgetUsd,
@@ -139,6 +165,10 @@ export async function runClaude({
 
   if (runDir) fs.writeFileSync(path.join(runDir, `${label}.prompt.md`), prompt);
   const started = Date.now();
+  const tag = `[${identifier ? `${identifier} ` : ""}${label}]`;
+  console.log(
+    `${tag} claude started${budgetUsd ? `, budget $${budgetUsd}` : ""}${timeoutMs ? `, limit ${Math.round(timeoutMs / 60_000)} min` : ""}`,
+  );
   let result;
   try {
     result = await run(config.claudeBin, args, {
@@ -146,6 +176,10 @@ export async function runClaude({
       input: prompt,
       timeoutMs,
       env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" },
+      onLine: (line) => {
+        for (const step of describeClaudeLine(line))
+          console.log(`${tag} ${step}`);
+      },
     });
   } catch (err) {
     if (runDir && err.stdout !== undefined) {

@@ -11,8 +11,13 @@ const fake = path.join(tmp, "fake-claude.mjs");
 process.env.AUTOFIX_STATE_DIR = path.join(tmp, "state");
 process.env.AUTOFIX_CLAUDE_BIN = fake;
 
-const { detectUsageLimit, parseClaudeStream, runClaude, UsageLimitError } =
-  await import("./claude.mjs");
+const {
+  describeClaudeLine,
+  detectUsageLimit,
+  parseClaudeStream,
+  runClaude,
+  UsageLimitError,
+} = await import("./claude.mjs");
 const { clearUsagePause, setUsagePause, usagePausedUntil } =
   await import("./state.mjs");
 const { runCodeClaude } = await import("./implement.mjs");
@@ -229,4 +234,27 @@ test("an expired pause no longer counts", () => {
   setUsagePause(Date.now() - 1000, "old");
   assert.equal(usagePausedUntil(), null);
   clearUsagePause();
+});
+
+test("describeClaudeLine shows tool calls and the first line of text", () => {
+  const line = JSON.stringify({
+    type: "assistant",
+    message: {
+      content: [
+        { type: "text", text: "Fixing it.\nMore detail." },
+        { type: "tool_use", name: "Bash", input: { command: "npm test" } },
+        { type: "tool_use", name: "Read", input: { file_path: "/a.txt" } },
+        { type: "tool_use", name: "TodoWrite", input: { todos: [] } },
+        { type: "thinking", thinking: "hidden" },
+      ],
+    },
+  });
+  assert.deepEqual(describeClaudeLine(line), [
+    "Fixing it.",
+    "Bash: npm test",
+    "Read: /a.txt",
+    "TodoWrite",
+  ]);
+  assert.deepEqual(describeClaudeLine('{"type":"system"}'), []);
+  assert.deepEqual(describeClaudeLine("not json"), []);
 });
