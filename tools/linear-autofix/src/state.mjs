@@ -126,18 +126,35 @@ export function latestCommentAt(issue) {
   return stamps.length ? stamps.sort().at(-1) : null;
 }
 
+/**
+ * Take the tick lock. The lock file is created exclusively; a file left by a
+ * dead process is removed and creation retried, so two starters racing over
+ * the same stale file cannot both win (only one unlink+create succeeds).
+ */
 export function acquireLock() {
   ensureStateDir();
-  try {
-    fs.writeFileSync(lockPath(), String(process.pid), { flag: "wx" });
-    return true;
-  } catch (err) {
-    if (err.code !== "EEXIST") throw err;
-    const pid = Number(fs.readFileSync(lockPath(), "utf8"));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      fs.writeFileSync(lockPath(), String(process.pid), { flag: "wx" });
+      return true;
+    } catch (err) {
+      if (err.code !== "EEXIST") throw err;
+    }
+    let pid = NaN;
+    try {
+      pid = Number(fs.readFileSync(lockPath(), "utf8"));
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+      continue; // the other starter removed it; retry the exclusive create
+    }
     if (pid && isAlive(pid)) return false;
-    fs.writeFileSync(lockPath(), String(process.pid));
-    return true;
+    try {
+      fs.unlinkSync(lockPath());
+    } catch (err) {
+      if (err.code !== "ENOENT") throw err;
+    }
   }
+  return false;
 }
 
 export function releaseLock() {

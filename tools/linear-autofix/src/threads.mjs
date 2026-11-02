@@ -15,10 +15,17 @@ export function splitThreads(threads, marker = config.botMarker) {
     if (t.isResolved) continue;
     const comments = t.comments?.nodes ?? [];
     if (!comments.length) continue;
-    const last = comments[comments.length - 1];
+    const last = newestComment(comments);
     (String(last.body ?? "").includes(marker) ? awaitingHuman : fresh).push(t);
   }
   return { fresh, awaitingHuman };
+}
+
+/** The comment with the latest createdAt; falls back to array order when timestamps are missing. */
+function newestComment(comments) {
+  return comments.reduce((best, c) =>
+    String(c.createdAt ?? "") >= String(best.createdAt ?? "") ? c : best,
+  );
 }
 
 /** Unresolved threads that need the bot's attention. */

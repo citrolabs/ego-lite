@@ -166,6 +166,17 @@ async function main([command, arg]) {
       const record = load(arg);
       if (!record) throw new Error(`no record for ${arg}`);
       record.consecutiveErrors = 0;
+      const open = await github.findPr(record.branch);
+      if (open?.state === "OPEN") {
+        record.pr = { number: open.number, url: open.url, draft: open.isDraft };
+        record.review ??= { rounds: 0 };
+        transition(
+          record,
+          "in_review",
+          `manual retry; ${open.url} is open, resuming the review loop`,
+        );
+        return;
+      }
       transition(record, "new", "manual retry");
       return;
     }

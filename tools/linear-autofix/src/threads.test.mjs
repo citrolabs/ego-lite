@@ -63,3 +63,33 @@ test("renderThreads includes the thread id, location and quoted comments", () =>
   assert.match(text, /run\.ts:4/);
   assert.match(text, /> \*\*reviewer\*\*: please add a test/);
 });
+
+test("splitThreads picks the newest comment by createdAt, whatever the array order", () => {
+  const t = {
+    id: "t9",
+    isResolved: false,
+    comments: {
+      nodes: [
+        {
+          author: { login: "joway" },
+          body: "<!-- linear-autofix -->\nfixed",
+          createdAt: "2026-11-02T02:00:00Z",
+        },
+        {
+          author: { login: "reviewer" },
+          body: "still wrong",
+          createdAt: "2026-11-02T01:00:00Z",
+        },
+      ],
+    },
+  };
+  assert.deepEqual(
+    splitThreads([t]).awaitingHuman.map((x) => x.id),
+    ["t9"],
+  );
+  t.comments.nodes[1].createdAt = "2026-11-02T03:00:00Z";
+  assert.deepEqual(
+    splitThreads([t]).fresh.map((x) => x.id),
+    ["t9"],
+  );
+});

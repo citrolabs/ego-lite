@@ -104,8 +104,14 @@ export async function implement(issue, record) {
   note(
     record,
     "implement run finished",
-    `cost $${res.costUsd ?? "?"}, ${res.turns ?? "?"} turns`,
+    `cost $${res.costUsd ?? "?"}, ${res.turns ?? "?"} turns${res.isError ? ", ended in error" : ""}`,
   );
+  if (res.isError) {
+    return escalate(
+      record,
+      `实现阶段的 Claude 运行以错误结束（预算或超时用尽、或内部错误），不发布它留下的提交：\n\n${res.text.slice(0, 1500)}\n\nworktree: \`${dir}\``,
+    );
+  }
 
   const result = readJson(path.join(out, "result.json"));
   if (result?.status === "blocked") {

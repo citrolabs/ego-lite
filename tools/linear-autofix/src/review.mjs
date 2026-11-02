@@ -213,8 +213,14 @@ export async function review(issue, record) {
   note(
     record,
     `review round ${round} run finished`,
-    `cost $${res.costUsd ?? "?"}`,
+    `cost $${res.costUsd ?? "?"}${res.isError ? ", ended in error" : ""}`,
   );
+  if (res.isError) {
+    return escalate(
+      record,
+      `review 修复的 Claude 运行以错误结束，不发布它留下的提交：\n\n${res.text.slice(0, 1500)}\n\nworktree: \`${dir}\``,
+    );
+  }
 
   const result = readJson(path.join(out, "result.json")) ?? {
     status: "fixed",

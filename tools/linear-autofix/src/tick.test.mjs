@@ -96,6 +96,13 @@ test("the tick lock is exclusive, stale locks are reclaimed and the STOP file is
     "a lock left by a dead process is reclaimed",
   );
   state.releaseLock();
+  assert.equal(
+    state.acquireLock(),
+    true,
+    "the reclaimed lock was recreated exclusively",
+  );
+  assert.equal(state.acquireLock(), false);
+  state.releaseLock();
   assert.equal(state.stopRequested(), false);
   state.setStop(true);
   assert.equal(state.stopRequested(), true);
