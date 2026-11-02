@@ -36,7 +36,7 @@ export function reconcile(record, issue) {
   if (
     record.stage === "skipped" &&
     record.triage?.verdict === "needs_info" &&
-    record.commentCount > record.lastSeenCommentCount
+    (record.latestCommentAt ?? "") > (record.lastSeenCommentAt ?? "")
   ) {
     transition(
       record,

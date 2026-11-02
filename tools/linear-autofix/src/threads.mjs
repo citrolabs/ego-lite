@@ -1,18 +1,29 @@
 import { config } from "./config.mjs";
 
 /**
- * Unresolved review threads whose latest comment is not a bot reply. Human
+ * Split the unresolved review threads into the ones that need the bot's
+ * attention (`fresh`: the latest comment is not a bot reply) and the ones the
+ * bot already answered without resolving (`awaitingHuman`). Both kinds keep
+ * the PR from being done; only `fresh` ones trigger a fix round. Human
  * comments made from the bot's own GitHub account are indistinguishable by
  * author, so bot replies are recognized by the marker they carry.
  */
-export function actionableThreads(threads, marker = config.botMarker) {
-  return (threads ?? []).filter((t) => {
-    if (t.isResolved) return false;
+export function splitThreads(threads, marker = config.botMarker) {
+  const fresh = [];
+  const awaitingHuman = [];
+  for (const t of threads ?? []) {
+    if (t.isResolved) continue;
     const comments = t.comments?.nodes ?? [];
-    if (!comments.length) return false;
+    if (!comments.length) continue;
     const last = comments[comments.length - 1];
-    return !String(last.body ?? "").includes(marker);
-  });
+    (String(last.body ?? "").includes(marker) ? awaitingHuman : fresh).push(t);
+  }
+  return { fresh, awaitingHuman };
+}
+
+/** Unresolved threads that need the bot's attention. */
+export function actionableThreads(threads, marker = config.botMarker) {
+  return splitThreads(threads, marker).fresh;
 }
 
 export function renderThreads(threads) {

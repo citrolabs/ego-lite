@@ -11,7 +11,7 @@ import * as git from "./git.mjs";
 import * as github from "./github.mjs";
 import * as linear from "./linear.mjs";
 import { note, runDir, transition, worktreePath } from "./state.mjs";
-import { actionableThreads, renderThreads } from "./threads.mjs";
+import { renderThreads, splitThreads } from "./threads.mjs";
 import { escalate, FOOTER } from "./actions.mjs";
 import { CODE_TOOLS, readJson } from "./implement.mjs";
 import { gatedPush } from "./e2e.mjs";
@@ -24,15 +24,18 @@ const CODEX_WAIT_MS = 2 * 60 * 60_000;
  * Decide what the review loop should do for the PR's current head. Pure.
  * Returns { action: 'wait' | 'done' | 'draft_ready' | 'fix' | 'escalate', problems, why }.
  *
- * `done` requires CI to have reported success. A head with no checks at all
- * (`none`) is treated as not reported yet; after the wait window it escalates
- * instead of finishing, since this repository runs CI on every PR.
+ * `done` needs all of: CI reported success, a clean Codex review of this head,
+ * no unresolved review thread (neither fresh ones nor ones the bot answered
+ * and a human has yet to resolve). A head with no checks reported (`none`) or
+ * no Codex review is "not reported yet"; after the wait window that escalates
+ * instead of finishing, since this repository runs both on every PR.
  */
 export function assessHead({
   pr,
   codex,
   ci,
   threads,
+  awaitingHuman = [],
   headSeenAt,
   now = Date.now(),
 }) {
@@ -54,14 +57,21 @@ export function assessHead({
       why: "no CI result was reported for this head within the wait window",
     };
   }
+  if (awaitingHuman.length) {
+    return {
+      action: "wait",
+      problems,
+      why: `${awaitingHuman.length} thread(s) answered by the bot await a human`,
+    };
+  }
   if (pr.isDraft) return { action: "draft_ready", problems };
   if (!codex) {
     if (waited < CODEX_WAIT_MS)
       return { action: "wait", problems, why: "waiting for the Codex review" };
     return {
-      action: "done",
+      action: "escalate",
       problems,
-      why: "no Codex review arrived; CI green and no open threads",
+      why: "no Codex review arrived for this head within the wait window",
     };
   }
   return {
@@ -89,19 +99,22 @@ export async function review(issue, record) {
     record.review.headSeenAt = new Date().toISOString();
   }
   const ci = github.ciStatus(pr.statusCheckRollup);
-  const threads = actionableThreads(await github.reviewThreads(pr.number));
+  const { fresh: threads, awaitingHuman } = splitThreads(
+    await github.reviewThreads(pr.number),
+  );
   const codex = pr.isDraft ? null : findCodexReview(pr.comments, sha);
   const verdict = assessHead({
     pr,
     codex,
     ci,
     threads,
+    awaitingHuman,
     headSeenAt: record.review.headSeenAt,
   });
   note(
     record,
     `review check ${sha.slice(0, 8)}`,
-    `ci=${ci} codex=${codex ? (isCleanReview(codex.body) ? "clean" : "findings") : "none"} threads=${threads.length} -> ${verdict.action}`,
+    `ci=${ci} codex=${codex ? (isCleanReview(codex.body) ? "clean" : "findings") : "none"} threads=${threads.length}+${awaitingHuman.length} -> ${verdict.action}`,
   );
 
   if (verdict.action === "wait") return;

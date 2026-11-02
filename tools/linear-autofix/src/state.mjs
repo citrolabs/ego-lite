@@ -113,10 +113,17 @@ export function upsertFromIssue(issue) {
   base.linearState = issue.state?.name;
   base.linearUpdatedAt = issue.updatedAt;
   base.labels = (issue.labels?.nodes ?? []).map((l) => l.name);
-  const commentCount = issue.comments?.nodes?.length ?? 0;
-  base.lastSeenCommentCount ??= commentCount;
-  base.commentCount = commentCount;
+  base.latestCommentAt = latestCommentAt(issue);
+  base.lastSeenCommentAt ??= base.latestCommentAt;
   return save(base);
+}
+
+/** Newest comment timestamp on the issue, or null. Pure. */
+export function latestCommentAt(issue) {
+  const stamps = (issue.comments?.nodes ?? [])
+    .map((c) => c.createdAt)
+    .filter(Boolean);
+  return stamps.length ? stamps.sort().at(-1) : null;
 }
 
 export function acquireLock() {

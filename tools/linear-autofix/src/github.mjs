@@ -106,28 +106,40 @@ export async function checksText(number) {
   return (stdout || stderr).trim();
 }
 
+/** Every review thread of the PR, following the connection's pages. */
 export async function reviewThreads(number) {
   const [owner, name] = (await repoNameWithOwner()).split("/");
-  const data = await ghJson([
-    "api",
-    "graphql",
-    "-f",
-    `query=query($owner:String!,$name:String!,$number:Int!){
-      repository(owner:$owner,name:$name){ pullRequest(number:$number){
-        reviewThreads(first:100){ nodes{
-          id isResolved isOutdated path line
-          comments(first:50){ nodes{ id body createdAt author{ login } } }
+  const threads = [];
+  let after = null;
+  for (;;) {
+    const data = await ghJson([
+      "api",
+      "graphql",
+      "-f",
+      `query=query($owner:String!,$name:String!,$number:Int!,$after:String){
+        repository(owner:$owner,name:$name){ pullRequest(number:$number){
+          reviewThreads(first:100, after:$after){
+            pageInfo{ hasNextPage endCursor }
+            nodes{
+              id isResolved isOutdated path line
+              comments(first:50){ nodes{ id body createdAt author{ login } } }
+            }
+          }
         } }
-      } }
-    }`,
-    "-f",
-    `owner=${owner}`,
-    "-f",
-    `name=${name}`,
-    "-F",
-    `number=${number}`,
-  ]);
-  return data.data.repository.pullRequest.reviewThreads.nodes;
+      }`,
+      "-f",
+      `owner=${owner}`,
+      "-f",
+      `name=${name}`,
+      "-F",
+      `number=${number}`,
+      ...(after ? ["-f", `after=${after}`] : []),
+    ]);
+    const page = data.data.repository.pullRequest.reviewThreads;
+    threads.push(...page.nodes);
+    if (!page.pageInfo.hasNextPage) return threads;
+    after = page.pageInfo.endCursor;
+  }
 }
 
 export async function replyToThread(threadId, body) {

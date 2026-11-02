@@ -180,9 +180,14 @@ the ticket stays readable. Set `AUTOFIX_LOG_ISSUE=` (empty) to disable.
 
 ## Review-loop termination
 
-A PR is finished when, for its current head commit, CI is green, the Codex
-review comment (tagged `<!-- codex-review -->` with the 8-char SHA) says
+A PR is finished when, for its current head commit, CI reported success, the
+Codex review comment (tagged `<!-- codex-review -->` with the 8-char SHA) says
 `No issues found that require changes.`, and no review thread is unresolved.
+A thread the bot answered without resolving still counts as unresolved: it
+blocks `done` and waits for a human, but does not trigger another fix round.
+If CI or the Codex review has not reported for a head within two hours the
+ticket escalates rather than finishing, since both run on every PR here.
+
 Codex skips draft PRs, so a draft (Windows ticket) with green CI and no threads
 is reported on Linear as _ready for Windows verification_ and waits for a human
 to mark it ready; the loop then resumes.

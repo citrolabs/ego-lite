@@ -64,11 +64,13 @@ test("reconcile honors the opt-out label, retries crashed runs and re-triages ne
 
   const info = state.upsertFromIssue(issue("CITRO-4"));
   info.triage = { verdict: "needs_info" };
-  info.lastSeenCommentCount = 0;
+  info.lastSeenCommentAt = "2026-11-01T00:00:00Z";
   state.transition(info, "skipped");
   assert.equal(reconcile(info, issue("CITRO-4")).stage, "skipped");
   const commented = issue("CITRO-4", {
-    comments: { nodes: [{ body: "here is the repro" }] },
+    comments: {
+      nodes: [{ body: "here is the repro", createdAt: "2026-11-02T00:00:00Z" }],
+    },
   });
   assert.equal(
     reconcile(state.upsertFromIssue(commented), commented).stage,

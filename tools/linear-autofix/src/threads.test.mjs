@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { actionableThreads, renderThreads } from "./threads.mjs";
+import { actionableThreads, renderThreads, splitThreads } from "./threads.mjs";
 
 const thread = (
   id,
@@ -35,6 +35,25 @@ test("actionableThreads keeps unresolved threads the bot has not answered", () =
   assert.deepEqual(
     actionableThreads(threads).map((t) => t.id),
     ["t1"],
+  );
+});
+
+test("splitThreads keeps bot-answered unresolved threads apart instead of dropping them", () => {
+  const { fresh, awaitingHuman } = splitThreads([
+    thread("t1"),
+    thread("t2", { resolved: true }),
+    thread("t3", {
+      last: "<!-- linear-autofix -->\nDone in abc123",
+      author: "joway",
+    }),
+  ]);
+  assert.deepEqual(
+    fresh.map((t) => t.id),
+    ["t1"],
+  );
+  assert.deepEqual(
+    awaitingHuman.map((t) => t.id),
+    ["t3"],
   );
 });
 

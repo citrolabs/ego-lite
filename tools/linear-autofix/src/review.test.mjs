@@ -43,23 +43,32 @@ test("waits while CI runs, has not reported, or while the Codex review is pendin
   );
 });
 
-test("finishes only when CI reported success", () => {
+test("finishes only with green CI, a clean Codex review and no unresolved threads", () => {
   assert.equal(
     assessHead({ pr: ready, codex: clean, ci: "success", threads: [], now })
       .action,
     "done",
   );
-  assert.equal(
-    assessHead({
-      pr: ready,
-      codex: null,
-      ci: "success",
-      threads: [],
-      headSeenAt: old,
-      now,
-    }).action,
-    "done",
-  );
+  const noCodex = assessHead({
+    pr: ready,
+    codex: null,
+    ci: "success",
+    threads: [],
+    headSeenAt: old,
+    now,
+  });
+  assert.equal(noCodex.action, "escalate");
+  assert.match(noCodex.why, /no Codex review/);
+  const answered = assessHead({
+    pr: ready,
+    codex: clean,
+    ci: "success",
+    threads: [],
+    awaitingHuman: [{ id: "t" }],
+    now,
+  });
+  assert.equal(answered.action, "wait");
+  assert.match(answered.why, /await a human/);
   const noCi = assessHead({
     pr: ready,
     codex: clean,

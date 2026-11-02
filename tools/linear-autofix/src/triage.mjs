@@ -128,7 +128,9 @@ export async function triage(issue, record) {
     transition(record, "triaged");
   } else {
     await linear.addLabel(record, config.labels.skipped);
-    record.lastSeenCommentCount = record.commentCount;
+    // The triage comment just posted is newer than anything fetched; a human
+    // comment after this moment re-triages a needs_info ticket.
+    record.lastSeenCommentAt = new Date().toISOString();
     transition(record, "skipped", triageResult.verdict);
   }
   return triageResult;

@@ -33,6 +33,8 @@ const ISSUE_FIELDS = `
   labels { nodes { id name } }
   attachments { nodes { title url } }
   comments(first: 50) { nodes { id body createdAt user { name displayName } } }
+  # Linear returns the newest comments first; re-triage of needs_info tickets
+  # keys on the newest createdAt among them (see state.upsertFromIssue).
 `;
 
 /** Every issue assigned to the API key's user in the configured states. */
