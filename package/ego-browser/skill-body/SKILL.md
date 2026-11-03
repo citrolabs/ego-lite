@@ -279,15 +279,12 @@ Use the refs returned by the subtree for actions inside the iframe. A subtree
 snapshot does not scope later locator actions; they still prefer actionable
 matches in the top document before searching frames.
 
-`waitForLoadState()` defaults to `load`. `waitForFunction()` follows the
-Playwright argument order; pass `undefined` before options when there is no Page
-argument. Unlike Playwright, it resolves to `true`, not the predicate's value:
+`waitForLoadState()` defaults to `load`. `waitForFunction()` takes Playwright's
+args (`undefined` before options if no arg) but returns `true`, not the
+predicate's value:
 
 ```js
-await page.waitForFunction(() => window.appReady, undefined, {
-  timeout: 10_000,
-});
-const ready = await page.evaluate(() => window.appReady);
+await page.waitForFunction(() => window.ready, undefined, { timeout: 5000 });
 ```
 
 ```js

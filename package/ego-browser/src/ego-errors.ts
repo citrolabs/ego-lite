@@ -89,6 +89,14 @@ const USER_CONTROL_REASON_MESSAGES = Object.freeze({
   ),
   hid: userPromptGuidance("A browser device chooser for HID has appeared."),
   protocol_handler: permissionPrompt("protocol handler registration"),
+  clipboard: permissionPrompt("clipboard access"),
+  local_network_access: permissionPrompt("local network access"),
+  storage_access: permissionPrompt("storage access"),
+  window_management: permissionPrompt("window management"),
+  local_fonts: permissionPrompt("local font access"),
+  permission_prompt: userPromptGuidance(
+    "A browser permission prompt or device chooser has appeared.",
+  ),
   manual_takeover: USER_CONTROL_GUIDANCE,
 });
 
