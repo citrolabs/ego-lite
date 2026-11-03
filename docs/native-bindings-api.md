@@ -298,8 +298,20 @@ usb
 serial
 hid
 protocol_handler
+clipboard
+local_network_access
+storage_access
+window_management
+local_fonts
+permission_prompt
 manual_takeover
 ```
+
+`local_network_access` covers both the local network and the loopback prompt.
+`permission_prompt` covers any other permission prompt or device chooser that
+has no dedicated key, such as a prompt that groups several requests.
+`manual_takeover` means the user or the agent handed the task over; it is not
+reported for a permission prompt.
 
 For example, a location prompt returns:
 
