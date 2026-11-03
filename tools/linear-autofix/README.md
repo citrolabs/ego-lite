@@ -104,9 +104,14 @@ First run, by hand, before scheduling anything:
 ```sh
 cd ~/code/ego-lite/tools/linear-autofix && source ~/.config/linear-autofix/env
 AUTOFIX_DRY_RUN=1 node src/cli.mjs tick                   # triages everything, writes nothing
-node src/cli.mjs status
+AUTOFIX_DRY_RUN=1 node src/cli.mjs status                 # what the dry run decided
 AUTOFIX_ISSUE=CITRO-2908 node src/cli.mjs tick             # one real ticket end to end
 ```
+
+A dry run only triages, and keeps its records under `dry-run/` in the state
+dir, so a real tick still triages every ticket and posts the result. It does
+not see the real STOP file or usage pause, and `implement`, `review`, `publish`
+and `reset` refuse to run in it. Delete `dry-run/` to triage again from scratch.
 
 Watch that PR through a full review loop (`node src/cli.mjs status`, the tick
 log comments on the log ticket), then keep it running. Two options.
@@ -203,7 +208,7 @@ the ticket stays readable. Set `AUTOFIX_LOG_ISSUE=` (empty) to disable.
 | `AUTOFIX_CLAUDE_MODEL`       | Claude Code default                       | `--model`                                                |
 | `AUTOFIX_E2E_KNOWN_FAILURES` | (empty)                                   | E2E cases the bot leaves out of its run and its comments |
 | `AUTOFIX_LOG_ISSUE`          | `CITRO-4786`                              | Linear ticket that receives one comment per active tick  |
-| `AUTOFIX_DRY_RUN`            | unset                                     | `1`: no Linear/GitHub writes, no push                    |
+| `AUTOFIX_DRY_RUN`            | unset                                     | `1`: triage only, separate state, no writes              |
 | `AUTOFIX_ISSUE`              | unset                                     | restrict a tick to one identifier                        |
 
 ## What counts as review feedback
