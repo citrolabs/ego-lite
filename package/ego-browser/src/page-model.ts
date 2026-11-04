@@ -697,9 +697,16 @@ function invalidateActivation(): void {
   programScope.activatedEpoch = -1;
 }
 
-/** Start a program: nothing from the previous one is trusted. */
+/**
+ * Start a program: nothing from the previous one is trusted. A scope the
+ * previous program left behind (its endProgram() never ran, or a host began
+ * the next program before teardown settled) is released in the background
+ * instead of being abandoned with its interceptions still armed.
+ */
 export function beginProgram(): void {
+  const stale = programScope;
   programScope = newProgramScope();
+  void disposeProgramScope(stale);
 }
 
 /**
@@ -708,9 +715,17 @@ export function beginProgram(): void {
  * pages see their own prototypes between programs. Idempotent, best-effort.
  */
 export async function endProgram(): Promise<void> {
-  const guards = [...programScope.fileChooserGuards.values()];
-  const restorers = [...programScope.probeRestorers.entries()];
+  const scope = programScope;
   programScope = newProgramScope();
+  await disposeProgramScope(scope);
+}
+
+async function disposeProgramScope(scope: ProgramScope): Promise<void> {
+  const guards = [...scope.fileChooserGuards.values()];
+  const restorers = [...scope.probeRestorers.entries()];
+  scope.fileChooserGuards.clear();
+  scope.probeRestorers.clear();
+  if (guards.length === 0 && restorers.length === 0) return;
   for (const [sessionId] of restorers) fileInputProbes.delete(sessionId);
   await Promise.all([
     ...guards.map((guard) => guard.dispose().catch(() => {})),

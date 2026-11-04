@@ -5376,6 +5376,36 @@ test("a file chooser guard the runtime dropped is re-armed by the next action", 
   });
 });
 
+test("beginProgram releases a scope the previous program never ended", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/upload-guard");
+    const count = (kind) => fixture.calls.filter(([k]) => k === kind).length;
+
+    await page.click("#open-upload");
+    assert.equal(count("prepareFileChooser"), 1);
+    assert.equal(count("fileInputProbeInstall"), 1);
+    assert.equal(count("fileInputProbeRestore"), 0);
+
+    // No endProgram(): the host started the next program early.
+    beginProgram();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(
+      count("fileInputProbeRestore"),
+      1,
+      "the abandoned scope's probe is removed in the background",
+    );
+
+    await page.click("#open-upload");
+    assert.equal(
+      count("prepareFileChooser"),
+      2,
+      "the new scope arms its own guard",
+    );
+    assert.equal(count("fileInputProbeInstall"), 2);
+  });
+});
+
 test("the file-input probe is removed when the program ends and reinstalled by the next one", async () => {
   await withFixture(async (fixture) => {
     const task = taskForRound(fixture, "round-a");

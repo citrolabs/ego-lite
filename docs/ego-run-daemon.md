@@ -100,7 +100,9 @@ session's lifetime; `EGO_BROWSER_BIN` picks the executable the daemon starts.
   starts a fresh context and `ego-run` prints
   `[ego-run] session "<id>" was rebuilt (<reason>)`.
 - Sessions idle for 10 minutes are closed; the daemon exits after 30 minutes
-  without sessions. `ego-browser --version` is checked every minute and a
+  without sessions. `ego-run daemon stop` (or SIGTERM) first refuses every new
+  program, then closes the sessions and drops open client connections, so no
+  REPL is spawned after the daemon has let go of its sessions. `ego-browser --version` is checked every minute and a
   version change closes every session.
 - A program's deadline counts the time it waited in the session queue and the
   time its REPL takes to start, so a caller never waits longer than its own

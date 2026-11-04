@@ -77,6 +77,8 @@ export class SessionManager {
     SessionManagerOptions;
   readonly #sessions = new Map<string, Session>();
   #requestSeq = 0;
+  /** Set by shutDown(): the reason every later exec is refused with. */
+  #shutDown: string | null = null;
 
   constructor(options: SessionManagerOptions) {
     this.#options = {
@@ -116,6 +118,12 @@ export class SessionManager {
     requestId = `req-${++this.#requestSeq}`,
     { signal }: { signal?: AbortSignal } = {},
   ): Promise<ExecResponse> {
+    if (this.#shutDown !== null) {
+      throw new ProtocolError(
+        ErrorCodes.DAEMON_UNAVAILABLE,
+        `the daemon is shutting down (${this.#shutDown}); the program did not start`,
+      );
+    }
     if (!isValidSessionId(request.session)) {
       throw new ProtocolError(
         ErrorCodes.BAD_REQUEST,
@@ -412,6 +420,15 @@ export class SessionManager {
     session.closed = true;
     this.#discard(session, "closed");
     return true;
+  }
+
+  /**
+   * Close every session for good: after this no program starts and no REPL
+   * is spawned, so nothing is left running once the daemon process exits.
+   */
+  shutDown(reason: string): number {
+    this.#shutDown = reason;
+    return this.closeAll(reason);
   }
 
   closeAll(reason = "closed"): number {

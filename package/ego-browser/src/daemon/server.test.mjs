@@ -8,6 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -241,6 +242,30 @@ test("a live socket is not unlinked when the lock file is missing", async (t) =>
   await live.stop();
   rmSync(stateDir, { recursive: true, force: true });
 });
+
+test(
+  "stop() drops idle client connections instead of waiting for them",
+  { skip: process.platform === "win32" },
+  async () => {
+    const { daemon, paths, stateDir } = await startDaemon();
+    const socket = connect(paths.endpoint);
+    await new Promise((resolve) => socket.once("connect", resolve));
+    const closed = new Promise((resolve) => socket.once("close", resolve));
+    const stopped = daemon.stop("test");
+    const outcome = await Promise.race([
+      stopped.then(() => "stopped"),
+      new Promise((resolve) => setTimeout(() => resolve("hung"), 2_000)),
+    ]);
+    assert.equal(
+      outcome,
+      "stopped",
+      "stop() must not wait for the idle client",
+    );
+    await closed;
+    assert.equal(existsSync(paths.endpoint), false);
+    rmSync(stateDir, { recursive: true, force: true });
+  },
+);
 
 test("the client reports a missing daemon as DAEMON_UNAVAILABLE", async () => {
   const stateDir = mkdtempSync(join(tmpdir(), "ego-run-test-"));

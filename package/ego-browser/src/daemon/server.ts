@@ -62,6 +62,8 @@ export class Daemon {
   #timers: NodeJS.Timeout[] = [];
   #egoBrowserVersion: string | null = null;
   #stopping: Promise<void> | null = null;
+  /** Open client connections, dropped by stop() so the server can close. */
+  readonly #sockets = new Set<Socket>();
   #lockOwned = false;
   readonly #idleMs: number;
   readonly #watchVersion: boolean;
@@ -169,7 +171,12 @@ export class Daemon {
     this.#stopping = (async () => {
       this.log(`stop: ${reason}`);
       for (const timer of this.#timers) clearInterval(timer);
-      this.sessions.closeAll(reason);
+      // Order matters: no program may start once the sessions are gone (a
+      // REPL spawned now would outlive the daemon), so the session manager
+      // refuses first, then open client connections are dropped so the
+      // server can close instead of waiting for clients to hang up.
+      this.sessions.shutDown(reason);
+      for (const socket of this.#sockets) socket.destroy();
       await new Promise<void>((resolve) =>
         this.#server ? this.#server.close(() => resolve()) : resolve(),
       );
@@ -271,6 +278,8 @@ export class Daemon {
   }
 
   #serve(socket: Socket) {
+    this.#sockets.add(socket);
+    socket.once("close", () => this.#sockets.delete(socket));
     let buffer = "";
     // Aborted when the client goes away, so a program still waiting in its
     // session queue is skipped instead of running unseen.
@@ -355,6 +364,12 @@ export class Daemon {
     id: string,
     signal?: AbortSignal,
   ): Promise<Response> {
+    if (this.#stopping) {
+      throw new ProtocolError(
+        ErrorCodes.DAEMON_UNAVAILABLE,
+        "the daemon is shutting down",
+      );
+    }
     switch (request.cmd) {
       case "exec":
         return this.sessions.exec(request, id, { signal });

@@ -359,6 +359,21 @@ test("closing a session while its REPL starts kills the REPL once it is up", asy
   assert.equal(sessions.list().length, 0);
 });
 
+test("after shutDown no program starts and no REPL is spawned", async () => {
+  const { sessions, transports } = manager();
+  await sessions.exec({ cmd: "exec", session: "s", program: "1" }, "req-1");
+  assert.equal(sessions.shutDown("test shutdown"), 1);
+  assert.equal(transports[0].killed, true);
+  await assert.rejects(
+    sessions.exec({ cmd: "exec", session: "t", program: "2" }, "req-2"),
+    (error) =>
+      error.code === "EGO_RUN_DAEMON_UNAVAILABLE" &&
+      /shutting down \(test shutdown\)/.test(error.message),
+  );
+  assert.equal(transports.length, 1, "no REPL was spawned after shutdown");
+  assert.equal(sessions.list().length, 0);
+});
+
 test("a program whose client disconnected while queued is skipped", async () => {
   const { sessions, transports } = manager({
     behavior: {
