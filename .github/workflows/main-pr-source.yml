@@ -9,25 +9,19 @@ jobs:
   require-dev-source:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - name: Require dev or a release branch cut from dev
+      - name: Require dev or hotfix/docs branch
         env:
           HEAD_REF: ${{ github.head_ref }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [ "$HEAD_REF" = "dev" ]; then
-            exit 0
-          fi
-
-          if [[ "$HEAD_REF" != release/* ]]; then
-            echo "Pull requests into main must come from dev or a release/* branch."
-            exit 1
-          fi
-
-          if ! git merge-base --is-ancestor "$HEAD_SHA" origin/dev; then
-            echo "Release branch head $HEAD_SHA is not on dev."
-            echo "Cut release/* branches from a dev commit and do not add commits to them."
-            exit 1
-          fi
+          # Regular releases flow dev -> main. hotfix/* and docs/* are the
+          # sanctioned fast lanes for fixes that cannot wait for a release
+          # and must not drag unfinished work from dev into main.
+          case "$HEAD_REF" in
+            dev|hotfix/*|docs/*)
+              echo "Allowed source branch: $HEAD_REF"
+              ;;
+            *)
+              echo "Pull requests into main must come from dev, hotfix/*, or docs/*."
+              exit 1
+              ;;
+          esac

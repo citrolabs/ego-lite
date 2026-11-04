@@ -1,0 +1,10 @@
+diff --git a/renderer/vendor/shared/packages/xy-chart.tsx b/renderer/vendor/shared/packages/xy-chart.tsx
+--- a/renderer/vendor/shared/packages/xy-chart.tsx
++++ b/renderer/vendor/shared/packages/xy-chart.tsx
+@@ -212,5 +212,6 @@
+     } else {
+         yScale = scaleLinear()
+             .domain([0, Math.max(...allYData)]) // Always start from 0 for linear scale
++            .nice(options.yTickCount)
+             .range([chartHeight, 0])
+     }
