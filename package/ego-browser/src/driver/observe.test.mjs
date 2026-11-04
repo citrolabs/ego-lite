@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 import {
   browserCdp,
@@ -252,5 +252,56 @@ test("captureScreenshot creates missing parent directories", async () => {
     assert.equal(await readFile(outputPath, "utf8"), "png");
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("captureScreenshot without a path writes unique files to EGO_BROWSER_OUTPUT_DIR", async () => {
+  const root = await mkdtemp(join(tmpdir(), "ego-browser-output-dir-test-"));
+  const previous = globalThis.EGO_BROWSER_OUTPUT_DIR;
+  globalThis.EGO_BROWSER_OUTPUT_DIR = root;
+  try {
+    await withCdpRuntime(async () => {
+      const first = await captureScreenshot();
+      const second = await captureScreenshot();
+      assert.equal(dirname(first), root);
+      assert.equal(dirname(second), root);
+      assert.match(basename(first), /^ego-browser-shot-\d{6}\.png$/);
+      assert.notEqual(first, second);
+      assert.equal(await readFile(first, "utf8"), "png");
+    });
+  } finally {
+    if (previous === undefined) delete globalThis.EGO_BROWSER_OUTPUT_DIR;
+    else globalThis.EGO_BROWSER_OUTPUT_DIR = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("captureScreenshot without a path falls back to tmpdir", async () => {
+  assert.equal(globalThis.EGO_BROWSER_OUTPUT_DIR, undefined);
+  const restore = setOverrides({ async writeFile() {} });
+  try {
+    await withCdpRuntime(async () => {
+      assert.equal(dirname(await captureScreenshot()), tmpdir());
+    });
+  } finally {
+    restore();
+  }
+});
+
+test("captureScreenshot rejects a relative EGO_BROWSER_OUTPUT_DIR", async () => {
+  const previous = globalThis.EGO_BROWSER_OUTPUT_DIR;
+  globalThis.EGO_BROWSER_OUTPUT_DIR = "shots";
+  const restore = setOverrides({ async writeFile() {} });
+  try {
+    await withCdpRuntime(async () => {
+      await assert.rejects(
+        captureScreenshot(),
+        /EGO_BROWSER_OUTPUT_DIR must be an absolute directory path/,
+      );
+    });
+  } finally {
+    restore();
+    if (previous === undefined) delete globalThis.EGO_BROWSER_OUTPUT_DIR;
+    else globalThis.EGO_BROWSER_OUTPUT_DIR = previous;
   }
 });

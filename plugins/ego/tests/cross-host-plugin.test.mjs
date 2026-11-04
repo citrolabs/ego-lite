@@ -54,7 +54,6 @@ test("branded hosts expose explicit pure-Skill manifests", () => {
   for (const [host, path, skills] of [
     ["Cursor", ".cursor-plugin/plugin.json", "./skills/"],
     ["CodeBuddy", ".codebuddy-plugin/plugin.json", ["./skills/ego-browser"]],
-    ["WorkBuddy", ".workbuddy-plugin/plugin.json", ["./skills/ego-browser"]],
     ["QoderWork", ".qoder-plugin/plugin.json", ["./skills/ego-browser"]],
   ]) {
     const source = read(`${pluginRoot}/${path}`);
@@ -82,19 +81,12 @@ test("branded hosts expose explicit pure-Skill manifests", () => {
     assertPureSkillText(source, `${host} manifest`);
   }
 
-  assert.deepEqual(
-    json(`${pluginRoot}/.codebuddy-plugin/plugin.json`),
-    json(`${pluginRoot}/.workbuddy-plugin/plugin.json`),
-    "WorkBuddy's authoritative and branded manifests must not drift",
-  );
-
   for (const path of [
     "plugin.json",
     ".claude-plugin",
     ".codex-plugin",
     ".cursor-plugin",
     ".codebuddy-plugin",
-    ".workbuddy-plugin",
     ".qoder-plugin",
   ]) {
     assert.ok(pkg.files.includes(path), `${path} must ship in the npm package`);
@@ -113,6 +105,21 @@ test("Claude compatibility files expose only the portable Skill", () => {
   assert.equal(marketplace.metadata.version, manifest.version);
   assertPureSkillText(source, "Claude manifest");
   assertMissing(`${pluginRoot}/.mcp.json`);
+});
+
+test("Cursor marketplace routes the repository to the plugin", () => {
+  const marketplace = json(".cursor-plugin/marketplace.json");
+  const plugin = json(`${pluginRoot}/.cursor-plugin/plugin.json`);
+
+  assert.equal(marketplace.name, "ego-agent-skills");
+  assert.equal(marketplace.owner.name, plugin.author.name);
+  assert.deepEqual(marketplace.plugins, [
+    {
+      name: plugin.name,
+      source: `./${pluginRoot}`,
+      description: plugin.description,
+    },
+  ]);
 });
 
 test("Codex marketplace and manifest expose the same pure-Skill plugin", () => {
@@ -195,6 +202,35 @@ test("Codex listing metadata satisfies the plugin directory", () => {
     manifest.author.name,
     "author.name and interface.developerName must match, or the portal asks to confirm a default",
   );
+  // The portal blocks a skills-only upload without these, although the
+  // published docs only require them for MCP review.
+  for (const field of [
+    "websiteURL",
+    "supportURL",
+    "privacyPolicyURL",
+    "termsOfServiceURL",
+  ]) {
+    const value = listing[field];
+    assert.ok(value, `interface.${field} is required by the plugin directory`);
+    const url = new URL(value);
+    assert.equal(url.protocol, "https:", `interface.${field} must use HTTPS`);
+    assert.equal(
+      url.username + url.password,
+      "",
+      `interface.${field} must not embed credentials`,
+    );
+    assert.ok(
+      value.length <= 1024,
+      `interface.${field} must be 1024 characters or fewer, but is ${value.length}`,
+    );
+  }
+  // OpenAI ignores the whole .codex-plugin overlay once the root manifest
+  // declares extensions.com.openai; the two are not merged.
+  assert.equal(
+    json(`${pluginRoot}/plugin.json`).extensions?.["com.openai"],
+    undefined,
+    "root plugin.json must not declare extensions.com.openai, or the portal drops this listing",
+  );
   for (const field of ["composerIcon", "logo"]) {
     const asset = listing[field];
     assert.match(
@@ -210,7 +246,7 @@ test("Codex listing metadata satisfies the plugin directory", () => {
   }
 });
 
-test("OpenCode adapter injects only instructions and the Skill slash command", async () => {
+test("OpenCode adapter registers only the packaged Skill", async () => {
   const pkgSource = read(`${pluginRoot}/package.json`);
   const pkg = JSON.parse(pkgSource);
   assert.equal(pkg.name, "@citrolabs/ego");
@@ -223,25 +259,101 @@ test("OpenCode adapter injects only instructions and the Skill slash command", a
   assertPureSkillText(pkgSource, "npm package metadata");
 
   const adapterSource = read(`${pluginRoot}/index.js`);
-  const { EgoBrowserPlugin } = await import(
+  const { default: plugin } = await import(
     new URL(`../../../${pluginRoot}/index.js`, import.meta.url)
   );
-  const hooks = await EgoBrowserPlugin({});
+  // OpenCode 1 reads id and server(), and rejects a default export that also
+  // has tui(). OpenCode 2 reads id and setup().
+  assert.equal(typeof plugin.id, "string");
+  assert.equal(typeof plugin.server, "function");
+  assert.equal(typeof plugin.setup, "function");
+  assert.equal(plugin.tui, undefined);
+
+  const hooks = await plugin.server({});
   const config = {};
+  await hooks.config(config);
   await hooks.config(config);
 
   assert.equal(config.mcp, undefined);
-  assert.equal(config.instructions.length, 1);
-  assert.match(
-    config.instructions[0],
-    /plugins\/ego\/skills\/ego-browser\/SKILL\.md$/,
+  assert.equal(config.instructions, undefined);
+  assert.equal(
+    config.command,
+    undefined,
+    "OpenCode derives /ego-browser from the Skill",
   );
-  assert.match(config.command["ego-browser"].template, /\$ARGUMENTS/);
+  // OpenCode reads only skills.paths from the normalized config, even when
+  // the user's file lists Skill folders as a plain array.
+  assert.equal(
+    config.skills.paths.length,
+    1,
+    "repeated hooks add the path once",
+  );
+  assert.match(config.skills.paths[0], /plugins\/ego\/skills$/);
+
+  const user = { skills: { paths: ["/user/skills"], urls: [] } };
+  await hooks.config(user);
+  assert.deepEqual(user.skills, {
+    paths: ["/user/skills", config.skills.paths[0]],
+    urls: [],
+  });
+
+  const skills = new Map();
+  const ctx = {
+    skill: {
+      transform: async (edit) =>
+        edit({
+          get: (id) => skills.get(id),
+          add: (skill) => skills.set(skill.id, skill),
+        }),
+    },
+  };
+  await plugin.setup(ctx);
+  const skill = skills.get("ego-browser");
+  const skillText = read(`${pluginRoot}/skills/ego-browser/SKILL.md`);
+  assert.deepEqual(Object.keys(skill), [
+    "id",
+    "name",
+    "description",
+    "path",
+    "content",
+  ]);
+  assert.equal(skill.name, "ego-browser");
+  assert.match(skill.path, /plugins\/ego\/skills\/ego-browser\/SKILL\.md$/);
+  // OpenCode 2 stores the Skill body without its front matter.
+  assert.equal(
+    skill.content,
+    skillText.slice(skillText.indexOf("\n---\n") + "\n---\n".length),
+  );
+  assert.ok(skillText.includes(`\ndescription: ${skill.description}\n`));
+  assert.doesNotMatch(
+    skill.description,
+    /^[>|"']/,
+    "the adapter reads a plain one-line description",
+  );
+
+  skills.set("ego-browser", { id: "ego-browser", path: "/user/SKILL.md" });
+  await plugin.setup(ctx);
+  assert.equal(
+    skills.get("ego-browser").path,
+    "/user/SKILL.md",
+    "a Skill the user already has keeps priority",
+  );
   assertPureSkillText(adapterSource, "OpenCode adapter");
-  assertPureSkillText(
-    config.command["ego-browser"].template,
-    "OpenCode slash command",
-  );
+});
+
+test("every host that shows a plugin logo uses the Skill logo", () => {
+  const logo = "skills/ego-browser/assets/logo.png";
+  for (const [label, value] of [
+    [
+      "Codex interface.logo",
+      json(`${pluginRoot}/.codex-plugin/plugin.json`).interface.logo,
+    ],
+    ["Claude icon", json(`${pluginRoot}/.claude-plugin/plugin.json`).icon],
+    ["Cursor logo", json(`${pluginRoot}/.cursor-plugin/plugin.json`).logo],
+  ]) {
+    assert.equal(value.replace(/^\.\//, ""), logo, `${label} must be ${logo}`);
+  }
+  assert.equal(existsSync(repoFile(`${pluginRoot}/${logo}`)), true);
 });
 
 test("portable Skill is the standalone entry Skill without runtime tools", () => {
@@ -317,21 +429,23 @@ test("plugin README documents every host as a pure-Skill install", () => {
     "QwenWork Desktop",
     "OpenCode",
     "DeepSeek Harness",
+    "Pi",
   ]) {
     assert.match(readme, new RegExp(`### ${host}\\b`));
   }
 
   assert.match(readme, /claude --plugin-dir/);
   assert.match(readme, /codex plugin add ego@ego-codex-local/);
-  assert.match(readme, /cursor-agent[\s\\]*--plugin-dir/);
+  assert.match(readme, /agent --plugin-dir/);
   assert.match(readme, /\.cursor-plugin\/plugin\.json/);
   assert.match(readme, /copilot --plugin-dir/);
-  assert.match(readme, /grok plugin install \/absolute\/path/);
+  assert.match(readme, /grok plugin install \/absolute\/path\S* --trust/);
   assert.match(readme, /\.codebuddy-plugin\/plugin\.json/);
-  assert.match(readme, /\.workbuddy-plugin\/plugin\.json/);
   assert.match(readme, /\.qoder-plugin\/plugin\.json/);
-  assert.match(readme, /opencode plugin "file:/);
+  assert.match(readme, /opencode plugin \/absolute\/path/);
+  assert.match(readme, /opencode plugin add @ego-lite\/opencode-plugin/);
   assert.match(readme, /dsh plugin --profile web add \/absolute\/path/);
+  assert.match(readme, /pi install npm:@ego-lite\/pi-plugin/);
   assert.match(
     readme,
     new RegExp(

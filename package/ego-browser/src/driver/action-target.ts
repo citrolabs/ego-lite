@@ -244,6 +244,15 @@ export const SCROLL_TARGET_HELPERS = `
   ${SCROLL_TARGET_FUNCTIONS}
 `;
 
+/**
+ * Scroll targeting plus the enabled check, for a forced click that skips the
+ * hit test but still refuses a disabled element.
+ */
+export const ENABLED_SCROLL_TARGET_HELPERS = `
+  ${ACTION_TARGET_STATE_HELPERS}
+  ${SCROLL_TARGET_FUNCTIONS}
+`;
+
 /** Editing semantics layered on top of the shared composed-tree traversal. */
 export const EDIT_ACTION_TARGET_HELPERS = `
   ${COMPOSED_TREE_HELPERS}

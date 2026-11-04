@@ -131,10 +131,9 @@ export function concurrentTaskSpaceDownloadCase() {
         firstDownload.path(),
         secondDownload.path(),
       ]);
-      const { dirname } = await import("node:path");
       assert(
-        dirname(firstTemporaryPath) !== dirname(secondTemporaryPath),
-        "concurrent TaskSpaces use isolated temporary directories"
+        firstTemporaryPath !== secondTemporaryPath,
+        "concurrent TaskSpaces receive distinct temporary files"
       );
 
       const firstSavedPath = join(tempDir, "task-space-first-download.txt");
@@ -193,6 +192,95 @@ export function concurrentTaskSpaceDownloadCase() {
         (result) => result.status === "rejected"
       );
       if (cleanupFailure) throw cleanupFailure.reason;
+    }
+  `;
+}
+
+export function concurrentPageSlowDownloadCase() {
+  return `
+    // Two Pages of one TaskSpace start downloads from script, like a button
+    // whose handler fetches first, against servers that answer late, like an
+    // export generated on demand. The second Page arms while the first
+    // download still waits for its headers, so Chromium picks the first
+    // download's target under the second Page's setting, and neither download
+    // finishes before the other starts. Both files must still reach their own
+    // Page. (Two TaskSpaces would exercise the same shared Chromium setting,
+    // but a navigation left pending while another TaskSpace is operated does
+    // not currently survive the switch.)
+    const task = await taskSpace(taskName);
+    const firstPage = await newPageAt(task, baseUrl + "/?download-page=first-slow");
+    const secondPage = await newPageAt(task, baseUrl + "/?download-page=second-slow");
+    try {
+      await Promise.all([
+        firstPage.evaluate((downloadUrl) => {
+          const link = document.createElement("a");
+          link.id = "slow-download";
+          link.href = downloadUrl;
+          link.textContent = "Download first Page file slowly";
+          document.body.append(link);
+        }, baseUrl + "/api/download?space=first&delay=1500"),
+        secondPage.evaluate((downloadUrl) => {
+          const link = document.createElement("a");
+          link.id = "slow-download";
+          link.href = downloadUrl;
+          link.textContent = "Download second Page file slowly";
+          document.body.append(link);
+        }, baseUrl + "/api/download?space=second&delay=1500"),
+      ]);
+
+      const firstPending = firstPage.waitForEvent("download", {
+        timeout: 10_000,
+      });
+      const secondPending = secondPage.waitForEvent("download", {
+        timeout: 10_000,
+      });
+      const clickedAt = Date.now();
+      await firstPage.evaluate(() => {
+        document.getElementById("slow-download").click();
+      });
+      await secondPage.evaluate(() => {
+        document.getElementById("slow-download").click();
+      });
+      const [firstDownload, secondDownload] = await Promise.all([
+        firstPending,
+        secondPending,
+      ]);
+      assert(
+        Date.now() - clickedAt >= 1_400,
+        "the fixture held the download headers back"
+      );
+
+      assertEqual(
+        firstDownload.suggestedFilename(),
+        "ego-first-download.txt",
+        "the first Page receives its own download"
+      );
+      assertEqual(
+        secondDownload.suggestedFilename(),
+        "ego-second-download.txt",
+        "the second Page receives its own download"
+      );
+      const [firstTemporaryPath, secondTemporaryPath] = await Promise.all([
+        firstDownload.path(),
+        secondDownload.path(),
+      ]);
+      assert(
+        firstTemporaryPath !== secondTemporaryPath,
+        "the two downloads land in distinct temporary files"
+      );
+      assertEqual(
+        await readFile(firstTemporaryPath, "utf8"),
+        "ego-browser first TaskSpace download\\n",
+        "the first download reaches its Page although the second armed after it started"
+      );
+      assertEqual(
+        await readFile(secondTemporaryPath, "utf8"),
+        "ego-browser second TaskSpace download\\n",
+        "the second download is not mixed up with the first"
+      );
+      await Promise.all([firstDownload.delete(), secondDownload.delete()]);
+    } finally {
+      await Promise.all([firstPage.close(), secondPage.close()]);
     }
   `;
 }

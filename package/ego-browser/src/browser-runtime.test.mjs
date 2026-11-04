@@ -1027,10 +1027,29 @@ test("auto-attached OOPIFs are instrumented and resumed without waiting for Netw
       childNetworkIndex < childResumeIndex,
       "Network.enable is sent before the child resumes",
     );
+    const childAutomationIndex = sent.findIndex(
+      (request) =>
+        request.method === "egoAutomated.enable" &&
+        request.sessionId === "session:frame-child",
+    );
+    assert.ok(
+      childAutomationIndex >= 0 && childAutomationIndex < childNetworkIndex,
+      "automation hooks are the first command on the child session",
+    );
+    assert.equal(
+      sent.filter((request) => request.method === "egoAutomated.enable").length,
+      2,
+      "the page and the OOPIF session each enable automation hooks once",
+    );
     assert.equal(
       delayedChildNetworkEnable,
       undefined,
       "resuming does not await the Network.enable response",
+    );
+    assert.equal(
+      networkActivity(["session:page-main"]).inflight,
+      1,
+      "a migrated request stays counted for the parent until the child is enumerated",
     );
     assert.equal(
       networkActivity(["session:page-main", "session:frame-child"]).inflight,
@@ -1055,7 +1074,154 @@ test("auto-attached OOPIFs are instrumented and resumed without waiting for Netw
   }
 });
 
-test("dedicated workers are auto-attached and resumed immediately", async () => {
+test("automation hooks are enabled once per session and tolerate older browsers", async () => {
+  const previous = globalThis.ego;
+  const sent = [];
+  let attachCount = 0;
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      sent.push(request);
+      queueMicrotask(() => {
+        if (request.method === "egoAutomated.enable") {
+          // Browsers without the Ego automation domain reject the command.
+          runtime.onCDPMessage(
+            JSON.stringify({
+              id: request.id,
+              error: {
+                code: -32601,
+                message: "'egoAutomated.enable' wasn't found",
+              },
+            }),
+          );
+          return;
+        }
+        const result =
+          request.method === "Target.attachToTarget"
+            ? {
+                sessionId: `session:${request.params.targetId}:${++attachCount}`,
+              }
+            : {};
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      });
+    },
+  };
+  globalThis.ego = runtime;
+  const automationSessions = () =>
+    sent
+      .filter((request) => request.method === "egoAutomated.enable")
+      .map((request) => request.sessionId);
+
+  try {
+    const sessionId = await ensureSession("page-main");
+    await ensureSession("page-main");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(automationSessions(), [sessionId]);
+    assert.equal(
+      sent.findIndex((request) => request.sessionId === sessionId),
+      sent.findIndex((request) => request.method === "egoAutomated.enable"),
+      "automation hooks are the first command on the session",
+    );
+
+    // Scripts that attach their own session, such as js(expr, targetId),
+    // get the hooks before their first command too.
+    const attached = await browserCdp("Target.attachToTarget", {
+      targetId: "frame-child",
+      flatten: true,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(automationSessions(), [
+      sessionId,
+      attached.result.sessionId,
+    ]);
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
+for (const targetType of ["worker", "worklet", "shared_worker"]) {
+  test(`${targetType} targets are auto-attached, resumed, then detached`, async () => {
+    const previous = globalThis.ego;
+    const sent = [];
+    const runtime = {
+      sendCDPMessage(payload) {
+        const request = JSON.parse(payload);
+        sent.push(request);
+        const result =
+          request.method === "Target.attachToTarget"
+            ? { sessionId: "session:page-main" }
+            : {};
+        queueMicrotask(() => {
+          runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+        });
+      },
+    };
+    globalThis.ego = runtime;
+
+    try {
+      const mainSessionId = await ensureSession("page-main");
+      const autoAttach = sent.find(
+        (request) =>
+          request.method === "Target.setAutoAttach" &&
+          request.sessionId === mainSessionId,
+      );
+      // No catch-all exclude: Ego Lite pauses excluded targets without
+      // attaching them, which leaves them paused forever.
+      assert.deepEqual(autoAttach?.params?.filter, [{}]);
+
+      runtime.onCDPMessage(
+        JSON.stringify({
+          sessionId: mainSessionId,
+          method: "Target.attachedToTarget",
+          params: {
+            sessionId: "session:child",
+            targetInfo: {
+              targetId: "child",
+              type: targetType,
+              parentId: "page-main",
+            },
+            waitingForDebugger: true,
+          },
+        }),
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const resumeIndex = sent.findIndex(
+        (request) =>
+          request.method === "Runtime.runIfWaitingForDebugger" &&
+          request.sessionId === "session:child",
+      );
+      const detachIndex = sent.findIndex(
+        (request) =>
+          request.method === "Target.detachFromTarget" &&
+          request.params?.sessionId === "session:child",
+      );
+      assert.ok(resumeIndex >= 0, "a target paused by auto-attach is resumed");
+      assert.ok(
+        detachIndex > resumeIndex,
+        "the session is detached only after the resume was answered",
+      );
+      assert.equal(sent[detachIndex].sessionId, mainSessionId);
+      assert.equal(
+        sent.some(
+          (request) =>
+            request.sessionId === "session:child" &&
+            request.method !== "Runtime.runIfWaitingForDebugger",
+        ),
+        false,
+        "the harness must not drive a non-frame target",
+      );
+    } finally {
+      invalidateSession();
+      if (previous === undefined) delete globalThis.ego;
+      else globalThis.ego = previous;
+    }
+  });
+}
+
+test("explicitly attached pages are never released as related targets", async () => {
   const previous = globalThis.ego;
   const sent = [];
   const runtime = {
@@ -1075,50 +1241,23 @@ test("dedicated workers are auto-attached and resumed immediately", async () => 
 
   try {
     const mainSessionId = await ensureSession("page-main");
-    const autoAttach = sent.find(
-      (request) =>
-        request.method === "Target.setAutoAttach" &&
-        request.sessionId === mainSessionId,
-    );
-    assert.deepEqual(autoAttach?.params?.filter, [
-      { type: "iframe", exclude: false },
-      { type: "worker", exclude: false },
-      { exclude: true },
-    ]);
-
+    // A browser-level Target.attachToTarget also emits attachedToTarget, with
+    // no owning session.
     runtime.onCDPMessage(
       JSON.stringify({
-        sessionId: mainSessionId,
         method: "Target.attachedToTarget",
         params: {
-          sessionId: "session:worker-child",
-          targetInfo: {
-            targetId: "worker-child",
-            type: "worker",
-            parentId: "page-main",
-          },
-          waitingForDebugger: true,
+          sessionId: mainSessionId,
+          targetInfo: { targetId: "page-main", type: "page" },
+          waitingForDebugger: false,
         },
       }),
     );
     await new Promise((resolve) => setImmediate(resolve));
 
-    assert.ok(
-      sent.some(
-        (request) =>
-          request.method === "Runtime.runIfWaitingForDebugger" &&
-          request.sessionId === "session:worker-child",
-      ),
-      "a worker paused by auto-attach must be resumed",
-    );
     assert.equal(
-      sent.some(
-        (request) =>
-          request.method === "Network.enable" &&
-          request.sessionId === "session:worker-child",
-      ),
+      sent.some((request) => request.method === "Target.detachFromTarget"),
       false,
-      "resuming a worker must not opt it into Page network tracking",
     );
   } finally {
     invalidateSession();
@@ -2092,6 +2231,149 @@ test("file chooser interception suppresses the native picker and returns its inp
       ),
     );
   } finally {
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
+function pageEnableHoldingRuntime(methods) {
+  const held = new Map();
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      methods.push([request.method, request.sessionId]);
+      const result =
+        request.method === "Target.attachToTarget"
+          ? { sessionId: `session:${request.params.targetId}` }
+          : {};
+      const respond = () => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      };
+      if (held.has(request.method)) {
+        held.get(request.method).push(respond);
+        return;
+      }
+      queueMicrotask(respond);
+    },
+    hold(method) {
+      held.set(method, []);
+    },
+    release(method) {
+      for (const respond of held.get(method) || []) respond();
+      held.delete(method);
+    },
+  };
+  return runtime;
+}
+
+test("ensureSession bounds its wait for an unanswered Page.enable and shares the request", async () => {
+  const previous = globalThis.ego;
+  const methods = [];
+  const runtime = pageEnableHoldingRuntime(methods);
+  runtime.hold("Page.enable");
+  globalThis.ego = runtime;
+  const pageEnables = () =>
+    methods.filter(([method]) => method === "Page.enable").length;
+
+  try {
+    let startedAt = performance.now();
+    assert.equal(await ensureSession("page-main", 50), "session:page-main");
+    assert(
+      performance.now() - startedAt < 200,
+      "an unanswered Page.enable must not hold the session wait beyond its budget",
+    );
+    assert.equal(pageEnables(), 1);
+
+    startedAt = performance.now();
+    assert.equal(await ensureSession("page-main", 50), "session:page-main");
+    assert(
+      performance.now() - startedAt < 200,
+      "a cached session must not wait a full budget again",
+    );
+    assert.equal(
+      pageEnables(),
+      1,
+      "the second caller reuses the still-pending Page.enable request",
+    );
+
+    runtime.release("Page.enable");
+    await new Promise((resolve) => setImmediate(resolve));
+    await ensureSession("page-main", 50);
+    assert.equal(
+      pageEnables(),
+      1,
+      "a late Page.enable answer records the enabled state for later callers",
+    );
+  } finally {
+    runtime.release("Page.enable");
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
+test("ensureSession caps the setup wait below the transport timeout", async () => {
+  const previous = globalThis.ego;
+  const methods = [];
+  const runtime = pageEnableHoldingRuntime(methods);
+  runtime.hold("Page.enable");
+  runtime.hold("Network.enable");
+  globalThis.ego = runtime;
+
+  try {
+    const startedAt = performance.now();
+    assert.equal(await ensureSession("page-main"), "session:page-main");
+    const elapsed = performance.now() - startedAt;
+    assert(
+      elapsed >= 1_500 && elapsed < 3_500,
+      `the default session wait is capped near two seconds, got ${elapsed}ms`,
+    );
+  } finally {
+    runtime.release("Page.enable");
+    runtime.release("Network.enable");
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
+test("ensureFrameSessions reports an unanswered frame tree as an unresponsive Page", async () => {
+  const previous = globalThis.ego;
+  const methods = [];
+  const runtime = pageEnableHoldingRuntime(methods);
+  runtime.hold("Page.getFrameTree");
+  globalThis.ego = runtime;
+
+  try {
+    const startedAt = performance.now();
+    await assert.rejects(
+      () => ensureFrameSessions("page-main", 100),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_UNRESPONSIVE");
+        assert.equal(error.name, "PageUnresponsiveError");
+        assert(
+          error instanceof CdpRequestTimeoutError,
+          "budget-driven retry loops still recognize it as a request timeout",
+        );
+        assert.equal(error.method, "Page.getFrameTree");
+        assert.equal(error.targetId, "page-main");
+        assert(error.waitedMs >= 90, `waited ${error.waitedMs}ms`);
+        assert.match(error.message, /did not answer Page\.getFrameTree/);
+        assert.match(error.message, /navigation has not committed/);
+        return true;
+      },
+    );
+    assert(
+      performance.now() - startedAt < 400,
+      "the unresponsive Page is reported inside the caller's budget",
+    );
+    assert.equal(
+      methods.filter(([method]) => method === "Page.getFrameTree").length,
+      1,
+    );
+  } finally {
+    runtime.release("Page.getFrameTree");
+    invalidateSession();
     if (previous === undefined) delete globalThis.ego;
     else globalThis.ego = previous;
   }

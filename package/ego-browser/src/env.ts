@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { loadEnvFile as loadNodeEnvFile } from "node:process";
 import { fileURLToPath } from "node:url";
 
@@ -17,6 +18,17 @@ export function agentWorkspace() {
   }
 
   return resolve(REPO_ROOT, "..", "..", "skills", "ego-browser");
+}
+
+/**
+ * Root of the per-user state ego-browser keeps between rounds: Page ledgers
+ * and the shared download directory.
+ */
+export function runtimeStateDir() {
+  return resolvePath(
+    process.env.EGO_BROWSER_STATE_DIR ||
+      join(homedir(), ".ego-browser", "state"),
+  );
 }
 
 function resolvePath(path) {

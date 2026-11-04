@@ -14,7 +14,12 @@ export type PageExecutionContext = SpaceScope & {
 
 type NativeGateServices = {
   selectSpace(spaceId: number): unknown | Promise<unknown>;
-  ensureSession(targetId: string): Promise<string>;
+  ensureSession(targetId: string, timeoutMs?: number): Promise<string>;
+};
+
+export type WithPageOptions = {
+  /** Budget for attaching and preparing the Page session. */
+  sessionTimeoutMs?: number;
 };
 
 type PageTarget = {
@@ -98,6 +103,7 @@ export class NativeOperationGate {
   withPage<T>(
     page: PageTarget,
     operation: (context: PageExecutionContext) => T | Promise<T>,
+    options: WithPageOptions = {},
   ): Promise<T> {
     if (!page || typeof page !== "object") {
       throw new TypeError("withPage requires a page target");
@@ -111,7 +117,10 @@ export class NativeOperationGate {
     }
 
     return this.withSpace(page.spaceId, async () => {
-      const sessionId = await this.#services.ensureSession(page.targetId);
+      const sessionId = await this.#services.ensureSession(
+        page.targetId,
+        options.sessionTimeoutMs,
+      );
       return operation({
         spaceId: page.spaceId,
         targetId: page.targetId,
@@ -148,6 +157,7 @@ export function withSpace<T>(
 export function withPage<T>(
   page: PageTarget,
   operation: (context: PageExecutionContext) => T | Promise<T>,
+  options: WithPageOptions = {},
 ): Promise<T> {
-  return defaultGate.withPage(page, operation);
+  return defaultGate.withPage(page, operation, options);
 }

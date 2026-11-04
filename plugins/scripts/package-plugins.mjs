@@ -33,30 +33,62 @@ const TARGETS = [
   {
     id: "github-copilot",
     title: "GitHub Copilot",
+    files: [],
+    marketplace: ".github/plugin/marketplace.json",
+    flat: true,
+  },
+  {
+    id: "grok-build",
+    title: "Grok Build",
     files: [".claude-plugin/plugin.json"],
   },
-  { id: "grok-build", title: "Grok Build", files: [] },
   {
     id: "workbuddy",
     title: "WorkBuddy",
-    files: [
-      ".claude-plugin/plugin.json",
-      ".codebuddy-plugin/plugin.json",
-      ".workbuddy-plugin/plugin.json",
-    ],
-    marketplace: ".claude-plugin/marketplace.json",
+    files: [".codebuddy-plugin/plugin.json"],
+    marketplace: ".codebuddy-plugin/marketplace.json",
   },
   {
     id: "qwenwork",
     title: "QwenWork Desktop",
     files: [".claude-plugin/plugin.json"],
   },
-  { id: "opencode", title: "OpenCode", files: ["index.js"], npm: true },
+  {
+    id: "opencode",
+    title: "OpenCode",
+    files: ["index.js"],
+    npm: true,
+    keywords: ["opencode"],
+    exports: { ".": "./index.js", "./server": "./index.js" },
+  },
   {
     id: "deepseek-harness",
     title: "DeepSeek Harness",
     files: ["cordis.patch.yml", "dsh/src/index.js"],
     npm: true,
+    keywords: ["deepseek-harness"],
+    exports: {
+      "./dsh": "./dsh/src/index.js",
+      "./package.json": "./package.json",
+    },
+    // No upper bound: a published version stays installable on later DSH
+    // releases instead of being refused by a range it cannot know about.
+    package: () => ({ engines: { dsh: ">=0.2.0" } }),
+  },
+  {
+    id: "pi",
+    title: "Pi",
+    files: [],
+    npm: true,
+    keywords: ["pi-package"],
+    // The gallery image comes from the release tag, so a published version
+    // keeps its preview when the default branch moves the file.
+    package: (version) => ({
+      pi: {
+        skills: ["./skills"],
+        image: `https://raw.githubusercontent.com/citrolabs/ego-lite/v${version}/skills/ego-browser/assets/logo.png`,
+      },
+    }),
   },
 ];
 
@@ -65,7 +97,7 @@ function usage() {
   node plugins/scripts/package-plugins.mjs <plugin> [--output <directory>]
   node plugins/scripts/package-plugins.mjs --all [--output <directory>]
 
-Builds nine host artifacts per plugin (seven ZIPs and two npm archives).`;
+Builds ten host artifacts per plugin (seven ZIPs and three npm archives).`;
 }
 
 function parseArguments(args) {
@@ -353,23 +385,29 @@ async function packagePlugin(repositoryRoot, name, outputRoot) {
       if (target.npm) {
         const pkg = {
           ...sourcePackage,
-          name: `${sourcePackage.name}-${target.id}`,
+          // A plugin may name its npm packages; otherwise derive them.
+          name:
+            sourcePackage.npmPackages?.[target.id] ??
+            `${sourcePackage.name}-${target.id}`,
+          // npm releases may be numbered apart from the plugin.
+          version: sourcePackage.npmVersion ?? sourcePackage.version,
           files: ["LICENSE", "README.md", "skills", ...target.files],
-          exports:
-            target.id === "opencode"
-              ? { ".": "./index.js", "./server": "./index.js" }
-              : { "./dsh": "./dsh/src/index.js" },
+          keywords: [...target.keywords, ...sourcePackage.keywords],
+          exports: target.exports,
+          ...target.package?.(manifest.version),
         };
         delete pkg.scripts;
-        if (target.id === "opencode") {
-          delete pkg.dsh;
-        } else {
+        delete pkg.npmPackages;
+        delete pkg.npmVersion;
+        if (target.id === "deepseek-harness") {
           const patchPath = join(payloadRoot, "cordis.patch.yml");
           const patch = await readFile(patchPath, "utf8");
           await writeFile(
             patchPath,
             patch.replaceAll(`${sourcePackage.name}/dsh`, `${pkg.name}/dsh`),
           );
+        } else {
+          delete pkg.dsh;
         }
         await writeJson(join(payloadRoot, "package.json"), pkg);
       }

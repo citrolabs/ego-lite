@@ -169,3 +169,21 @@ test("NativeOperationGate rejects nested selection of another space", async () =
   );
   assert.equal(await gate.withSpace(9, async () => "recovered"), "recovered");
 });
+
+test("NativeOperationGate forwards the withPage session budget to ensureSession", async () => {
+  const budgets = [];
+  const gate = new NativeOperationGate({
+    async selectSpace() {},
+    async ensureSession(targetId, timeoutMs) {
+      budgets.push(timeoutMs);
+      return `session:${targetId}`;
+    },
+  });
+
+  await gate.withPage({ spaceId: 7, targetId: "target-a" }, () => "a");
+  await gate.withPage({ spaceId: 7, targetId: "target-a" }, () => "b", {
+    sessionTimeoutMs: 1_234,
+  });
+
+  assert.deepEqual(budgets, [undefined, 1_234]);
+});

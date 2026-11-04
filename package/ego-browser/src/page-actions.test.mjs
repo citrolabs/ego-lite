@@ -4,6 +4,196 @@ import assert from "node:assert/strict";
 import { clickInPage } from "../dist/src/driver/page-actions.js";
 import { RefMap } from "../dist/src/ref-map.js";
 
+/**
+ * Services for a top-level raw-selector click: the strict resolver counts and
+ * resolves the selector with Runtime.evaluate, the action point comes from the
+ * expression that settles layout, and every other page call answers `respond`.
+ */
+function topLevelClickServices({
+  respond = () => ({ ok: true }),
+  point = { x: 10, y: 20 },
+} = {}) {
+  const calls = [];
+  const services = {
+    calls,
+    async cdp(method, params = {}, sessionId) {
+      calls.push([method, params, sessionId]);
+      if (method === "Runtime.evaluate") {
+        return params.returnByValue === false
+          ? { result: { objectId: "button-1" } }
+          : { result: { value: 1 } };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        const value = params.functionDeclaration.includes("setTimeout(finish")
+          ? point
+          : respond(params);
+        return { result: { value } };
+      }
+      return {};
+    },
+    async showAgentMousePosition() {},
+    async showAgentTaskState() {},
+    async sleep() {},
+  };
+  return services;
+}
+
+function actionSequence(calls) {
+  return calls
+    .filter(([method]) => method !== "Runtime.evaluate")
+    .map(([method, params]) =>
+      method === "Input.dispatchMouseEvent"
+        ? `${method}:${params.type}`
+        : method,
+    );
+}
+
+function pageCalls(calls) {
+  return calls
+    .filter(([method]) => method === "Runtime.callFunctionOn")
+    .map(([, params]) => params.functionDeclaration);
+}
+
+test("Page click validates a top-level target once before the move and once before the press", async () => {
+  const services = topLevelClickServices();
+
+  await clickInPage(services, "session:page", new RefMap(), "#button");
+
+  assert.deepEqual(actionSequence(services.calls), [
+    "Runtime.callFunctionOn",
+    "Input.dispatchMouseEvent:mouseMoved",
+    "Runtime.callFunctionOn",
+    "Input.dispatchMouseEvent:mousePressed",
+    "Input.dispatchMouseEvent:mouseReleased",
+    "Runtime.releaseObject",
+  ]);
+  const [pointCheck, pressCheck] = pageCalls(services.calls);
+  for (const check of [pointCheck, pressCheck]) {
+    assert.match(
+      check,
+      /isActionTargetDisabled\(this\)/,
+      "each page call verifies the enabled state",
+    );
+    assert.match(
+      check,
+      /interceptingElementAtPoint\(this, point\)/,
+      "each page call verifies the hit target",
+    );
+  }
+  assert.match(pointCheck, /setTimeout\(finish, 100\)/);
+  assert.doesNotMatch(
+    pressCheck,
+    /setTimeout\(finish, 100\)/,
+    "the pre-press recheck does not wait for layout again",
+  );
+  const pressEvents = services.calls.filter(
+    ([method, params]) =>
+      method === "Input.dispatchMouseEvent" && params.type !== "mouseMoved",
+  );
+  assert(
+    pressEvents.every(([, params]) => params.x === 10 && params.y === 20),
+    "press and release use the resolved action point",
+  );
+});
+
+test("Page click fails before any pointer input when the element is disabled", async () => {
+  const services = topLevelClickServices({
+    point: { error: "element is disabled" },
+  });
+
+  await assert.rejects(
+    () => clickInPage(services, "session:page", new RefMap(), "#button"),
+    (error) => {
+      assert.equal(error.name, "ElementResolutionError");
+      assert.equal(error.kind, "transient");
+      assert.equal(error.message, "page.click failed: element is disabled");
+      return true;
+    },
+  );
+  assert.equal(
+    services.calls.some(([method]) => method === "Input.dispatchMouseEvent"),
+    false,
+  );
+});
+
+test("Page click fails closed when the pre-press recheck reports an interceptor", async () => {
+  const services = topLevelClickServices({
+    respond: () => ({
+      error: '<div id="hover-overlay"> intercepts pointer events',
+    }),
+  });
+
+  await assert.rejects(
+    () => clickInPage(services, "session:page", new RefMap(), "#button"),
+    (error) => {
+      assert.equal(error.name, "ElementResolutionError");
+      assert.equal(error.kind, "transient");
+      assert.equal(
+        error.message,
+        'page.click failed: <div id="hover-overlay"> intercepts pointer events',
+      );
+      return true;
+    },
+  );
+  assert.deepEqual(
+    actionSequence(services.calls),
+    [
+      "Runtime.callFunctionOn",
+      "Input.dispatchMouseEvent:mouseMoved",
+      "Runtime.callFunctionOn",
+      "Runtime.releaseObject",
+    ],
+    "the pointer moved but no press reached the page",
+  );
+});
+
+test("Page click force skips the hit test but still rejects a disabled element", async () => {
+  const services = topLevelClickServices();
+
+  await clickInPage(services, "session:page", new RefMap(), "#button", {
+    force: true,
+  });
+
+  for (const check of pageCalls(services.calls)) {
+    assert.match(check, /isActionTargetDisabled\(this\)/);
+    assert.doesNotMatch(check, /elementsFromPoint/);
+  }
+  assert.equal(
+    services.calls.filter(
+      ([method, params]) =>
+        method === "Input.dispatchMouseEvent" && params.type === "mousePressed",
+    ).length,
+    1,
+  );
+});
+
+test("Page click rechecks the target before every press of a multi-click", async () => {
+  const services = topLevelClickServices();
+
+  await clickInPage(services, "session:page", new RefMap(), "#button", {
+    clickCount: 2,
+  });
+
+  assert.deepEqual(actionSequence(services.calls), [
+    "Runtime.callFunctionOn",
+    "Input.dispatchMouseEvent:mouseMoved",
+    "Runtime.callFunctionOn",
+    "Input.dispatchMouseEvent:mousePressed",
+    "Input.dispatchMouseEvent:mouseReleased",
+    "Runtime.callFunctionOn",
+    "Input.dispatchMouseEvent:mousePressed",
+    "Input.dispatchMouseEvent:mouseReleased",
+    "Runtime.releaseObject",
+  ]);
+  const presses = services.calls
+    .filter(
+      ([method, params]) =>
+        method === "Input.dispatchMouseEvent" && params.type === "mousePressed",
+    )
+    .map(([, params]) => params.clickCount);
+  assert.deepEqual(presses, [1, 2]);
+});
+
 test("Page click translates same-process iframe coordinates to the Page viewport", async () => {
   const calls = [];
   const states = [];

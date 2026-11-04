@@ -103,6 +103,29 @@ test("listTaskSpaces preserves claimable user-created space metadata", async () 
   );
 });
 
+test("listTaskSpaces keeps unnamed user spaces, including id 0", async () => {
+  const unnamed = (id) => ({
+    createdBy: "user",
+    id,
+    name: "",
+    ownership: "user",
+    profileId: "Profile 4",
+    recentTabTitles: ["New Tab"],
+    taskId: "",
+  });
+  const named = { ...unnamed(10), name: "Space-2", taskId: "Space-2" };
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return { taskSpaces: [unnamed(0), unnamed(8), named] };
+      },
+    },
+    async () => {
+      assert.deepEqual(await listTaskSpaces(), [unnamed(0), unnamed(8), named]);
+    },
+  );
+});
+
 test("listTaskSpaces rejects legacy taskIds results", async () => {
   await withEgo(
     {
@@ -887,6 +910,33 @@ test("claimTaskSpace returns a TaskSpace after claiming and selecting", async ()
     ["useTaskSpace", 7],
     ["listTabs"],
   ]);
+});
+
+test("claimTaskSpace claims an unnamed user space without renaming it", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [{ taskId: "", id: 0, name: "", ownership: "user" }],
+        };
+      },
+      async claimTaskSpace(...args) {
+        calls.push(["claimTaskSpace", ...args]);
+        return { taskId: "", id: args[0], name: "" };
+      },
+      useTaskSpace() {},
+      async listTabs() {
+        return { tabs: [] };
+      },
+    },
+    async () => {
+      const task = await claimTaskSpace(0);
+      assert.equal(task.spaceId, 0);
+      assert.equal(task.name, "");
+    },
+  );
+  assert.deepEqual(calls, [["claimTaskSpace", 0]]);
 });
 
 test("takeOverTaskSpace returns a TaskSpace when a space is specified", async () => {

@@ -216,6 +216,20 @@ The current release behavior is:
 | Push a `vX.Y.Z` tag                           | Publishes a stable release and marks it as Latest. The tagged commit must be reachable from `main`. |
 | Push to `dev` or `main` without a version tag | Runs CI without creating a release.                                                                 |
 
+Pull requests into `main` must come from `dev` or from a `release/*` branch whose
+head commit is already on `dev`. To release a specific dev commit, cut a release
+branch from it, merge that branch into `main` with a merge commit, then tag the
+merge commit:
+
+```bash
+git switch -c release/vX.Y.Z <dev-commit>
+git push -u origin release/vX.Y.Z
+gh pr create --base main --head release/vX.Y.Z --title "release: vX.Y.Z"
+# after merging with a merge commit
+git fetch origin && git tag -a vX.Y.Z origin/main -m "Release vX.Y.Z"
+git push origin vX.Y.Z
+```
+
 Release jobs reuse the tested build and package `dist/out/` into
 `ego-browser-<tag>.zip`. Notes are generated from merged PRs using
 [release categories](.github/release.yml). The workflow publishes the SDK and
