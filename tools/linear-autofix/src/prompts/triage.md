@@ -32,9 +32,19 @@ Pick exactly one:
 - `duplicate` — a duplicate of another ticket; name it in `reason`.
 - `already_fixed` — the behavior is already correct on `{{baseBranch}}`;
   cite the commit or code.
+- `unrelated` — the ticket has nothing to do with ego lite: not the browser
+  app, its installer or its Chromium fork, not `ego-browser`, its Skill or this
+  repository. Examples are backend services and infrastructure of other
+  products, and company operations. The bot stays silent on these tickets: it
+  writes neither a comment nor a label.
 
 When in doubt between `fix` and anything else, choose the other verdict. A
 wrong `fix` costs an unattended implementation run and a noisy PR.
+
+When in doubt between `unrelated` and anything else, choose the other verdict.
+A wrong `unrelated` hides an ego lite ticket from the team without a trace on
+it. A ticket about the ego lite app that this repository cannot fix is
+`browser_side`, not `unrelated`.
 
 ## Also report
 
@@ -47,7 +57,8 @@ wrong `fix` costs an unattended implementation run and a noisy PR.
 - `repro_plan`: for `fix`, the concrete failing test or reproduction the
   implementer should write first.
 - `comment`: a short note for the Linear ticket, written in the ticket's own
-  language, explaining the verdict to the team in two to five sentences.
+  language, explaining the verdict to the team in two to five sentences. Leave
+  it empty for `unrelated`.
 
 Return only the JSON object described by the schema.
 
