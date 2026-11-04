@@ -215,13 +215,41 @@ export class Daemon {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST" || attempt > 0)
           throw error;
-        this.#checkLock();
-        try {
-          unlinkSync(this.paths.lockFile);
-        } catch {
-          // gone already; the retry decides
-        }
+        this.#reclaimStaleLock(this.#checkLock());
       }
+    }
+  }
+
+  /**
+   * Take a stale lock out of the way. The file is moved, not unlinked at its
+   * path: when several starters race past the liveness check, each rename
+   * moves one specific file, so a starter that moved a lock another starter
+   * created in the meantime sees a live pid in it, puts it back and refuses,
+   * instead of unlinking the live lock and starting a second daemon.
+   */
+  #reclaimStaleLock(stalePid: number | null) {
+    const moved = `${this.paths.lockFile}.stale-${process.pid}`;
+    try {
+      renameSync(this.paths.lockFile, moved);
+    } catch {
+      return; // already reclaimed by another starter; the retry decides
+    }
+    const pid = readLockPid(moved);
+    if (pid !== null && pid !== stalePid && lockHolderAlive(pid)) {
+      try {
+        renameSync(moved, this.paths.lockFile);
+      } catch {
+        // the other daemon rewrites its lock on its own next start
+      }
+      throw new ProtocolError(
+        ErrorCodes.BAD_REQUEST,
+        `an ego-run daemon is already running (pid ${pid})`,
+      );
+    }
+    try {
+      unlinkSync(moved);
+    } catch {
+      // gone already
     }
   }
 
@@ -237,19 +265,16 @@ export class Daemon {
   }
 
   /** Throw when the lock file names a live process other than this one. */
-  #checkLock() {
-    try {
-      const pid = Number(readFileSync(this.paths.lockFile, "utf8").trim());
-      if (pid && pid !== process.pid && processAlive(pid)) {
-        throw new ProtocolError(
-          ErrorCodes.BAD_REQUEST,
-          `an ego-run daemon is already running (pid ${pid})`,
-        );
-      }
-    } catch (error) {
-      if (error instanceof ProtocolError) throw error;
-      // no lock, or an unreadable one
+  /** Refuse when the lock names a live daemon; otherwise return the stale pid. */
+  #checkLock(): number | null {
+    const pid = readLockPid(this.paths.lockFile);
+    if (pid !== null && lockHolderAlive(pid)) {
+      throw new ProtocolError(
+        ErrorCodes.BAD_REQUEST,
+        `an ego-run daemon is already running (pid ${pid})`,
+      );
     }
+    return pid;
   }
 
   // The token file must be readable by this user only. An existing token is
@@ -489,6 +514,20 @@ function endpointAlive(endpoint: string, timeoutMs = 500): Promise<boolean> {
     socket.once("connect", () => done(true));
     socket.once("error", () => done(false));
   });
+}
+
+function readLockPid(path: string): number | null {
+  try {
+    const pid = Number(readFileSync(path, "utf8").trim());
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null; // no lock, or an unreadable one
+  }
+}
+
+/** A lock written by this very process (a second Daemon in it) is live too. */
+function lockHolderAlive(pid: number): boolean {
+  return pid === process.pid || processAlive(pid);
 }
 
 function processAlive(pid: number): boolean {

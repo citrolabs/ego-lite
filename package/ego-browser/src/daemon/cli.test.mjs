@@ -13,7 +13,7 @@ test(
     const dir = mkdtempSync(join(tmpdir(), "ego-run-cli-"));
     // Stands in for `ego-browser nodejs`: reads the program, then never ends.
     const bin = join(dir, "fake-ego-browser");
-    writeFileSync(bin, "#!/bin/sh\ncat > /dev/null\nsleep 30\n");
+    writeFileSync(bin, "#!/bin/sh\ncat > /dev/null\nexec sleep 30\n");
     chmodSync(bin, 0o755);
     const env = { ...process.env };
     Object.assign(process.env, {

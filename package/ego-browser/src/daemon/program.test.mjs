@@ -147,6 +147,23 @@ test("a deadline result is written without waiting for program-scope teardown", 
     assert.equal(envelope.ok, false);
     assert.equal(envelope.error.code, "EGO_RUN_DEADLINE");
     assert.deepEqual(calls, ["begin"], "the REPL is about to be killed");
+    // The program itself settles 180 ms later; that must not produce a
+    // second result line or a teardown call.
+    const write = process.stdout.write.bind(process.stdout);
+    let late = "";
+    process.stdout.write = (chunk) => {
+      const text = String(chunk);
+      if (!text.includes(RESULT_MARKER)) return write(chunk);
+      late += text;
+      return true;
+    };
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    } finally {
+      process.stdout.write = write;
+    }
+    assert.equal(late, "", "exactly one result line per program");
+    assert.deepEqual(calls, ["begin"]);
     const quick = wrapProgram(rewriteProgram("2"), {
       requestId: "quick",
       timeoutMs: 1_000,
