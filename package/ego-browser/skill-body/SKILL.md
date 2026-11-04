@@ -32,8 +32,7 @@ use `task`, `page`, or a popup handle directly instead of `globalThis`.
 
 <!-- platform: windows -->
 
-The form depends on the shell that runs the command: heredoc is Bash/Zsh
-syntax and does not exist in PowerShell or cmd.
+Heredoc exists only in Bash/Zsh, so the form depends on your shell.
 
 ### Bash, Zsh, Git Bash
 
@@ -52,21 +51,9 @@ console.log(await page.snapshot());
 EOF
 ```
 
-End every script with the observation the next step needs, such as
-`console.log(await page.snapshot())`; do not send a separate script only to look
-at the result.
-
-When a sandbox blocks heredoc input, use `-e` instead. Use single quotes around
-the code and double quotes for JavaScript strings; single quotes within the code
-require shell quoting.
-
-```bash
-ego-browser nodejs -e '
-const task = await taskSpace("inspect example page");
-await task.page("p1").goto("https://example.com");
-console.log(task.spaceId);
-'
-```
+When a sandbox blocks heredoc input, use `ego-browser nodejs -e '<code>'`
+instead. Use single quotes around the code and double quotes for JavaScript
+strings; single quotes within the code require shell quoting.
 
 <!-- /mode -->
 
@@ -101,11 +88,10 @@ When a sandbox blocks heredoc input, use `-e` or `--file <absolute path>`.
 
 ### PowerShell
 
-PowerShell has no heredoc, and Windows PowerShell 5.1 drops the double quotes
-inside an argument when it calls a native program, which splits the script into
-several arguments. Do not pass a script that contains double quotes or spans
-several lines to `-e`. Write it to a UTF-8 `.mjs` file instead and evaluate an
-ASCII-only one-line entry point, which needs no double quotes of its own:
+PowerShell has no heredoc, and Windows PowerShell 5.1 strips double quotes from
+native-program arguments, which splits the script. Never pass a multi-line or
+double-quoted script to `-e`. Write a UTF-8 `.mjs` file and evaluate this
+one-line entry point:
 
 <!-- mode: direct -->
 
@@ -113,10 +99,9 @@ ASCII-only one-line entry point, which needs no double quotes of its own:
 ego-browser nodejs -e "await import('file:///C:/Users/<name>/ego/task.mjs')"
 ```
 
-The imported module runs with the same helpers and `console` as an inline
-script, so the whole task belongs in the `.mjs` file. Use forward slashes in the
-`file:///` URL. Non-ASCII content such as Chinese text must stay inside the
-file: never put it in a `-e` argument.
+The module gets the same helpers and `console` as an inline script, so put the
+whole task in the file. Use forward slashes in the URL, and keep non-ASCII text
+such as Chinese in the file, never in `-e`.
 
 <!-- /mode -->
 
@@ -131,16 +116,14 @@ never in `-e`.
 
 <!-- /mode -->
 
-Do not pipe the file in with `Get-Content`. Windows PowerShell 5.1 reads a UTF-8
-file as ANSI and sends ASCII to native programs, which corrupts non-ASCII text
-and truncates strings. PowerShell has no `<` input redirection either.
+Do not pipe the file with `Get-Content`: 5.1 corrupts non-ASCII text and
+truncates strings. PowerShell has no `<` redirection either.
 
 ### cmd
 
 <!-- mode: direct -->
 
-cmd has no heredoc, but it does support input redirection, so it can run the
-same `.mjs` file directly:
+cmd has no heredoc but supports input redirection:
 
 ```bat
 ego-browser nodejs < C:\Users\<name>\ego\task.mjs
@@ -162,9 +145,9 @@ ego-run --session <id> --file C:\Users\<name>\ego\task.mjs
 
 <!-- mode: direct -->
 
-Each run is a new process, and earlier rounds have already run. Write a new,
-complete file for every round (`round-01.mjs`, `round-02.mjs`, ...) instead of
-editing the previous one, which would replay old steps.
+Each run is a new process, so write a new, complete file per round
+(`round-01.mjs`, `round-02.mjs`, ...); editing the previous one replays old
+steps.
 
 <!-- /mode -->
 
@@ -175,19 +158,17 @@ The session keeps earlier rounds' variables: each round's new file
 
 <!-- /mode -->
 
-Keep one goal's files in
-a new directory named for the goal plus the date and time, such as
-`C:/Users/<name>/ego/laptop-prices-20260922-1405/`, and only run files written
-in this conversation. Create files with your file tool, not PowerShell
-`Set-Content`, `Out-File`, or `>`, which write ANSI or UTF-16 on 5.1.
+Keep one goal's files in a new directory named for the goal and time,
+such as `C:/Users/<name>/ego/laptop-prices-20260922-1405/`, and only run files
+written in this conversation. Create files with your file tool: PowerShell
+`Set-Content`, `Out-File`, and `>` write ANSI or UTF-16 on 5.1.
 
 ### When the script fails to parse
 
 `SyntaxError: await is only valid in async functions and the top level bodies of
-modules` almost always means the shell damaged the script before Node received
-it; top-level `await` itself is supported. Do not wrap the code in an async
-IIFE, open a new task space, or resend the same command. Switch to the `.mjs`
-file form above.
+modules` almost always means the shell damaged the script; top-level `await` is
+supported. Do not wrap the code in an async IIFE, open a new task space, or
+resend the command. Switch to the `.mjs` file form.
 
 <!-- /platform -->
 
@@ -309,7 +290,7 @@ as user-owned when deciding whether a Page may be closed.
 
 ## Page operations
 
-ego-browser provides the following Page API:
+Page API:
 
 - State and observation: `label`, `spaceId`, `openedBy`, `targetId`, `url()`,
   `title()`, `info()`, `snapshot()`, `screenshot()`
@@ -324,7 +305,7 @@ ego-browser provides the following Page API:
 - Keyboard: `keyboard.down()`, `up()`, `press()`, `type()`, `insertText()`,
   `paste()`
 - Page code and protocols: `evaluate(fnOrString, argument)`,
-  `fetch(url, options)`, `cdp(method, params, options)`
+  `fetch(url, options)`, `cdp(method, params, options)`, `events()`
 
 `page.evaluate()` callbacks run only inside the Page and cannot read variables
 or Node.js modules from the script: define browser-side helpers inside the
@@ -386,20 +367,12 @@ Use the subtree's refs for actions inside the iframe. A subtree snapshot does
 not scope later locator actions, which still prefer the top document before
 searching frames.
 
-`waitForLoadState()` defaults to `load`. `waitForFunction()` follows the
-Playwright argument order; pass `undefined` before options when there is no Page
-argument:
+`waitForLoadState()` defaults to `load`. `waitForFunction()` takes Playwright's
+args (`undefined` before options if no arg) but returns `true`, not the
+predicate's value:
 
 ```js
-await page.waitForFunction(() => window.appReady, undefined, {
-  timeout: 10_000,
-});
-```
-
-```js
-// Round 1: inspect and choose targets from this output.
-const page = task.page("p1");
-console.log(await page.snapshot());
+await page.waitForFunction(() => window.ready, undefined, { timeout: 5000 });
 ```
 
 ```js
@@ -472,9 +445,9 @@ into the system temporary directory and use the returned file path.
 
 <!-- platform: windows -->
 
-On Windows, write paths with forward slashes, such as
-`C:/Users/<name>/ego-shots/before.png`, because backslashes are escape
-characters inside JavaScript strings.
+Use forward slashes in Windows paths, such as
+`C:/Users/<name>/ego-shots/before.png`: backslashes are JavaScript string
+escapes.
 
 <!-- /platform -->
 
@@ -490,13 +463,6 @@ then restores the user's clipboard. Pass `{ text, html }` when a rich editor
 needs structured clipboard content; `text` is the plain-text fallback. On other
 platforms, use `keyboard.insertText()` for plain text.
 
-```js
-await page.keyboard.paste({
-  text: "Name\tStatus",
-  html: "<table><tr><td>Name</td><td>Status</td></tr></table>",
-});
-```
-
 For rich-text editors and editable grids, validate a small edit before repeating
 it at scale. Canvas-backed editors may not expose visible content through DOM
 text or selectors; verify those results with a screenshot or an
@@ -510,8 +476,8 @@ WebGL may read blank).
 
 ### Page JavaScript and CDP
 
-Use `page.evaluate()` for bulk extraction or complex in-page work. It accepts
-one JSON-serializable argument and returns a JSON-serializable value:
+Use `page.evaluate()` for bulk extraction or complex in-page work. It returns a
+JSON-serializable value:
 
 ```js
 const rows = await page.evaluate(
@@ -531,8 +497,9 @@ whether an unsafe follow-up requires reloading or closing the Page first.
 Use documented Page methods first. If a wrapper is missing or does not work
 reliably on the current page, use `page.cdp()` as a lower-level path for
 diagnosis or control. It accepts Page, Runtime, DOM, Network, Input, and similar
-commands; use `task.cdp()` for Target and Browser commands. Raw CDP invalidates
-refs. Do not persist `page.targetId` across rounds.
+commands; use `task.cdp()` for Target and Browser commands. Both reject a misplaced
+`sessionId` in params. Raw CDP invalidates refs. Do not persist `page.targetId`
+across rounds.
 
 ## Action receipts, popups, and dialogs
 
@@ -549,9 +516,6 @@ High-level actions also report immediately observed popups in `receipt.popups`
 as `{ label, targetId }`. Resolve the Page with
 `task.page(receipt.popups[0].label)` and continue there; wait for its URL when
 the destination matters.
-
-For uncommon protocol-event workflows, `await page.events()` returns and clears
-the buffered event array; it is not an EventEmitter.
 
 Page sessions hide page console messages from CDP so sites cannot detect the
 automation. To read `Runtime.consoleAPICalled` while debugging, first call

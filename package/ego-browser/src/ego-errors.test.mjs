@@ -76,6 +76,54 @@ test("invokeEgo recognizes a permission reason from a rejected native call", asy
   );
 });
 
+for (const [reason, firstLine] of [
+  [
+    "clipboard",
+    "A browser permission prompt for clipboard access has appeared.",
+  ],
+  [
+    "local_network_access",
+    "A browser permission prompt for local network access has appeared.",
+  ],
+  [
+    "storage_access",
+    "A browser permission prompt for storage access has appeared.",
+  ],
+  [
+    "window_management",
+    "A browser permission prompt for window management has appeared.",
+  ],
+  [
+    "local_fonts",
+    "A browser permission prompt for local font access has appeared.",
+  ],
+  [
+    "permission_prompt",
+    "A browser permission prompt or device chooser has appeared.",
+  ],
+]) {
+  test(`the ${reason} reason names the prompt the user must handle`, () => {
+    const { code, message } = resolveEgoError({
+      error: reason,
+      error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
+    });
+    assert.equal(code, "EGO_TASK_SPACE_USER_IN_CONTROL");
+    const lines = message.split("\n");
+    assert.equal(lines[0], firstLine);
+    assert.match(message, /Wait for the user to handle the prompt/);
+    assert.match(message, /takeOverTaskSpace\(spaceId\)/);
+  });
+}
+
+test("manual_takeover keeps the generic user-control guidance", () => {
+  const { message } = resolveEgoError({
+    error: "manual_takeover",
+    error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
+  });
+  assert.match(message, /Control of this task space is with the user/);
+  assert.doesNotMatch(message, /permission prompt/);
+});
+
 test("user-control reason lookup ignores inherited object properties", () => {
   const { message } = resolveEgoError({
     error: "constructor",

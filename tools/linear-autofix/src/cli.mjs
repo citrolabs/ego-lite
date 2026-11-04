@@ -152,7 +152,14 @@ function status() {
   console.log(`\n${records.length} tracked · state dir ${config.stateDir}`);
 }
 
+/** These act on real branches, worktrees and PRs, which a dry run must not touch. */
+const NOT_IN_DRY_RUN = ["implement", "review", "publish", "reset"];
+
 async function main([command, arg]) {
+  if (config.dryRun && NOT_IN_DRY_RUN.includes(command))
+    throw new Error(
+      `${command} is not available with AUTOFIX_DRY_RUN=1: a dry run only triages`,
+    );
   switch (command) {
     case "tick":
       timestampLogs();

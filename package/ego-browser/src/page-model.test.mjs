@@ -10,6 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { runInNewContext } from "node:vm";
 
 import { NativeOperationGate } from "../dist/src/native-gate.js";
 import {
@@ -760,6 +761,7 @@ function createFixture(rootDir) {
         if (activeTarget === params.targetId) activeTarget = null;
         return { success: true };
       }
+      if (method === "Target.detachFromTarget") return {};
       throw new Error(`unexpected CDP method ${method}`);
     },
     async showAgentMousePosition(x, y) {
@@ -1402,6 +1404,45 @@ test("Page.waitForFunction polls one Page with one JSON argument", async () => {
       "waitForFunction activates the addressed Page",
     );
     assert.equal(second.targetId, "target-2");
+  });
+});
+
+test("Page.waitForFunction resolves to true, not the predicate's value", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    const task = taskForRound(fixture, "round-a", {
+      // Run the real probe, because the shared fixture answers it with a
+      // canned `matched` and would not exercise the coercion.
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (
+          method === "Runtime.evaluate" &&
+          params.expression.includes("__egoWaitForFunction")
+        ) {
+          const value = await runInNewContext(params.expression, {
+            location: { href: "https://example.test/wait" },
+            document: { title: "wait" },
+          });
+          return { result: { type: "object", value } };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/wait");
+
+    for (const predicate of [
+      () => "loaded",
+      () => ({ status: "ok" }),
+      () => 42,
+      async () => "loaded",
+      "'loaded'",
+      "({ status: 'ok' })",
+    ]) {
+      assert.equal(await page.waitForFunction(predicate), true);
+    }
+    await assert.rejects(
+      () => page.waitForFunction(() => 0, undefined, { timeout: 60 }),
+      /page\.waitForFunction timed out after 60ms/,
+    );
   });
 });
 
@@ -5446,6 +5487,50 @@ test("Page and TaskSpace CDP commands preserve their intended scope", async () =
           timeout === 987,
       ),
       "task.cdp must use the selected space without a Page session",
+    );
+  });
+});
+
+test("Page and TaskSpace CDP reject a sessionId they would not honour", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+    fixture.calls.length = 0;
+
+    await assert.rejects(
+      () =>
+        page.cdp("Runtime.evaluate", { expression: "1", sessionId: "other" }),
+      (error) => {
+        assert(error instanceof TypeError);
+        assert.match(error.message, /Page\.cdp/);
+        assert.match(error.message, /Runtime\.evaluate/);
+        return true;
+      },
+    );
+    await assert.rejects(
+      () => task.cdp("Browser.getVersion", { sessionId: "other" }),
+      /TaskSpace\.cdp.*Browser\.getVersion/,
+    );
+    await assert.rejects(
+      () => task.cdp("Target.getTargets", { sessionId: "other" }),
+      /TaskSpace\.cdp.*Target\.getTargets/,
+    );
+    assert.deepEqual(
+      fixture.calls.filter(([kind]) => kind === "cdp"),
+      [],
+      "a rejected command must never reach the browser",
+    );
+
+    await task.cdp("Target.detachFromTarget", { sessionId: "other" });
+    assert(
+      fixture.calls.some(
+        ([kind, method, params, sessionId]) =>
+          kind === "cdp" &&
+          method === "Target.detachFromTarget" &&
+          params.sessionId === "other" &&
+          sessionId === undefined,
+      ),
+      "Target commands that define params.sessionId must still pass through",
     );
   });
 });

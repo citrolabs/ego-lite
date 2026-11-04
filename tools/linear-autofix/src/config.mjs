@@ -18,12 +18,22 @@ function list(name, fallback) {
   return (raw ? raw.split(",") : fallback).map((s) => s.trim()).filter(Boolean);
 }
 
+/**
+ * Where records, runs, worktrees, the lock and STOP live. A dry run gets its
+ * own directory: Linear and GitHub never hear about its verdicts, so a record
+ * saved in the real state would stop the bot from ever triaging that ticket for
+ * real. Pure.
+ */
+export function resolveStateDir(env, home) {
+  const base =
+    env.AUTOFIX_STATE_DIR ?? path.join(home, ".local/state/linear-autofix");
+  return env.AUTOFIX_DRY_RUN === "1" ? path.join(base, "dry-run") : base;
+}
+
 export const config = Object.freeze({
   // The ego-lite checkout this tool lives in. Worktrees are created from it.
   repoRoot: process.env.AUTOFIX_REPO ?? path.resolve(here, "../../.."),
-  stateDir:
-    process.env.AUTOFIX_STATE_DIR ??
-    path.join(os.homedir(), ".local/state/linear-autofix"),
+  stateDir: resolveStateDir(process.env, os.homedir()),
 
   linearApiKey: process.env.LINEAR_API_KEY ?? "",
   linearStates: list("AUTOFIX_LINEAR_STATES", [
@@ -76,8 +86,8 @@ export const config = Object.freeze({
   codexMarker: "<!-- codex-review -->",
   codexCleanLine: "No issues found that require changes.",
 
-  // AUTOFIX_DRY_RUN=1: read everything, run Claude, but never write to
-  // Linear or GitHub and never push.
+  // AUTOFIX_DRY_RUN=1: triage only, with state in its own directory. Never
+  // writes to Linear or GitHub, never pushes, never creates a branch.
   dryRun: process.env.AUTOFIX_DRY_RUN === "1",
   // AUTOFIX_ISSUE=CITRO-1234 restricts a tick to one issue.
   onlyIssue: process.env.AUTOFIX_ISSUE ?? "",

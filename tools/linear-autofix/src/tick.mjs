@@ -101,7 +101,9 @@ export async function tick() {
       return;
     }
     if (config.dryRun)
-      console.log("[dry-run] no writes to Linear or GitHub, no push");
+      console.log(
+        `[dry-run] triage only, state in ${config.stateDir}; no writes to Linear or GitHub, no push`,
+      );
 
     let issues = await linear.fetchAssignedIssues();
     if (config.onlyIssue)
@@ -118,18 +120,20 @@ export async function tick() {
     }));
     console.log(`stages: ${stageCounts(work.map((w) => w.record))}`);
 
-    // 0. Finished PRs that are still open: a human comment reopens the loop.
-    for (const { record } of work.filter((w) => w.record.stage === "done")) {
-      if (stopRequested()) return;
-      await guarded(record, () => watchDone(record));
-    }
+    if (!config.dryRun) {
+      // 0. Finished PRs that are still open: a human comment reopens the loop.
+      for (const { record } of work.filter((w) => w.record.stage === "done")) {
+        if (stopRequested()) return;
+        await guarded(record, () => watchDone(record));
+      }
 
-    // 1. Review loops first: cheap checks that may finish a PR.
-    for (const { issue, record } of work.filter(
-      (w) => w.record.stage === "in_review",
-    )) {
-      if (stopRequested()) return;
-      await guarded(record, () => review(issue, record));
+      // 1. Review loops first: cheap checks that may finish a PR.
+      for (const { issue, record } of work.filter(
+        (w) => w.record.stage === "in_review",
+      )) {
+        if (stopRequested()) return;
+        await guarded(record, () => review(issue, record));
+      }
     }
 
     const pausedUntil = usagePausedUntil();
@@ -165,6 +169,10 @@ export async function tick() {
         await triage(issue, record);
       });
     }
+
+    // A dry run ends here: an implementation would leave a local branch checked
+    // out in the dry-run worktree, which blocks the real run on that ticket.
+    if (config.dryRun) return;
 
     // 3. Implement, bounded by the number of bot PRs already in review.
     const open = () => loadAll().filter((r) => r.stage === "in_review").length;

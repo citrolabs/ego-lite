@@ -12,6 +12,7 @@ export const VERDICTS = Object.freeze([
   "design_decision",
   "duplicate",
   "already_fixed",
+  "unrelated",
 ]);
 
 export const TRIAGE_SCHEMA = {
@@ -122,6 +123,13 @@ export async function triage(issue, record) {
     "triaged",
     `${triageResult.verdict} (${triageResult.confidence.toFixed(2)}) ${triageResult.reason}`,
   );
+
+  // Not an ego lite ticket: its team gets no comment and no label from the bot.
+  // The verdict stays visible in `status` and in the tick log.
+  if (triageResult.verdict === "unrelated") {
+    transition(record, "skipped", triageResult.verdict);
+    return triageResult;
+  }
 
   await linear.comment(record, renderTriageComment(triageResult));
   if (triageResult.verdict === "fix") {

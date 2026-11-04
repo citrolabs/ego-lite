@@ -28,7 +28,7 @@ import {
   type FileChooserInterception,
   type FileChooserOpenedEvent,
 } from "./browser-runtime.js";
-import { runtimeValue } from "./cdp-eval.js";
+import { assertNoSessionIdInParams, runtimeValue } from "./cdp-eval.js";
 import { withTemporaryClipboardText } from "./clipboard.js";
 import {
   captureScreenshotForSession,
@@ -2382,7 +2382,11 @@ class Page {
     return this.#evaluate(expression, hasArgument, argument, true);
   }
 
-  /** Wait until a Page expression returns a truthy value. */
+  /**
+   * Wait until a Page expression returns a truthy value. Resolves to `true`,
+   * not that value, and throws on timeout; read Page state afterwards with
+   * `page.evaluate()`.
+   */
   async waitForFunction(
     expression: string | ((argument: any) => unknown | Promise<unknown>),
     argument?: unknown,
@@ -4626,6 +4630,12 @@ function assertCdpCall(
   if (!params || typeof params !== "object" || Array.isArray(params)) {
     throw new TypeError("cdp params must be an object");
   }
+  assertNoSessionIdInParams(
+    apiName,
+    method,
+    params,
+    `${apiName} selects its own session and cannot route to another one.`,
+  );
   validatePublicApiOptions(apiName, options);
 }
 
