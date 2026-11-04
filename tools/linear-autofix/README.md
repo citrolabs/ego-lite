@@ -17,7 +17,8 @@ Linear (assignee = me, state ∈ Backlog/Todo/In Progress/Pending Review)
    │  tick every 10 min
    ▼
 new ──triage (claude, read-only)──► skipped  (browser_side / needs_info / ops_reply /
-   │                                           design_decision / duplicate / already_fixed)
+   │                                           design_decision / duplicate / already_fixed /
+   │                                           unrelated: no comment, no label)
    └─ verdict fix ──► triaged
                         │ implement (claude in a worktree; failing test → fix → npm test → commit)
                         │ real-browser E2E on this machine, then git push (failed cases do not block)
@@ -40,6 +41,10 @@ created under `worktrees/<ID>` from `origin/dev` on the branch Linear suggests
 Every comment the bot writes (Linear, PR, review threads) starts with
 `<!-- linear-autofix -->`. Adding the `no-agent` label to a ticket stops the
 bot on it; it also writes `agent:fix`, `agent:skipped` and `agent:escalated`.
+
+A ticket that has nothing to do with ego lite gets the verdict `unrelated`, and
+the bot writes nothing on it. The verdict shows only in `status` and in the tick
+log, which is where to catch a misjudged ticket; `retry` triages it again.
 
 ## What Claude may and may not do
 
