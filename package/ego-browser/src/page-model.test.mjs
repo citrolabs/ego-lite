@@ -893,6 +893,7 @@ function createFixture(rootDir) {
         backendNodeId: options.backendNodeId ?? 71,
         frameId: options.frameId ?? "frame-1",
         mode: options.mode ?? "selectSingle",
+        ...(options.targetId ? { targetId: options.targetId } : {}),
       };
     },
     systemFileChooserOpened: () => systemFileChooserOpened,
@@ -5273,6 +5274,32 @@ test("FileChooser.setFiles uses the current Page session after reconnect", async
         params.backendNodeId === 92,
     );
     assert.equal(uploadCall[3], "fresh-upload-session");
+  });
+});
+
+test("FileChooser.setFiles targets the OOPIF session that opened the chooser", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/oopif-upload");
+    fixture.addExternalTab("frame-upload", "https://frame.test/upload");
+    fixture.setSession("frame-upload", "frame-upload-session");
+    fixture.openFileChooserOnNextClick({
+      backendNodeId: 94,
+      targetId: "frame-upload",
+    });
+
+    const chooserPromise = page.waitForFileChooser();
+    await page.click("#open-upload");
+    const chooser = await chooserPromise;
+    await chooser.setFiles("/tmp/frame.txt");
+
+    const uploadCall = fixture.calls.find(
+      ([kind, method, params]) =>
+        kind === "cdp" &&
+        method === "DOM.setFileInputFiles" &&
+        params.backendNodeId === 94,
+    );
+    assert.equal(uploadCall[3], "frame-upload-session");
   });
 });
 

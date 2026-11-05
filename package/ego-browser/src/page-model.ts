@@ -1776,9 +1776,15 @@ class FileChooser {
     this.#handled = true;
     try {
       await this.#services.gate.withPage(this.#page, async ({ sessionId }) => {
+        // A backend node id only resolves in the session that reported it.
+        const ownerTargetId = this.#event.targetId;
+        const inputSessionId =
+          ownerTargetId && ownerTargetId !== this.#page.targetId
+            ? await this.#services.ensureSession(ownerTargetId)
+            : sessionId;
         await setFilesOnBackendNode(
           this.#services,
-          sessionId,
+          inputSessionId,
           files,
           this.#event.backendNodeId,
         );
