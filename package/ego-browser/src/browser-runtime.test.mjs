@@ -2240,12 +2240,33 @@ test("file chooser interception suppresses the native picker and returns its inp
 function oopifUploadRuntime({
   holdFrameIntercept = false,
   failFrameTree = false,
+  failPageIntercept = false,
 } = {}) {
+  let failHeldPageIntercept;
   const runtime = {
     calls: [],
     sendCDPMessage(payload) {
       const request = JSON.parse(payload);
       runtime.calls.push(request);
+      if (
+        failPageIntercept &&
+        request.method === "Page.setInterceptFileChooserDialog" &&
+        request.params.enabled
+      ) {
+        // The Page fails only once a frame is armed, which is what leaks.
+        if (request.sessionId === "session:page-main") {
+          failHeldPageIntercept = () => {
+            runtime.onCDPMessage(
+              JSON.stringify({
+                id: request.id,
+                error: { message: "intercept unavailable" },
+              }),
+            );
+          };
+          return;
+        }
+        queueMicrotask(failHeldPageIntercept);
+      }
       if (
         holdFrameIntercept &&
         request.method === "Page.setInterceptFileChooserDialog" &&
@@ -2439,6 +2460,34 @@ test("a timed out file chooser wait releases interception on every frame session
       "session:frame-child",
     ]);
   });
+});
+
+test("a failed file chooser setup releases interception on every frame session", async () => {
+  await withOopifUploadRuntime(
+    { failPageIntercept: true },
+    async (runtime, mainSession) => {
+      const interception = prepareFileChooser(mainSession, {
+        timeoutMs: 1_000,
+        cancel: false,
+      });
+      await assert.rejects(() => interception.ready, /intercept unavailable/);
+      await assert.rejects(() => interception.event, /intercept unavailable/);
+      assert.deepEqual(runtime.interceptSessions(true), [
+        "session:page-main",
+        "session:frame-child",
+      ]);
+      // Sent before the rejection is observed, so a retry's enable follows it.
+      assert.deepEqual(runtime.interceptSessions(false), [
+        "session:page-main",
+        "session:frame-child",
+      ]);
+
+      // The wait is over, so a later disposal must not release anything again.
+      runtime.calls.length = 0;
+      await interception.dispose();
+      assert.deepEqual(runtime.interceptSessions(false), []);
+    },
+  );
 });
 
 test("file chooser interception does not depend on OOPIF setup succeeding", async () => {

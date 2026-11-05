@@ -1139,6 +1139,11 @@ export function prepareFileChooser(
         .filter((frameSessionId) => sessionTargets.has(frameSessionId))
         .map((frameSessionId) => setFrameIntercept(frameSessionId, false)),
     );
+  const releaseInterception = () =>
+    Promise.all([
+      setIntercept(sessionId, false).catch(() => {}),
+      releaseFrames(),
+    ]);
 
   const interception: any = {
     cancelPromise: undefined,
@@ -1170,10 +1175,7 @@ export function prepareFileChooser(
       if (!observed && reason) rejectEvent(reason);
       await interception.ready.catch(() => {});
       await interception.cancelPromise;
-      const disable = Promise.all([
-        setIntercept(sessionId, false).catch(() => {}),
-        releaseFrames(),
-      ]);
+      const disable = releaseInterception();
       if (target.pendingDialog) {
         // Chromium can hold this housekeeping response until the modal dialog
         // closes. Send it now, but do not keep the triggering action's gate
@@ -1212,14 +1214,17 @@ export function prepareFileChooser(
         if (target.fileChooserInterception === interception) {
           target.fileChooserInterception = null;
           rejectEvent(error);
-          void setIntercept(sessionId, false).catch(() => {});
-          void releaseFrames();
+          void releaseInterception();
         }
       }, timeoutMs);
     })
     .catch((error) => {
+      // dispose() releases a wait it already took over. Otherwise frames armed
+      // before the Page failed stay armed, so release them here, before the
+      // rejection lets a retry send its own enable on the same sessions.
       if (target.fileChooserInterception === interception) {
         target.fileChooserInterception = null;
+        void releaseInterception();
       }
       rejectEvent(error);
       throw error;
