@@ -359,6 +359,44 @@ export const EDIT_ACTION_TARGET_HELPERS = `
   }
 `;
 
+// A left-button press on a drop-down <select> opens the browser-drawn option
+// menu. On macOS that is an NSMenu in a nested run loop: it stays open outside
+// the page, CDP key events cannot dismiss it, and ego lite defers closing every
+// task space until it goes away (CITRO-4909). Pointer actions therefore refuse
+// such a press and point the caller to page.selectOption(). List boxes
+// (multiple or size > 1) and disabled selects open no menu and stay clickable.
+// Requires composedParent().
+export const NATIVE_SELECT_FUNCTIONS = `
+  function nativeSelectMenuAt(hitElement) {
+    let select = hitElement;
+    while (select && String(select.tagName || "").toUpperCase() !== "SELECT") {
+      select = composedParent(select);
+    }
+    if (!select || select.multiple || Number(select.size) > 1) return null;
+    if (select.disabled || select.matches?.(":disabled")) return null;
+    const root = select.getRootNode ? select.getRootNode() : null;
+    const escape = (value) =>
+      typeof CSS !== "undefined" && CSS.escape ? CSS.escape(value) : value;
+    const candidates = [];
+    if (select.id) candidates.push("select#" + escape(select.id));
+    const name = select.getAttribute?.("name");
+    if (name) candidates.push("select[name=" + JSON.stringify(name) + "]");
+    const locator = candidates.find((candidate) => {
+      try {
+        return root?.querySelectorAll?.(candidate).length === 1;
+      } catch {
+        return false;
+      }
+    }) || null;
+    const options = Array.from(select.options || []);
+    return {
+      locator,
+      options: options.slice(0, 10).map((option) => String(option.label || "").slice(0, 60)),
+      optionCount: options.length,
+    };
+  }
+`;
+
 // Shared by resolver-level candidate selection and the final pointer check.
 // Keeping one composed-tree definition prevents the two stages from disagreeing
 // about shadow descendants, interactive ancestors, or modal blockers.

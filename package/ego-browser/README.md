@@ -104,6 +104,13 @@ existing scripts.
   actions such as `selectOption()` require a rendered, enabled control but may
   operate on an opacity-zero native control used by a custom widget. Like
   Playwright, `selectOption()` can programmatically choose a disabled option.
+- Unlike Playwright, `click()`, `dblclick()`, `mouse.click()`, and
+  `mouse.down()` refuse a left press that would land on a drop-down `<select>`,
+  even with `force`, and name the `selectOption()` call to use instead. On macOS
+  that press opens a browser-drawn menu that CDP input cannot dismiss, and
+  ego lite defers closing every task space while it is open. List boxes
+  (`multiple` or `size > 1`), disabled selects, and right or middle presses are
+  not affected. `mouse.*` inspects same-origin iframes only.
 - Network-idle waits use continuous per-Page and OOPIF request state; they do
   not consume the CDP events returned by `page.events()` or include other Pages.
 - `fill()` verifies that editing took effect, not that application formatting

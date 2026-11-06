@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { clickInPage } from "../dist/src/driver/page-actions.js";
+import {
+  clickInPage,
+  clickPointInPage,
+  mouseButtonInPage,
+} from "../dist/src/driver/page-actions.js";
 import { RefMap } from "../dist/src/ref-map.js";
 
 /**
@@ -154,10 +158,16 @@ test("Page click force skips the hit test but still rejects a disabled element",
     force: true,
   });
 
-  for (const check of pageCalls(services.calls)) {
+  const checks = pageCalls(services.calls);
+  for (const check of checks) {
     assert.match(check, /isActionTargetDisabled\(this\)/);
-    assert.doesNotMatch(check, /elementsFromPoint/);
+    assert.doesNotMatch(check, /interceptingElementAtPoint\(this, point\)/);
   }
+  assert.match(
+    checks.at(-1),
+    /nativeSelectMenuAt\(hitElementAtPoint\(this, point\)\)/,
+    "force does not change the press, so the native select check still runs",
+  );
   assert.equal(
     services.calls.filter(
       ([method, params]) =>
@@ -400,6 +410,22 @@ test("Page click keeps raw-selector OOPIF input local but renders its cursor in 
     "OOPIF input stays in the child target's local viewport",
   );
   assert.deepEqual(cursorPoints, [{ x: 110, y: 220 }]);
+  const pressIndex = calls.findIndex(
+    ([method, params]) =>
+      method === "Input.dispatchMouseEvent" && params.type === "mousePressed",
+  );
+  const selectCheck = calls.findIndex(
+    ([method, params]) =>
+      method === "Runtime.callFunctionOn" &&
+      params.functionDeclaration.includes(
+        "nativeSelectMenuAt(hitElementAtPoint",
+      ),
+  );
+  assert(
+    selectCheck >= 0 && selectCheck < pressIndex,
+    "the first OOPIF press is checked for a native select",
+  );
+  assert.equal(calls[selectCheck][2], "session:frame");
 });
 
 test("Page click renders an OOPIF cursor when FrameTree omits its ancestor iframe", async () => {
@@ -495,4 +521,151 @@ test("Page click renders an OOPIF cursor when FrameTree omits its ancestor ifram
     "OOPIF input stays in the child target's local viewport",
   );
   assert.deepEqual(cursorPoints, [{ x: 410, y: 620 }]);
+});
+
+const DROPDOWN = {
+  locator: "select#dropdown",
+  options: ["Option 1", "Option 2"],
+  optionCount: 2,
+};
+
+function assertNativeSelectRefusal(actionName, locatorText) {
+  return (error) => {
+    assert.equal(error.name, "ElementResolutionError");
+    assert.equal(error.kind, "permanent", "retrying cannot help");
+    assert(
+      error.message.startsWith(
+        `${actionName} refused to press the left mouse button`,
+      ),
+      error.message,
+    );
+    assert(error.message.includes(locatorText), error.message);
+    return true;
+  };
+}
+
+function pressCount(calls) {
+  return calls.filter(
+    ([method, params]) =>
+      method === "Input.dispatchMouseEvent" && params.type === "mousePressed",
+  ).length;
+}
+
+test("Page click refuses a left press that would open a native select menu", async () => {
+  const services = topLevelClickServices({
+    respond: () => ({ nativeSelect: DROPDOWN }),
+  });
+
+  await assert.rejects(
+    () => clickInPage(services, "session:page", new RefMap(), "#dropdown"),
+    assertNativeSelectRefusal(
+      "page.click",
+      'page.selectOption("select#dropdown", { label: "..." }) instead. Options: "Option 1", "Option 2".',
+    ),
+  );
+  assert.equal(pressCount(services.calls), 0);
+  assert.match(
+    pageCalls(services.calls).at(-1),
+    /nativeSelectMenuAt\(hitElementAtPoint\(this, point\)\)/,
+    "the check looks at the element under the press point, not the target",
+  );
+});
+
+test("Page click with force is refused on a native select as well", async () => {
+  const services = topLevelClickServices({
+    respond: () => ({ nativeSelect: DROPDOWN }),
+  });
+
+  await assert.rejects(
+    () =>
+      clickInPage(services, "session:page", new RefMap(), "#dropdown", {
+        force: true,
+      }),
+    assertNativeSelectRefusal("page.click", "select#dropdown"),
+  );
+  assert.equal(pressCount(services.calls), 0);
+});
+
+test("Page right click and middle click skip the native select check", async () => {
+  for (const button of ["right", "middle"]) {
+    const services = topLevelClickServices();
+    await clickInPage(services, "session:page", new RefMap(), "#dropdown", {
+      button,
+    });
+    for (const check of pageCalls(services.calls)) {
+      assert.doesNotMatch(check, /nativeSelectMenuAt\(/);
+    }
+    assert.equal(pressCount(services.calls), 1);
+  }
+});
+
+function pointServices(value) {
+  const calls = [];
+  return {
+    calls,
+    async cdp(method, params = {}, sessionId) {
+      calls.push([method, params, sessionId]);
+      if (method === "Runtime.evaluate") return { result: { value } };
+      return {};
+    },
+    async showAgentMousePosition() {},
+    async showAgentTaskState() {},
+    async sleep() {},
+  };
+}
+
+test("Page mouse click refuses coordinates on a native select", async () => {
+  const services = pointServices({
+    locator: null,
+    options: [],
+    optionCount: 0,
+  });
+
+  await assert.rejects(
+    () => clickPointInPage(services, "session:page", 40, 50),
+    assertNativeSelectRefusal(
+      "page.mouse.click",
+      "with a selector or snapshot ref that matches only this <select>",
+    ),
+  );
+  assert.equal(
+    services.calls.some(([method]) => method === "Input.dispatchMouseEvent"),
+    false,
+    "no pointer input reaches the page",
+  );
+  const [, params, sessionId] = services.calls[0];
+  assert.equal(sessionId, "session:page");
+  assert.match(params.expression, /let x = 40;\s+let y = 50;/);
+  assert.match(params.expression, /contentDocument/);
+});
+
+test("Page mouse click elsewhere and right clicks dispatch normally", async () => {
+  const clear = pointServices(null);
+  await clickPointInPage(clear, "session:page", 40, 50);
+  assert.equal(pressCount(clear.calls), 1);
+
+  const right = pointServices(DROPDOWN);
+  await clickPointInPage(right, "session:page", 40, 50, { button: "right" });
+  assert.equal(
+    right.calls.some(([method]) => method === "Runtime.evaluate"),
+    false,
+  );
+  assert.equal(pressCount(right.calls), 1);
+});
+
+test("Page mouse down checks only left presses for a native select", async () => {
+  const blocked = pointServices(DROPDOWN);
+  await assert.rejects(
+    () => mouseButtonInPage(blocked, "session:page", "mousePressed", 40, 50, 1),
+    assertNativeSelectRefusal("page.mouse.down", "select#dropdown"),
+  );
+  assert.equal(pressCount(blocked.calls), 0);
+
+  const release = pointServices(DROPDOWN);
+  await mouseButtonInPage(release, "session:page", "mouseReleased", 40, 50, 0);
+  assert.equal(
+    release.calls.some(([method]) => method === "Runtime.evaluate"),
+    false,
+    "releasing never opens a menu",
+  );
 });
