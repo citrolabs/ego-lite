@@ -2401,3 +2401,53 @@ test("the runtime response timeout defaults to 15 s and honors a test override",
     else process.env.EGO_BROWSER_RESPONSE_TIMEOUT_MS = previous;
   }
 });
+
+test("frame discovery is cached until a frame event, including a navigation start", async () => {
+  const previous = globalThis.ego;
+  let frameTreeReads = 0;
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      let result = {};
+      if (request.method === "Target.getTargets") {
+        result = { targetInfos: [{ targetId: "page-main", type: "page" }] };
+      } else if (request.method === "Page.getFrameTree") {
+        frameTreeReads += 1;
+        result = { frameTree: { frame: { id: "page-main" } } };
+      } else if (request.method === "Target.attachToTarget") {
+        result = { sessionId: `session:${request.params.targetId}` };
+      }
+      queueMicrotask(() => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      });
+    },
+  };
+  globalThis.ego = runtime;
+
+  try {
+    await ensureFrameSessions("page-main");
+    assert.equal(frameTreeReads, 1);
+    await ensureFrameSessions("page-main");
+    assert.equal(
+      frameTreeReads,
+      1,
+      "no target or frame event since the last discovery: answered from the cache",
+    );
+    // A main-frame navigation that has started but not committed suspends every
+    // renderer command. The cache must not hide that from the next discovery,
+    // whose Page.getFrameTree timeout is what names the unresponsive Page.
+    runtime.onCDPMessage(
+      JSON.stringify({
+        method: "Page.frameStartedLoading",
+        sessionId: "session:page-main",
+        params: { frameId: "page-main" },
+      }),
+    );
+    await ensureFrameSessions("page-main");
+    assert.equal(frameTreeReads, 2, "a navigation start invalidates the cache");
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
