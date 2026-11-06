@@ -444,8 +444,9 @@ const chooser = await chooserPromise;
 const result = await chooser.setFiles("/absolute/path/report.pdf");
 ```
 
-An upload-triggered JavaScript dialog may be returned as `result.dialog`; when
-present, handle it with the dialog methods above.
+Both methods cover iframes, including cross-process ones: call them on the
+top-level `page`. An upload-triggered JavaScript dialog may be returned as
+`result.dialog`; when present, handle it with the dialog methods above.
 
 For a browser download, arm the event before the triggering action and save the
 returned artifact to an absolute path in the same script:

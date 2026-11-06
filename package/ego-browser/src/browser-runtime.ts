@@ -218,6 +218,8 @@ export type FileChooserOpenedEvent = {
   backendNodeId: number;
   frameId?: string;
   mode?: "selectSingle" | "selectMultiple";
+  /** Page or OOPIF target whose session owns backendNodeId. */
+  targetId?: string;
 };
 
 export type FileChooserInterception = {
@@ -1071,8 +1073,11 @@ export async function pageNetworkSessions(
 
 /**
  * Suppress the operating-system file picker and observe the next chooser in
- * one Page session. The caller owns the short-lived interception and must
- * dispose it after setting files or completing an input action.
+ * one Page, including its OOPIFs. Chromium scopes both the interception and the
+ * event to the session of the frame's renderer, so every frame session is armed
+ * and the event carries the target that owns its backend node. The caller owns
+ * the short-lived interception and must dispose it after setting files or
+ * completing an input action.
  */
 export function prepareFileChooser(
   sessionId: string,
@@ -1098,11 +1103,54 @@ export function prepareFileChooser(
   // Attach a rejection observer so disposal never creates an unhandled promise.
   void event.catch(() => {});
 
+  const setIntercept = (interceptSessionId: string, enabled: boolean) =>
+    rawCdp(
+      "Page.setInterceptFileChooserDialog",
+      { enabled },
+      interceptSessionId,
+    );
+  // The guard waits for arming before every click, and a frame can vanish at
+  // any time or belong to a stalled third-party renderer. Its result is
+  // therefore best-effort and bounded; only the Page session can fail the wait.
+  const setFrameIntercept = (frameSessionId: string, enabled: boolean) =>
+    waitForSharedCdpRequest(
+      setIntercept(frameSessionId, enabled).then(() => {}),
+      "Page.setInterceptFileChooserDialog",
+      frameSessionId,
+      SESSION_SETUP_WAIT_MS,
+    ).catch(() => {});
+  const frameSessionIds = new Set<string>();
+  const interceptFrame = (frameSessionId: string): Promise<void> => {
+    // Discovery can outlive a failed or disposed wait, and nothing would ever
+    // release a frame armed after that point.
+    if (
+      target.fileChooserInterception !== interception ||
+      frameSessionId === sessionId ||
+      frameSessionIds.has(frameSessionId)
+    ) {
+      return Promise.resolve();
+    }
+    frameSessionIds.add(frameSessionId);
+    return setFrameIntercept(frameSessionId, true);
+  };
+  const releaseFrames = () =>
+    Promise.all(
+      [...frameSessionIds]
+        .filter((frameSessionId) => sessionTargets.has(frameSessionId))
+        .map((frameSessionId) => setFrameIntercept(frameSessionId, false)),
+    );
+  const releaseInterception = () =>
+    Promise.all([
+      setIntercept(sessionId, false).catch(() => {}),
+      releaseFrames(),
+    ]);
+
   const interception: any = {
     cancelPromise: undefined,
     event,
+    interceptFrame,
     reject: rejectEvent,
-    resolve(value: FileChooserOpenedEvent) {
+    resolve(value: FileChooserOpenedEvent, ownerSessionId = sessionId) {
       if (observed) return;
       observed = value;
       clearTimeout(interception.timer);
@@ -1113,7 +1161,7 @@ export function prepareFileChooser(
         interception.cancelPromise = rawCdp(
           "DOM.setFileInputFiles",
           { files: [], backendNodeId: value.backendNodeId },
-          sessionId,
+          ownerSessionId,
         ).catch(() => {});
       }
     },
@@ -1127,11 +1175,7 @@ export function prepareFileChooser(
       if (!observed && reason) rejectEvent(reason);
       await interception.ready.catch(() => {});
       await interception.cancelPromise;
-      const disable = rawCdp(
-        "Page.setInterceptFileChooserDialog",
-        { enabled: false },
-        sessionId,
-      ).catch(() => {});
+      const disable = releaseInterception();
       if (target.pendingDialog) {
         // Chromium can hold this housekeeping response until the modal dialog
         // closes. Send it now, but do not keep the triggering action's gate
@@ -1143,11 +1187,24 @@ export function prepareFileChooser(
     },
   };
   target.fileChooserInterception = interception;
-  interception.ready = rawCdp(
-    "Page.setInterceptFileChooserDialog",
-    { enabled: true },
+  const pageArmed = setIntercept(sessionId, true);
+  // Auto-attached frames are armed without waiting for discovery, which only
+  // adds the frames of bridges that do not support auto-attach.
+  const knownFramesArmed = pageTreeTargetIds(targetId!).map((treeTargetId) => {
+    const frameSessionId = targetStates.get(treeTargetId)?.sessionId;
+    return frameSessionId ? interceptFrame(frameSessionId) : undefined;
+  });
+  const discoveredFramesArmed = pageNetworkSessions(
     sessionId,
+    SESSION_SETUP_WAIT_MS,
   )
+    .then((sessionIds) => Promise.all(sessionIds.map(interceptFrame)))
+    .catch(() => {});
+  interception.ready = Promise.all([
+    pageArmed,
+    ...knownFramesArmed,
+    discoveredFramesArmed,
+  ])
     .then(() => {
       interception.timer = setTimeout(() => {
         const error: any = new Error(
@@ -1157,17 +1214,17 @@ export function prepareFileChooser(
         if (target.fileChooserInterception === interception) {
           target.fileChooserInterception = null;
           rejectEvent(error);
-          void rawCdp(
-            "Page.setInterceptFileChooserDialog",
-            { enabled: false },
-            sessionId,
-          ).catch(() => {});
+          void releaseInterception();
         }
       }, timeoutMs);
     })
     .catch((error) => {
+      // dispose() releases a wait it already took over. Otherwise frames armed
+      // before the Page failed stay armed, so release them here, before the
+      // rejection lets a retry send its own enable on the same sessions.
       if (target.fileChooserInterception === interception) {
         target.fileChooserInterception = null;
+        void releaseInterception();
       }
       rejectEvent(error);
       throw error;
@@ -1377,10 +1434,23 @@ function initializeAutoAttachedTarget(
   const pageEvents = enablePageEvents(sessionId);
   const networkEvents = enableNetworkTrackingForSession(sessionId);
   const nestedFrames = enableOopifAutoAttach(sessionId);
+  // A waiter armed before this frame attached must still see its chooser.
+  const targetId = sessionTargets.get(sessionId);
+  const fileChooser = targetId
+    ? targetStates
+        .get(pageRootTargetId(targetId))
+        ?.fileChooserInterception?.interceptFrame(sessionId)
+    : undefined;
   const resume = waitingForDebugger
     ? rawCdp("Runtime.runIfWaitingForDebugger", {}, sessionId).catch(() => {})
     : Promise.resolve();
-  void Promise.allSettled([pageEvents, networkEvents, nestedFrames, resume]);
+  void Promise.allSettled([
+    pageEvents,
+    networkEvents,
+    nestedFrames,
+    fileChooser,
+    resume,
+  ]);
 }
 
 /**
@@ -1693,7 +1763,15 @@ function handleMessage(message) {
       : undefined;
     if (root) root.pendingDialog = null;
   } else if (data.method === "Page.fileChooserOpened") {
-    target?.fileChooserInterception?.resolve(data.params || {});
+    // Interception lives on the top-level Page; the event arrives on the
+    // session of the frame's renderer, which also owns its backend node.
+    const root = targetId
+      ? targetStates.get(pageRootTargetId(targetId))
+      : undefined;
+    root?.fileChooserInterception?.resolve(
+      { ...data.params, targetId },
+      sessionId,
+    );
   }
   if (typeof data.method === "string" && BROWSER_LEVEL(data.method)) {
     for (const listener of [...browserEventSubscribers]) {
