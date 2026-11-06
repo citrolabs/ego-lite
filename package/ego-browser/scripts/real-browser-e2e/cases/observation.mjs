@@ -83,9 +83,17 @@ export function observationCase() {
       "elementCenter reports missing elements"
     );
 
+    await setViewportSize({ width: 390, height: 844 });
+    const viewportInfo = await pageInfo();
+    assertEqual(viewportInfo.w, 390, "setViewportSize sets the exact CSS viewport width");
+    assertEqual(viewportInfo.h, 844, "setViewportSize sets the exact CSS viewport height");
+
     const screenshotPath = await captureScreenshot(undefined, { full: false });
     const screenshotStat = await stat(screenshotPath);
     assert(screenshotStat.size > 0, "captureScreenshot writes a non-empty png");
+    const screenshotBuf = await readFile(screenshotPath);
+    assertEqual(screenshotBuf.readUInt32BE(16), 390, "screenshot PNG width matches the CSS viewport");
+    assertEqual(screenshotBuf.readUInt32BE(20), 844, "screenshot PNG height matches the CSS viewport");
 
     const explicitPath = await captureScreenshot(explicitScreenshotPath, { full: false });
     assertEqual(explicitPath, explicitScreenshotPath, "captureScreenshot returns explicit path");
