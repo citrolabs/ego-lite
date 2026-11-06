@@ -733,6 +733,8 @@ async function disposeProgramScope(scope: ProgramScope): Promise<void> {
   ]);
 }
 
+const INSPECT_CUSTOM = Symbol.for("nodejs.util.inspect.custom");
+
 /** How long a program's safety interception stays armed without an action. */
 const PROGRAM_FILE_CHOOSER_GUARD_MS = 30 * 60_000;
 // A missing action target stops being retried once the page has shown no DOM
@@ -1194,6 +1196,14 @@ class TaskSpace {
   /** Stable task-space identifier. `id` remains as a compatibility alias. */
   get spaceId(): number {
     return this.id;
+  }
+
+  /**
+   * One line when a handle is printed (console.log, or a host that prints a
+   * program's last value with util.inspect) instead of the whole object.
+   */
+  [INSPECT_CUSTOM](): string {
+    return `TaskSpace { spaceId: ${this.id}, name: ${JSON.stringify(this.name)} }`;
   }
 
   page(label: string): Page {
@@ -1998,6 +2008,11 @@ class Page {
         ),
       () => this.keyboard.modifierMask(),
     );
+  }
+
+  /** One line when a handle is printed; see TaskSpace. */
+  [INSPECT_CUSTOM](): string {
+    return `Page { label: ${JSON.stringify(this.label)}, spaceId: ${this.spaceId} }`;
   }
 
   get targetId(): string | undefined {

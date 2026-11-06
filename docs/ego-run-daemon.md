@@ -111,6 +111,12 @@ session's lifetime; `EGO_BROWSER_BIN` picks the executable the daemon starts.
   at that point keeps starting and the next program on the session adopts it
   (nothing is killed and retried). A program whose client has disconnected
   while it was queued is skipped.
+- The SDK learns program boundaries from its host: the daemon's wrapper calls
+  `__egoBeginProgram()` / `__egoEndProgram()` and drains the output sink with
+  `__egoBrowserFlushRound()`, while Ego Lite 0.6.3.5+ running a
+  `--session` script announces `ego:script-start` / `ego:script-end` on
+  `process`, which the SDK subscribes to (begin, then end + drain, once per
+  process). A direct run emits neither and ends its program from `beforeExit`.
 - Programs run inside the browser's Node Service, exactly like a direct
   `ego-browser nodejs` script. Neither the daemon's nor the client's working
   directory applies to the script (the guide requires absolute paths), so the

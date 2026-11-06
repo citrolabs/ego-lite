@@ -5376,6 +5376,25 @@ test("a file chooser guard the runtime dropped is re-armed by the next action", 
   });
 });
 
+test("handles print as one line instead of their whole object", async () => {
+  const { inspect } = await import("node:util");
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/inspect");
+    assert.equal(
+      inspect(page),
+      `Page { label: ${JSON.stringify(page.label)}, spaceId: ${page.spaceId} }`,
+    );
+    assert.equal(
+      inspect(task),
+      `TaskSpace { spaceId: ${task.spaceId}, name: ${JSON.stringify(task.name)} }`,
+    );
+    assert.doesNotMatch(inspect({ page, task }), /PageMouse|keyboard/);
+    // JSON output is unchanged: tools that serialize a space still get its fields.
+    assert.equal(JSON.parse(JSON.stringify(task)).name, task.name);
+  });
+});
+
 test("beginProgram releases a scope the previous program never ended", async () => {
   await withFixture(async (fixture) => {
     const task = taskForRound(fixture, "round-a");

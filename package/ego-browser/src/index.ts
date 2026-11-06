@@ -24,6 +24,33 @@ import { installPageContextGuard } from "./page-context-guard.js";
 import { beginProgram, endProgram } from "./page-model.js";
 import { disposeDownloadArtifacts } from "./driver/downloads.js";
 
+const HOST_PROGRAM_LISTENERS = Symbol.for("ego-browser.hostProgramListeners");
+
+/**
+ * A host that keeps this context alive across programs (Ego Lite 0.6.3.5+
+ * runs `ego-browser nodejs --session` scripts this way) announces each one on
+ * `process`: `ego:script-start` before a program runs and `ego:script-end`
+ * after it settled, whose listeners it awaits (2 s cap) before taking the
+ * program's output. A direct run emits neither and keeps the beforeExit path.
+ * Installed once per process, even when two copies of the SDK load (the
+ * bundled one and a `--sdk-path` one).
+ */
+function installHostProgramListeners(): void {
+  const host = process as unknown as Record<symbol, boolean | undefined>;
+  if (host[HOST_PROGRAM_LISTENERS]) return;
+  host[HOST_PROGRAM_LISTENERS] = true;
+  process.on("ego:script-start", () => {
+    // Output written between programs (a timer the last one left) belongs to
+    // no program; the host drops its own capture of it the same way.
+    resetSink();
+    beginProgram();
+  });
+  process.on("ego:script-end", async (event?: { thrown?: boolean }) => {
+    await endProgram();
+    flushRound(process.stdout, Boolean(event?.thrown));
+  });
+}
+
 type HelperFunction = (...args: unknown[]) => unknown;
 type EgoRuntime = Record<string, unknown> & {
   helpers?: Record<string, HelperFunction>;
@@ -141,6 +168,7 @@ export function installEgoSdk(
     installLifecycleFlush(process.stdout);
     // Best effort: the connection drop at exit releases interceptions anyway.
     process.once("beforeExit", () => void endProgram().catch(() => {}));
+    installHostProgramListeners();
     // A persistent context (the ego-run daemon's REPL session) drains the sink
     // after each program instead of waiting for process teardown.
     Object.defineProperty(target, "__egoBrowserFlushRound", {
