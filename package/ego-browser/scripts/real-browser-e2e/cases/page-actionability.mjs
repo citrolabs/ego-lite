@@ -339,6 +339,90 @@ export function pageActionabilityCase() {
       JSON.stringify(["grouped"]),
       "selectOption can programmatically select an option in a disabled optgroup"
     );
+
+    // CITRO-4909: a left press on a drop-down <select> opens a browser menu
+    // that blocks closing task spaces on macOS. The guard must refuse it
+    // before any press reaches the page, whether or not the menu would open.
+    await page.evaluate(() => {
+      const row = document.createElement("div");
+      row.className = "action-row";
+      row.innerHTML =
+        '<select id="native-dropdown"><option value="a">Alpha</option><option value="b">Beta</option></select>' +
+        '<div id="styled-dropdown" style="position:relative;width:160px;height:40px;background:#eee">Styled' +
+        '  <select id="covering-dropdown" style="position:absolute;inset:0;width:100%;height:100%;opacity:0">' +
+        '    <option value="x">Ex</option><option value="y">Why</option></select></div>' +
+        '<select id="native-listbox" size="3"><option value="l1">One</option><option value="l2">Two</option><option value="l3">Three</option></select>';
+      document.body.append(row);
+      window.__selectPresses = 0;
+      for (const select of row.querySelectorAll("select")) {
+        select.addEventListener("mousedown", () => window.__selectPresses++);
+      }
+    });
+    try {
+    const dropdownCenter = await page.evaluate(() => {
+      const rect = document.querySelector("#native-dropdown").getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    });
+
+    await assertRejects(
+      () => page.click("#native-dropdown", { timeout: 150 }),
+      'page.selectOption("select#native-dropdown"',
+      "click on a drop-down select names the selectOption call"
+    );
+    await assertRejects(
+      () => page.click("#native-dropdown", { force: true, timeout: 150 }),
+      "refused to press the left mouse button",
+      "force does not bypass the native select guard"
+    );
+    await assertRejects(
+      () => page.click("#styled-dropdown", { timeout: 150 }),
+      "select#covering-dropdown",
+      "click on a wrapper is refused when a transparent select receives the press"
+    );
+    await assertRejects(
+      () => page.mouse.click(dropdownCenter.x, dropdownCenter.y),
+      "page.mouse.click refused",
+      "mouse.click on a drop-down select is refused"
+    );
+    await page.mouse.move(dropdownCenter.x, dropdownCenter.y);
+    await assertRejects(
+      () => page.mouse.down(),
+      "page.mouse.down refused",
+      "mouse.down on a drop-down select is refused"
+    );
+    assertEqual(
+      await page.evaluate("window.__selectPresses"),
+      0,
+      "no refused press reaches a drop-down select"
+    );
+    assertEqual(
+      await page.evaluate(() => document.querySelector("#native-dropdown").matches(":open")),
+      false,
+      "no native select menu is left open"
+    );
+
+    await page.click("#native-listbox");
+    assertEqual(
+      await page.evaluate("window.__selectPresses"),
+      1,
+      "a list box opens no menu and stays clickable"
+    );
+    } finally {
+      // Removing a select dismisses its native menu if a regression opened one.
+      await page.evaluate(() => {
+        for (const id of ["native-listbox", "covering-dropdown"]) {
+          document.getElementById(id)?.remove();
+        }
+        const dropdown = document.getElementById("native-dropdown");
+        if (dropdown?.matches(":open")) dropdown.remove();
+      }).catch(() => {});
+    }
+    // The cleanup above keeps the dropdown unless a regression left its menu open.
+    assertEqual(
+      JSON.stringify(await page.selectOption("#native-dropdown", { label: "Beta" })),
+      JSON.stringify(["b"]),
+      "selectOption still chooses the option without opening the menu"
+    );
     } finally {
       await page.close();
     }

@@ -312,8 +312,13 @@ context. CSS searches nested open shadow roots. Actions use an actionable match
 in the top document first, then search frames when the top document has none.
 Multiple actionable matches in the selected document or frame are ambiguous.
 
-Select options by value, visible label, or zero-based index. A string matches
-either value or label; pass an array for a multiple select:
+A native `<select>` can appear in a snapshot as `combobox`. Choose its options
+with `selectOption()`, never by clicking: a left click on a drop-down `<select>`
+opens a browser menu that agents cannot close and that blocks task spaces from
+closing, so `click()`, `dblclick()`, `mouse.click()`, and `mouse.down()` refuse
+that press and name the `selectOption()` call to use. Select options by value,
+visible label, or zero-based index. A string matches either value or label;
+pass an array for a multiple select:
 
 ```js
 await page.selectOption("select[name=month]", { label: "October" });
