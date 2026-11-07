@@ -3,6 +3,12 @@ version: "2.2.1"
 date: "2026-10-16"
 ---
 
+Experimental Linux: sandboxed Chrome, isolated task storage, no personal logins.
+Tasks last until host exit/restart, build/configuration change or 30 minutes idle.
+Handoff and retaining tabs on finish require a display; `ego-browser stop` discards
+contexts. Snapshots cover the main document; native permission prompts are unsupported.
+See the entry Skill's `references/install.md` for setup and environment options.
+
 # ego-browser
 
 Call `help()` or `help("page.click")` to print signatures and uncommon options

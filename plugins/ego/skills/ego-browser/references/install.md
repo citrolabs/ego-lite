@@ -22,11 +22,12 @@ The install steps, the commands that confirm the installation, and the troublesh
 
 - macOS: [install-macos.md](install-macos.md)
 - Windows: [install-windows.md](install-windows.md)
+- Linux (experimental): [install-linux.md](install-linux.md)
 - Other platforms: there is no installer. Have the user check https://lite.ego.app/ for a build; if none exists, ego-browser is not available on this machine.
 
 ## Onboarding
 
-Onboarding is a step the user completes in the GUI, on every platform:
+For the macOS and Windows app, onboarding is a step the user completes in the GUI:
 
 - Choose to import data from Chrome or another browser as needed.
 - Onboarding registers the `ego-browser` command on the PATH.

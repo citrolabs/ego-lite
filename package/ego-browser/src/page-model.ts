@@ -495,6 +495,7 @@ type PageModelServices = {
   probeAgentControl(): Promise<boolean>;
   handOffTaskSpace(): Promise<void>;
   completeTaskSpace(): Promise<void>;
+  checkTaskSpaceCompletion?(): Promise<void>;
   closeTaskSpace(): Promise<void>;
   cdp(
     method: string,
@@ -929,6 +930,11 @@ const baseDefaultServices: Omit<PageModelServices, "ledger" | "pageBudget"> = {
     }
     await invokeEgo("task.handOff", () => ego.handOffTaskSpace());
   },
+  async checkTaskSpaceCompletion() {
+    const ego = globalThis.ego;
+    if (typeof ego?.checkTaskSpaceCompletion === "function")
+      await invokeEgo("task.finish", () => ego.checkTaskSpaceCompletion());
+  },
   async completeTaskSpace() {
     const ego = browserEgo();
     if (typeof ego.completeTaskSpace !== "function") {
@@ -1318,6 +1324,7 @@ class TaskSpace {
         };
       }
 
+      await this.#services.checkTaskSpaceCompletion?.();
       for (const label of labelsToClose) {
         await this.page(label).close();
       }
