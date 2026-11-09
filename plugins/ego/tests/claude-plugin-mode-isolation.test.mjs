@@ -72,6 +72,16 @@ function assertTaskSpaceSafety(skill, label) {
   );
   assert.match(
     skill,
+    /When the work for the current user message succeeds, close the TaskSpace/i,
+    `${label} must finish at the end of each user message`,
+  );
+  assert.match(
+    skill,
+    /space you finished with kept Pages,\s+not one the user stopped or took over/i,
+    `${label} must limit claiming without being asked to the agent's own kept space`,
+  );
+  assert.match(
+    skill,
     /does not verify the resulting application state/i,
     `${label} must distinguish action receipts from verified outcomes`,
   );
