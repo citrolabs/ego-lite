@@ -531,15 +531,14 @@ to resolve before reporting completion.
 user. Put it last in the final round only; do not operate any Page after it in
 the same script or in later rounds.
 
-Keep a Page only when the user explicitly asked to leave it open, or when the
-user must act in it next (for example, review and submit a form you filled).
-Showing an answer, a result, or a page the user might like to see is not a
-reason to keep it: report the result in your reply instead. Any kept Page
-leaves the space open instead of closing it.
+Keeping Pages is a rare exception: retain only necessary Pages when the user
+explicitly asks, or when the result must remain in the browser for the user to
+view or continue working with. Pages merely visited, search results, and
+intermediate steps do not need to remain open.
 
 ```js
-await task.finish({ keep: [] }); // Default: close the space.
-await task.finish({ keep: ["p2"] }); // Only if the user asked to keep p2 open.
+await task.finish({ keep: [] }); // Default: keep no Agent-managed Pages.
+await task.finish({ keep: ["p2"] }); // Exception: keep only the result Page for the user.
 ```
 
 User-created and unknown-origin tabs are protected; if any remain, `keep: []`
