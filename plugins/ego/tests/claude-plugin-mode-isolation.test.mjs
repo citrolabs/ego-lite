@@ -47,8 +47,13 @@ function assertTaskSpaceSafety(skill, label) {
   );
   assert.match(
     skill,
-    /Claim a user-owned or inactive space only when the\s+user explicitly asks/i,
+    /Claim a user-owned or inactive space only when the\s+user asks to continue in it/i,
     `${label} must not implicitly claim a user-owned TaskSpace`,
+  );
+  assert.match(
+    skill,
+    /Claim only the space you used for that goal,\s+never\s+another\s+one/i,
+    `${label} must limit follow-up claims to the goal's own TaskSpace`,
   );
   assert.match(
     skill,
@@ -162,7 +167,7 @@ test("versioned guide restores v2 Pages across script rounds", () => {
     skill,
     /Every invocation starts a new Node\.js process[\s\S]*Page labels\s+persist; JavaScript variables do not/i,
   );
-  assert.match(skill, /await taskSpace\(7\);[\s\S]*resumed\.page\("p1"\)/);
+  assert.match(skill, /: await taskSpace\(7\);[\s\S]*task\.adopt\(/);
   assert.match(skill, /After the page changes, take a new snapshot/);
   assert.doesNotMatch(
     skill,
