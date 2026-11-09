@@ -522,9 +522,7 @@ reply:
 
 ```js
 const task = await taskSpace(7); // the taskSpaceId printed earlier in this reply
-// Default: close the space. Close its Pages first: tabs you kept and adopted after
-// a claim read openedBy "unknown", so `keep: []` alone would leave them open.
-for (const page of await task.pages()) await page.close();
+// Default: close the space, including tabs you kept in an earlier reply.
 await task.finish({ keep: [] });
 
 // Exception, instead of the default: keep only the result Page for the user.
@@ -563,11 +561,12 @@ asks; the space you finished for the current goal is claimed as in "Starting
 and ending a reply".
 
 User-created and unknown-origin tabs are protected; if any remain, `keep: []`
-does not close the whole space. Tabs you kept and adopted after a claim also
-read `openedBy: "unknown"` but are yours, which is why the default close above
-closes the Pages first. The blank tab that `page.close()` leaves when it closes
-the last Page is SDK-owned and never blocks closing. Do not call `finish()` when
-the task stops for user control or an error.
+does not close the whole space, and the script output says so. Tabs you kept in
+an earlier reply stay yours after a claim and do not block closing. The blank
+tab that `page.close()` leaves when it closes the last Page is SDK-owned and
+never blocks closing. Do not close unwanted Pages one by one at completion; list
+the Pages to keep instead. Do not call `finish()` when the task stops for user
+control or an error.
 
 If the final output contains `[ego-browser:notice]`, finish the current browser
 task, tell the user an Ego Lite update is available, and run

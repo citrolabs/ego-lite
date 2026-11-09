@@ -18,6 +18,7 @@ import {
   PageUnresponsiveError,
 } from "../dist/src/browser-runtime.js";
 import { PageLedgerStore } from "../dist/src/page-ledger.js";
+import { flushSink, resetSink } from "../dist/src/output-sink.js";
 import {
   captureTaskSpaceUserBoundary,
   createTaskSpaceHandle,
@@ -1699,6 +1700,132 @@ test("TaskSpace finish closes the space when a new Page follows the last close",
       closedManagedLabels: ["p2"],
       preservedUnmanagedCount: 0,
     });
+    assert.deepEqual(lifecycleCalls, ["close"]);
+  });
+});
+
+async function finishKeepingFirstPage(fixture, lifecycleCalls) {
+  const { task } = finishFixtureTask(fixture, lifecycleCalls);
+  const kept = await openTestPage(task, "https://example.test/kept");
+  await task.finish({ keep: [kept.label] });
+  lifecycleCalls.length = 0;
+  return kept.targetId;
+}
+
+function capturedRoundOutput() {
+  let output = "";
+  flushSink(
+    {
+      write(chunk) {
+        output += chunk;
+      },
+    },
+    false,
+  );
+  return output;
+}
+
+test("TaskSpace finish closes a claimed space holding only tabs the agent kept", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const keptTarget = await finishKeepingFirstPage(fixture, lifecycleCalls);
+
+    const { task: claimed } = finishFixtureTask(fixture, lifecycleCalls);
+    assert.equal(
+      (await claimed.pages()).length,
+      0,
+      "labels ended with the task",
+    );
+    const receipt = await claimed.finish({ keep: [] });
+
+    assert.deepEqual(receipt, {
+      spaceId: 7,
+      closedSpace: true,
+      keptManagedLabels: [],
+      closedManagedLabels: [],
+      preservedUnmanagedCount: 0,
+    });
+    assert.deepEqual(lifecycleCalls, ["close"]);
+    assert.ok(keptTarget);
+  });
+});
+
+test("TaskSpace finish protects a tab opened while the user owned the space", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const lifecycleCalls = [];
+    const keptTarget = await finishKeepingFirstPage(fixture, lifecycleCalls);
+    fixture.addExternalTab("target-user", "https://example.test/user");
+
+    const { task: claimed } = finishFixtureTask(fixture, lifecycleCalls);
+    const origins = Object.fromEntries(
+      (await claimed.tabs()).map((tab) => [tab.targetId, tab.openedBy]),
+    );
+    assert.deepEqual(origins, {
+      [keptTarget]: "agent",
+      "target-user": "unknown",
+    });
+    const receipt = await claimed.finish({ keep: [] });
+
+    assert.equal(receipt.closedSpace, false);
+    assert.equal(receipt.preservedUnmanagedCount, 1);
+    assert.deepEqual(lifecycleCalls, ["finish"]);
+    assert.equal(fixture.tabs.has(keptTarget), false, "the kept tab is closed");
+    assert.equal(fixture.tabs.has("target-user"), true, "the user tab remains");
+    assert.match(
+      capturedRoundOutput(),
+      /did not close task space 7: 1 tab\(s\) of user or unknown origin/,
+    );
+    resetSink();
+  });
+});
+
+test("TaskSpace finish leaves earlier kept tabs open unless it keeps nothing", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const keptTarget = await finishKeepingFirstPage(fixture, lifecycleCalls);
+
+    const { task: second } = finishFixtureTask(fixture, lifecycleCalls);
+    const secondPage = await openTestPage(second, "https://example.test/two");
+    const receipt = await second.finish({ keep: [secondPage.label] });
+    assert.equal(receipt.closedSpace, false);
+    assert.equal(
+      fixture.tabs.has(keptTarget),
+      true,
+      "named keep does not close it",
+    );
+
+    const { task: third } = finishFixtureTask(fixture, lifecycleCalls);
+    const keepAll = await third.finish({ keep: "all" });
+    assert.equal(keepAll.closedSpace, false);
+    assert.equal(
+      fixture.tabs.has(keptTarget),
+      true,
+      "keep all does not close it",
+    );
+
+    lifecycleCalls.length = 0;
+    const { task: last } = finishFixtureTask(fixture, lifecycleCalls);
+    const closing = await last.finish({ keep: [] });
+    assert.equal(closing.closedSpace, true, "origin survives repeated rounds");
+    assert.deepEqual(lifecycleCalls, ["close"]);
+  });
+});
+
+test("TaskSpace finish closes a claimed space after its kept tab is adopted", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const keptTarget = await finishKeepingFirstPage(fixture, lifecycleCalls);
+
+    const { task: claimed } = finishFixtureTask(fixture, lifecycleCalls);
+    const [tab] = await claimed.tabs();
+    assert.equal(tab.targetId, keptTarget);
+    const adopted = await claimed.adopt(tab.page);
+    assert.equal(adopted.openedBy, "agent");
+
+    const receipt = await claimed.finish({ keep: [] });
+    assert.equal(receipt.closedSpace, true);
+    assert.deepEqual(receipt.closedManagedLabels, [adopted.label]);
     assert.deepEqual(lifecycleCalls, ["close"]);
   });
 });

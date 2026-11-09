@@ -35,6 +35,8 @@ export type PageLedger = {
   initialized: boolean;
   userControlPending: boolean;
   unmanagedTargets: Record<string, PageOrigin>;
+  /** Agent tabs an earlier finish() left open for the user. */
+  retainedTargets: string[];
   pages: Record<string, PageLedgerEntry>;
 };
 
@@ -178,6 +180,23 @@ export class PageLedgerStore {
     assertSpaceId(spaceId);
     const browserInstanceId = await this.#currentBrowserInstanceId();
     await this.#removeAll(await this.#listVersions(spaceId, browserInstanceId));
+  }
+
+  /**
+   * End a task whose space stays open for the user. Labels end with the task,
+   * but the origin of the tabs the agent left open survives so a later claim
+   * does not mistake them for user tabs. The ledger stays uninitialized: every
+   * other tab found at the claim is still treated as unknown.
+   */
+  async retainForUser(spaceId: number, targetIds: string[]): Promise<void> {
+    assertSpaceId(spaceId);
+    targetIds.forEach(assertTargetId);
+    const ledger = emptyLedger(spaceId, await this.#currentBrowserInstanceId());
+    for (const targetId of targetIds) {
+      ledger.unmanagedTargets[targetId] = "agent";
+    }
+    ledger.retainedTargets = [...targetIds];
+    await this.#writeLatest(spaceId, ledger);
   }
 
   async getPage(spaceId: number, label: string): Promise<ManagedPage> {
@@ -363,6 +382,9 @@ export class PageLedgerStore {
       for (const targetId of Object.keys(ledger.unmanagedTargets)) {
         if (!live.has(targetId)) delete ledger.unmanagedTargets[targetId];
       }
+      ledger.retainedTargets = ledger.retainedTargets.filter((targetId) =>
+        live.has(targetId),
+      );
 
       const managedTargets = new Set(
         Object.values(ledger.pages).map((page) => page.targetId),
@@ -712,6 +734,7 @@ function emptyLedger(spaceId: number, browserInstanceId?: string): PageLedger {
     initialized: false,
     userControlPending: false,
     unmanagedTargets: {},
+    retainedTargets: [],
     pages: {},
   };
 }
@@ -757,6 +780,7 @@ function validateLedger(
     stored.userControlPending ??
     (legacyHandoffBaseline !== undefined && legacyHandoffBaseline !== null);
   const unmanagedTargets = stored.unmanagedTargets ?? {};
+  const retainedTargets = stored.retainedTargets ?? [];
   if (
     (stored.browserInstanceId !== undefined &&
       (typeof stored.browserInstanceId !== "string" ||
@@ -788,6 +812,10 @@ function validateLedger(
       ([targetId, openedBy]) =>
         targetId.length === 0 ||
         !["agent", "user", "unknown"].includes(openedBy),
+    ) ||
+    !Array.isArray(retainedTargets) ||
+    retainedTargets.some(
+      (targetId) => typeof targetId !== "string" || targetId.length === 0,
     ) ||
     !stored.pages ||
     typeof stored.pages !== "object" ||
@@ -835,6 +863,7 @@ function validateLedger(
     initialized,
     userControlPending,
     unmanagedTargets: normalizedUnmanagedTargets,
+    retainedTargets: [...retainedTargets],
     pages,
   };
 }
