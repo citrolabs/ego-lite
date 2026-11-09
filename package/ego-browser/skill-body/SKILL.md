@@ -556,9 +556,8 @@ Call `finish()` exactly once and wait for it
 to resolve before reporting completion.
 
 `finish()` ends the task and all of its Page labels, including Pages kept for the
-user. Run it in a separate last script, after earlier output has shown that the
-request is done; do not operate any Page after it in the same script or in later
-rounds.
+user. Put it last in the work for that message; do not operate any Page after
+it in the same script or in later rounds.
 
 Keeping Pages is a rare exception: retain only necessary Pages when the user
 explicitly asks, or when the result must remain in the browser for the user to
