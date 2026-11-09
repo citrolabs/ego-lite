@@ -64,13 +64,22 @@ export async function startFixtureServer(taskName) {
         ? `ego-browser ${space} TaskSpace download\n`
         : "ego-browser download fixture\n";
       const filename = space ? `ego-${space}-download.txt` : "ego-download.txt";
-      res.writeHead(200, {
-        "content-type": "text/plain",
-        "content-length": Buffer.byteLength(body),
-        "content-disposition": `attachment; filename="${filename}"`,
-        "cache-control": "no-store",
-      });
-      res.end(body);
+      // `delay` holds the response headers back, like a server that generates
+      // an export before it answers: Chromium only creates the download, and
+      // picks its target directory, once the headers arrive.
+      const delayMs = Math.min(
+        Number(url.searchParams.get("delay")) || 0,
+        10_000,
+      );
+      setTimeout(() => {
+        res.writeHead(200, {
+          "content-type": "text/plain",
+          "content-length": Buffer.byteLength(body),
+          "content-disposition": `attachment; filename="${filename}"`,
+          "cache-control": "no-store",
+        });
+        res.end(body);
+      }, delayMs);
       return;
     }
     if (url.pathname === "/api/openai-gpt-4-system-card.pdf") {
@@ -349,6 +358,72 @@ export async function startFixtureServer(taskName) {
         </html>`);
       return;
     }
+    if (url.pathname === "/snapshot-viewport-overflow") {
+      // Mirrors the CITRO-4285 repro: the button sits at the bottom edge of the
+      // viewport, so the result it reveals lands just below the fold.
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(`<!doctype html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>snapshot viewport overflow</title>
+            <style>
+              body { margin: 0; font: 16px sans-serif; }
+              #spacer { height: calc(100vh - 40px); background: #eef; }
+              #out { margin-top: 60px; }
+            </style>
+          </head>
+          <body>
+            <div id="spacer">Spacer</div>
+            <button id="go">Submit</button>
+            <div id="out"></div>
+            <script>
+              document.getElementById("go").addEventListener("click", () => {
+                const out = document.getElementById("out");
+                out.innerHTML = '<p role="status">Checking…</p>';
+                setTimeout(() => {
+                  out.innerHTML = '<div role="status">RESULT-OK ticket T-1234</div>';
+                }, 300);
+              });
+            </script>
+          </body>
+        </html>`);
+      return;
+    }
+    if (url.pathname === "/wheel-trap") {
+      // Mirrors the CITRO-4275 repro: a block that swallows wheel events covers
+      // the bottom of the viewport, and the input sits below it. With
+      // ?slow=<ms> every wheel event also blocks the main thread for that long.
+      const trap = url.searchParams.get("trap") === "1";
+      const slowMs = Number(url.searchParams.get("slow") || 0);
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(`<!doctype html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>wheel trap</title>
+          </head>
+          <body style="margin:0">
+            <div style="height:500px">top</div>
+            <div id="trap" style="height:800px;background:#ddd">wheel trap</div>
+            <input id="target" style="display:block;margin:200px 0 600px">
+            <script>
+              window.__wheelEvents = 0;
+              addEventListener("wheel", () => { window.__wheelEvents += 1; }, { capture: true });
+              const trap = ${trap};
+              const slowMs = ${slowMs};
+              if (trap || slowMs > 0) {
+                document.getElementById("trap").addEventListener("wheel", (event) => {
+                  if (trap) event.preventDefault();
+                  const until = performance.now() + slowMs;
+                  while (performance.now() < until) {}
+                }, { passive: false });
+              }
+            </script>
+          </body>
+        </html>`);
+      return;
+    }
     if (url.pathname === "/nav-target") {
       res.writeHead(200, { "content-type": "text/html" });
       res.end(pageHtml("nav-target"));
@@ -411,6 +486,20 @@ export async function startFixtureServer(taskName) {
       }, delayMs);
       return;
     }
+    if (url.pathname === "/hold-page") {
+      // Hold the whole response so a main-frame navigation to this URL stays
+      // started but not committed until the client stops it or gives up.
+      const holdMs = Number(url.searchParams.get("ms") || 60_000);
+      const timer = setTimeout(() => {
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end(
+          "<!doctype html><html><head><title>held page</title></head>" +
+            '<body><h1 id="held-marker">held document loaded</h1></body></html>',
+        );
+      }, holdMs);
+      req.on("close", () => clearTimeout(timer));
+      return;
+    }
     if (url.pathname === "/streamed-page") {
       const delayMs = Number(url.searchParams.get("ms") || 1000);
       res.writeHead(200, { "content-type": "text/html" });
@@ -453,6 +542,24 @@ export async function startFixtureServer(taskName) {
           </head>
           <body><h1>Favicon redirect fixture</h1></body>
         </html>`);
+      return;
+    }
+    if (url.pathname === "/service-worker/sw.js") {
+      res.writeHead(200, {
+        "content-type": "text/javascript",
+        "cache-control": "no-store",
+      });
+      res.end(`
+        self.addEventListener("install", () => self.skipWaiting());
+        self.addEventListener("activate", (event) =>
+          event.waitUntil(self.clients.claim())
+        );
+        self.addEventListener("fetch", (event) => {
+          if (new URL(event.request.url).pathname === "/service-worker/ping") {
+            event.respondWith(new Response("service-worker-pong"));
+          }
+        });
+      `);
       return;
     }
     if (url.pathname === "/favicon.ico") {

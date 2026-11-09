@@ -1,6 +1,6 @@
 ---
-version: "2.1.0"
-date: "2026-10-08"
+version: "2.2.0"
+date: "2026-10-16"
 ---
 
 # ego-browser
@@ -8,14 +8,20 @@ date: "2026-10-08"
 Call `help()` or `help("page.click")` to print signatures and uncommon options
 of APIs named below; it prints by itself, so do not wrap it in `console.log`.
 For installation or connection problems, read `references/install.md` in the
-ego-browser Skill directory.
+ego-browser Skill directory and follow its link for your operating system.
 
 ## Run browser scripts
 
-Pass the script to `ego-browser nodejs`. The form depends on the shell that runs
-the command: heredoc is Bash/Zsh syntax and does not exist in PowerShell or cmd.
+Pass the script to `ego-browser nodejs`.
+
+<!-- platform: windows -->
+
+The form depends on the shell that runs the command: heredoc is Bash/Zsh
+syntax and does not exist in PowerShell or cmd.
 
 ### Bash, Zsh, Git Bash
+
+<!-- /platform -->
 
 ```bash
 ego-browser nodejs <<'EOF'
@@ -39,6 +45,8 @@ await task.page("p1").goto("https://example.com");
 console.log(task.spaceId);
 '
 ```
+
+<!-- platform: windows -->
 
 ### PowerShell
 
@@ -88,6 +96,8 @@ it; top-level `await` itself is supported. Do not wrap the code in an async
 IIFE, open a new task space, or resend the same command. Switch to the `.mjs`
 file form above.
 
+<!-- /platform -->
+
 The script always runs in Node.js, not in the web Page. Browser helpers and
 Node.js APIs belong in the script; Page globals such as `window`, `document`,
 `location`, and DOM APIs do not. Put browser-side JavaScript inside
@@ -132,9 +142,8 @@ and diagnose the CLI or installation only if it fails.
   name.
 - Never use a new TaskSpace to recover from a stuck, blocked, timed-out, or
   unexpected Page. Recover within the existing space; if it cannot continue,
-  stop and ask the user. After user-authorized recovery, inspect `await task.tabs()`
-  and take a fresh snapshot or screenshot of the intended Page before acting;
-  do not reuse pre-error refs, coordinates, or assumptions about the active tab.
+  stop and ask the user. After authorized recovery, inspect `task.tabs()` and
+  refresh the intended Page's snapshot or screenshot; discard old refs/coordinates.
 - Every invocation starts a new Node.js process. Task spaces, tabs, and Page labels
   persist; JavaScript variables do not.
 - A new task space starts with Page `p1`; navigate it instead of opening
@@ -212,6 +221,13 @@ ego-browser provides the following Page API:
 or Node.js modules from the surrounding script. Define browser-side helpers
 inside the callback or pass one JSON-serializable value as its second argument.
 
+`goto()` and `reload()` stop a navigation that has not committed by their
+timeout, so the Page stays usable on its previous document; retry with a longer
+timeout. Any other call on a Page whose navigation is pending (after a link
+click, for example) waits one bounded period, then fails with
+`EGO_PAGE_UNRESPONSIVE` and stops that navigation; the error says which
+document the Page shows now and how to load the pending one.
+
 Work efficiently:
 
 - Each time you observe, collect only the cheapest page state sufficient to
@@ -240,10 +256,15 @@ before it can choose the next target, which wastes compute.
 
 Wait for the expected result: use `waitForURL()` for navigation,
 `waitForSelector()` for element state, or `waitForFunction()` for application
-state. Avoid fixed delays when an observable condition exists. A snapshot
-captures the current moment; it does not wait for the page to become stable.
+state. Avoid fixed delays when an observable condition exists. Actions stop
+waiting for a missing target once the page is idle, so `waitForSelector()`
+first when an element is expected later. A snapshot captures the current
+moment; it does not wait for the page to become stable.
 `page.snapshot()` captures the current viewport. For content outside it, use
-`page.snapshot({ scope: "full_page" })`.
+`page.snapshot({ scope: "full_page" })`. When the document scrolls past the
+viewport, the snapshot ends with a `[more content below the viewport: ...]`
+line: nodes are omitted, not absent. If the expected result may land below
+the fold, scroll or use `full_page` before concluding it did not appear.
 
 The default viewport snapshot includes visible iframe content returned by the
 browser. To focus on a frame's subtree, reuse the ref printed on its `iframe`
@@ -305,8 +326,9 @@ interactive ancestor or unique editable descendant; `fill()` and
 `setInputFiles()` only continue to a unique compatible control.
 
 `click()`, `fill()`, `hover()`, and `dragAndDrop()` automatically bring their
-target into view with browser wheel input. Do not pre-scroll solely to make a
-DOM target actionable.
+target into view with browser wheel input, falling back to a programmatic
+scroll when the wheel does not move the target. Do not pre-scroll solely to
+make a DOM target actionable.
 
 Snapshot node names are accessibility roles. Use a ref now or `loc=...` to find
 the element again. After the page changes, take a new snapshot. When a useful
@@ -338,10 +360,15 @@ console.log({ screenshot: path });
 ```
 
 `path` must be absolute; relative paths are rejected. Omit `path` to write
-into the system temporary directory and use the returned file path. On
-Windows, write paths with forward slashes, such as
+into the system temporary directory and use the returned file path.
+
+<!-- platform: windows -->
+
+On Windows, write paths with forward slashes, such as
 `C:/Users/<name>/ego-shots/before.png`, because backslashes are escape
 characters inside JavaScript strings.
+
+<!-- /platform -->
 
 Inspect the screenshot with an image-viewing tool. Coordinates use CSS pixels;
 keyboard names and `+`-separated chords follow Playwright syntax. Use
@@ -350,14 +377,11 @@ keyboard names and `+`-separated chords follow Playwright syntax. Use
 position and resolves when that motion completes. In each script invocation, move or
 click over the intended scrollable area before using it.
 
-Default screenshots already use CSS-pixel dimensions. If an image viewer resizes
-one again, map displayed coordinates `(x, y)` back to the captured viewport:
-`(x * w / displayedWidth, y * h / displayedHeight)`. Record `w: innerWidth` and
-`h: innerHeight` with `page.evaluate()` at capture time; `page.info()` fields
-`pw`/`ph` are scrollable document dimensions, not viewport dimensions. For a crop
-or full-page image, first map to document coordinates using its captured bounds,
-then subtract the current scroll offset for mouse coordinates. After scrolling
-or resizing, prefer a fresh viewport screenshot and recalibrate.
+Viewport screenshots use CSS pixels. If a viewer resizes one, scale `(x,y)` by
+`innerWidth/displayedWidth` and `innerHeight/displayedHeight`; capture viewport
+size with `page.evaluate()` at screenshot time, not `page.info().pw/ph` (document
+size). Crops/full-page images need their captured bounds and current scroll offset;
+prefer a fresh viewport capture.
 
 On macOS and Windows, `keyboard.paste()` sends the native paste shortcut and
 then restores the user's clipboard. Pass `{ text, html }` when a rich editor
@@ -421,6 +445,11 @@ the destination matters.
 For uncommon protocol-event workflows, `await page.events()` returns and clears
 the buffered event array; it is not an EventEmitter.
 
+Page sessions hide page console messages from CDP so sites cannot detect the
+automation. To read `Runtime.consoleAPICalled` while debugging, first call
+`await page.cdp("egoAutomated.disable")`, then `page.cdp("Runtime.enable")`.
+Sites can detect CDP again while it is off.
+
 A synchronous JavaScript dialog may appear as `receipt.dialog` or in
 `page.info()`. Handle it before continuing:
 
@@ -470,8 +499,8 @@ await download.saveAs("/absolute/path/report.pdf");
 directories. `download.path()` returns the round-local temporary file;
 `failure()`, `cancel()`, and `delete()` manage its lifecycle. Temporary download
 files are removed when the SDK round is disposed, so call `saveAs()` before the
-script ends. Do not set a global download directory with raw CDP; each download
-wait configures and restores only the addressed Page session.
+script ends. Do not set a download directory with raw CDP; the download wait
+manages the browser's single shared download setting.
 
 `page.fetch()` runs `window.fetch()` in the Page: relative URLs, cookies, and
 service workers use that Page, and browser CORS still applies. It returns
@@ -544,9 +573,10 @@ await task.finish({ keep: [] }); // Default: keep no Agent-managed Pages.
 await task.finish({ keep: ["p2"] }); // Exception: keep only the result Page for the user.
 ```
 
-User-created and unmanaged tabs are protected; if any remain, `keep: []` does
-not close the whole space. Do not close unwanted Pages one by one at completion;
-list the Pages to keep instead.
+User-created and unknown-origin tabs are protected; if any remain, `keep: []`
+does not close the whole space. The blank tab that `page.close()` leaves when it
+closes the last Page is SDK-owned and never blocks closing. Do not close
+unwanted Pages one by one at completion; list the Pages to keep instead.
 Use `page.close()` only while the task is still in progress. Do not call
 `finish()` when the task stops for user control or an error.
 

@@ -29,18 +29,35 @@ const targets = [
     true,
   ],
   ["cursor", "Cursor", [".cursor-plugin"]],
-  ["github-copilot", "GitHub Copilot", [".claude-plugin"]],
-  ["grok-build", "Grok Build", []],
+  [
+    "github-copilot",
+    "GitHub Copilot",
+    [],
+    ".github/plugin/marketplace.json",
+    true,
+  ],
+  ["grok-build", "Grok Build", [".claude-plugin"]],
   [
     "workbuddy",
     "WorkBuddy",
-    [".claude-plugin", ".codebuddy-plugin", ".workbuddy-plugin"],
-    ".claude-plugin/marketplace.json",
+    [".codebuddy-plugin"],
+    ".codebuddy-plugin/marketplace.json",
   ],
   ["qwenwork", "QwenWork Desktop", [".claude-plugin"]],
   ["opencode", "OpenCode"],
   ["deepseek-harness", "DeepSeek Harness"],
+  ["pi", "Pi"],
 ];
+const npmKeywords = {
+  opencode: "opencode",
+  "deepseek-harness": "deepseek-harness",
+  pi: "pi-package",
+};
+const npmNames = {
+  opencode: "@ego-lite/opencode-plugin",
+  "deepseek-harness": "@ego-lite/dsh-plugin",
+  pi: "@ego-lite/pi-plugin",
+};
 
 function write(path, value) {
   mkdirSync(dirname(path), { recursive: true });
@@ -50,7 +67,7 @@ function writeJson(path, value) {
   write(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function addPlugin(root, name, version, skillName) {
+function addPlugin(root, name, version, skillName, npmPackages, npmVersion) {
   const pluginRoot = join(root, "plugins", name);
   const manifest = {
     name,
@@ -85,6 +102,9 @@ function addPlugin(root, name, version, skillName) {
       "./dsh": "./dsh/src/index.js",
     },
     dsh: { bundle: { patch: "./cordis.patch.yml" } },
+    npmPackages,
+    npmVersion,
+    keywords: ["agent-plugin"],
   });
   write(join(pluginRoot, "index.js"), "export default async () => ({});\n");
   write(
@@ -121,7 +141,7 @@ function createFixture() {
     join(repositoryRoot, "plugins", "scripts", "package-plugins.mjs"),
     join(root, "plugins", "scripts", "package-plugins.mjs"),
   );
-  addPlugin(root, "ego", "1.3.1", "ego-browser");
+  addPlugin(root, "ego", "1.3.1", "ego-browser", npmNames, "1.0.0");
   addPlugin(root, "sample", "2.4.0", "sample-skill");
   return root;
 }
@@ -176,7 +196,7 @@ function assertArtifacts(root, output, name, version, skillName) {
   assert.equal(
     existsSync(release),
     true,
-    "packaging must create a version directory with nine host artifacts",
+    "packaging must create a version directory with ten host artifacts",
   );
   assert.deepEqual(
     readdirSync(release).sort(),
@@ -228,19 +248,36 @@ function assertArtifacts(root, output, name, version, skillName) {
       } else {
         expected.push(
           "package.json",
-          ...(id === "opencode"
-            ? ["index.js"]
-            : ["cordis.patch.yml", "dsh/src/index.js"]),
+          ...{
+            opencode: ["index.js"],
+            "deepseek-harness": ["cordis.patch.yml", "dsh/src/index.js"],
+            pi: [],
+          }[id],
         );
         const pkg = JSON.parse(
           readFileSync(join(plugin, "package.json"), "utf8"),
         );
-        assert.equal(pkg.name, `${sourcePackage.name}-${id}`);
-        assert.equal(pkg.version, version);
+        assert.equal(
+          pkg.name,
+          name === "ego" ? npmNames[id] : `${sourcePackage.name}-${id}`,
+          "only ego names its npm packages; other plugins derive theirs",
+        );
+        assert.equal(pkg.npmPackages, undefined);
+        assert.equal(pkg.npmVersion, undefined);
+        assert.equal(
+          pkg.version,
+          sourcePackage.npmVersion ?? version,
+          "npm packages take npmVersion when the plugin sets one",
+        );
         assert.equal(
           pkg.scripts,
           undefined,
           "source lifecycle and development scripts must not ship",
+        );
+        assert.deepEqual(
+          pkg.keywords,
+          [npmKeywords[id], ...sourcePackage.keywords],
+          "each npm package names only its own host",
         );
         if (id === "opencode") {
           assert.deepEqual(pkg.exports, {
@@ -248,8 +285,21 @@ function assertArtifacts(root, output, name, version, skillName) {
             "./server": "./index.js",
           });
           assert.equal(pkg.dsh, undefined);
+        } else if (id === "pi") {
+          assert.equal(pkg.exports, undefined);
+          assert.equal(pkg.dsh, undefined);
+          assert.deepEqual(pkg.pi.skills, ["./skills"]);
+          assert.equal(
+            pkg.pi.image,
+            `https://raw.githubusercontent.com/citrolabs/ego-lite/v${sourcePackage.version}/skills/ego-browser/assets/logo.png`,
+            "the gallery image is pinned to the plugin's release tag",
+          );
         } else {
-          assert.deepEqual(pkg.exports, { "./dsh": "./dsh/src/index.js" });
+          assert.deepEqual(pkg.exports, {
+            "./dsh": "./dsh/src/index.js",
+            "./package.json": "./package.json",
+          });
+          assert.deepEqual(pkg.engines, { dsh: ">=0.2.0" });
           assert.deepEqual(pkg.dsh, {
             bundle: { patch: "./cordis.patch.yml" },
           });
@@ -292,7 +342,9 @@ function assertArtifacts(root, output, name, version, skillName) {
           marketplace.plugins[0].source,
           id === "codex"
             ? { source: "local", path: "./" }
-            : `./plugins/${name}`,
+            : flat
+              ? "./"
+              : `./plugins/${name}`,
         );
         assert.deepEqual(
           files(contents),
@@ -319,11 +371,15 @@ function assertArtifacts(root, output, name, version, skillName) {
             `
         import assert from 'node:assert/strict';
         import { existsSync } from 'node:fs';
-        import { EgoBrowserPlugin } from '@citrolabs/ego-opencode/server';
+        import { join } from 'node:path';
+        import plugin from '@ego-lite/opencode-plugin/server';
         const config = {};
-        await (await EgoBrowserPlugin()).config(config);
-        assert.ok(existsSync(config.instructions[0]));
-        assert.ok(config.command['ego-browser']);
+        await (await plugin.server()).config(config);
+        assert.ok(existsSync(join(config.skills.paths[0], 'ego-browser', 'SKILL.md')));
+        const added = [];
+        await plugin.setup({ skill: { transform: async (edit) => edit({ get() {}, add: (skill) => added.push(skill) }) } });
+        assert.equal(added.length, 1);
+        assert.ok(existsSync(added[0].path));
       `,
           ],
           { cwd: packages.get("opencode"), encoding: "utf8" },
@@ -357,7 +413,7 @@ function assertArtifacts(root, output, name, version, skillName) {
   }
 }
 
-test("one command builds nine independent host packages without changing source links", () => {
+test("one command builds ten independent host packages without changing source links", () => {
   const root = createFixture();
   const output = join(root, "plugins", "ego", "release-output");
   const link = join(root, "plugins", "ego", "skills", "ego-browser");
@@ -383,7 +439,7 @@ test("one command builds nine independent host packages without changing source 
   }
 });
 
-test("--all creates nine artifacts per plugin in separate version directories", () => {
+test("--all creates ten artifacts per plugin in separate version directories", () => {
   const root = createFixture();
   const output = join(root, "release");
   try {
@@ -498,7 +554,7 @@ test("invalid selectors fail with clear errors", () => {
   }
 });
 
-test("the documented npm command builds all nine artifacts with working isolated adapters", () => {
+test("the documented npm command builds all ten artifacts with working isolated adapters", () => {
   const output = mkdtempSync(join(tmpdir(), "ego-plugin-npm-"));
   try {
     assertSuccess(

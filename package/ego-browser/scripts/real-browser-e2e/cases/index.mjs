@@ -14,7 +14,13 @@ import { pageDragAndDrawCase } from "./page-drag-and-draw.mjs";
 import { pageJavaScriptDialogHandlingCase } from "./page-dialogs.mjs";
 import { pageMediaPlaybackCase } from "./page-media-playback.mjs";
 import { pageScrolledScreenshotCase } from "./page-screenshot.mjs";
+import {
+  pageDefaultScreenshotPathFirstRunCase,
+  pageDefaultScreenshotPathSecondRunCase,
+} from "./page-default-screenshot-path.mjs";
 import { pageSnapshotLocatorCase } from "./page-snapshot-locators.mjs";
+import { pageSnapshotViewportOverflowCase } from "./page-snapshot-viewport-overflow.mjs";
+import { pageWheelTrapCase } from "./page-wheel-trap.mjs";
 import {
   pageSnapshotIframeViewportCase,
   pageSnapshotLazyIframeCase,
@@ -40,7 +46,12 @@ import { pageTextLocatorCase } from "./page-text-locators.mjs";
 import { pageSelectorCompatibilityCase } from "./page-selector-compatibility.mjs";
 import { pagePopupWaiterCase } from "./page-popup-waiter.mjs";
 import {
+  pageActionIdleFailFastCase,
+  pageActionPopupReceiptCase,
+} from "./page-action-latency.mjs";
+import {
   concurrentTaskSpaceDownloadCase,
+  concurrentPageSlowDownloadCase,
   pageDownloadCase,
   pageDownloadPrepareRoundCase,
   pagePdfViewerDownloadCase,
@@ -48,10 +59,20 @@ import {
 } from "./page-download.mjs";
 import { pageOopifActionCase, pageOopifRestoreCase } from "./page-oopif.mjs";
 import { pageLoadStatesCase } from "./page-load-states.mjs";
-import { pageDedicatedWorkerCase } from "./page-workers.mjs";
+import { pageAutomationHooksCase } from "./page-automation-hooks.mjs";
+import {
+  pageAudioWorkletCase,
+  pageDedicatedWorkerCase,
+  pageServiceWorkerCase,
+  pageSharedWorkerCase,
+} from "./page-workers.mjs";
 import { pageApiAlignmentCase } from "./page-api-alignment.mjs";
 import { pageActionabilityCase } from "./page-actionability.mjs";
 import { pageEvaluateTimeoutCase } from "./page-evaluate-timeout.mjs";
+import {
+  pagePendingNavigationCase,
+  pagePendingNavigationFreshProcessCase,
+} from "./page-pending-navigation.mjs";
 import {
   pageDelayedPopupResumeCase,
   pageDelayedPopupScheduleCase,
@@ -113,6 +134,8 @@ export const e2eCases = [
   { name: "page complex evaluate", body: pageComplexEvaluateCase },
   { name: "page fetch", body: pageFetchCase },
   { name: "page actions and popup adoption", body: pageActionsAndPopupCase },
+  { name: "Page action popup receipts", body: pageActionPopupReceiptCase },
+  { name: "Page action idle fail-fast", body: pageActionIdleFailFastCase },
   { name: "Page click hit target", body: pageClickHitTargetCase },
   { name: "Page action motion tolerance", body: pageActionMotionCase },
   { name: "Page drag and canvas drawing", body: pageDragAndDrawCase },
@@ -122,12 +145,25 @@ export const e2eCases = [
   },
   { name: "Page media playback", body: pageMediaPlaybackCase },
   { name: "Page scrolled screenshot", body: pageScrolledScreenshotCase },
+  {
+    name: "Page default screenshot path: first run",
+    body: pageDefaultScreenshotPathFirstRunCase,
+  },
+  {
+    name: "Page default screenshot path: second run",
+    body: pageDefaultScreenshotPathSecondRunCase,
+  },
   { name: "Page snapshot locator quality", body: pageSnapshotLocatorCase },
   {
     name: "Page snapshot iframe viewport",
     body: pageSnapshotIframeViewportCase,
   },
   { name: "Page snapshot subtree", body: pageSnapshotSubtreeCase },
+  { name: "Page auto-scroll past a wheel trap", body: pageWheelTrapCase },
+  {
+    name: "Page snapshot viewport overflow hint",
+    body: pageSnapshotViewportOverflowCase,
+  },
   {
     name: "Page ref identity across partial snapshots",
     body: pageRefIdentityCase,
@@ -168,6 +204,10 @@ export const e2eCases = [
     body: concurrentTaskSpaceDownloadCase,
   },
   {
+    name: "Concurrent Page downloads: slow response",
+    body: concurrentPageSlowDownloadCase,
+  },
+  {
     name: "Page Chromium PDF viewer download",
     body: pagePdfViewerDownloadCase,
   },
@@ -182,12 +222,26 @@ export const e2eCases = [
   { name: "Page OOPIF actions", body: pageOopifActionCase },
   { name: "Page OOPIF restore and close", body: pageOopifRestoreCase },
   { name: "Page load states", body: pageLoadStatesCase },
+  { name: "Page automation hooks", body: pageAutomationHooksCase },
   { name: "Page dedicated Worker startup", body: pageDedicatedWorkerCase },
+  { name: "Page AudioWorklet startup", body: pageAudioWorkletCase },
+  { name: "Page SharedWorker startup", body: pageSharedWorkerCase },
+  { name: "Page Service Worker startup", body: pageServiceWorkerCase },
   { name: "Page API alignment", body: pageApiAlignmentCase },
   { name: "Page actionability", body: pageActionabilityCase },
   {
     name: "Page evaluate timeout recovery",
     body: pageEvaluateTimeoutCase,
+    timeoutMs: 60_000,
+  },
+  {
+    name: "Page pending navigation: same process",
+    body: pagePendingNavigationCase,
+    timeoutMs: 60_000,
+  },
+  {
+    name: "Page pending navigation: fresh process",
+    body: pagePendingNavigationFreshProcessCase,
     timeoutMs: 60_000,
   },
   {

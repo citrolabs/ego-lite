@@ -897,10 +897,7 @@ export function pageActionsAndPopupCase() {
     // Simulate the action-receipt window missing this otherwise real popup.
     // tabs must discover the live target independently and restore a
     // managed label; popup lifecycle cannot depend on the short receipt diff.
-    const ledgerPath = join(
-      process.env.EGO_BROWSER_STATE_DIR,
-      "space-" + task.spaceId + ".json"
-    );
+    const ledgerPath = await pageLedgerPath(task.spaceId);
     const ledger = JSON.parse(await readFile(ledgerPath, "utf8"));
     delete ledger.pages[popup.label];
     await writeFile(ledgerPath, JSON.stringify(ledger));

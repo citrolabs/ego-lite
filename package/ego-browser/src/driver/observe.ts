@@ -1,5 +1,6 @@
+import { randomInt } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { state } from "../state.js";
@@ -87,10 +88,38 @@ export async function elementCenter(selectorOrRef) {
   );
 }
 
-// Sequence number for default screenshot file names. Combined with the pid it
-// keeps concurrent agent processes (parallel task spaces) from overwriting each
-// other's shots in the shared tmpdir, and successive shots in one run distinct.
-let screenshotSeq = 0;
+/**
+ * Directory and name for a screenshot taken without an explicit path.
+ *
+ * The embedded host runs every script in one long-lived Node process, giving
+ * each run its own `globalThis` but sharing `process.env`, `os.tmpdir()` and
+ * the pid. A host that needs per-run output sets
+ * `globalThis.EGO_BROWSER_OUTPUT_DIR` to an absolute directory; a random
+ * six-digit suffix keeps concurrent runs in the shared default directory from
+ * overwriting each other while staying short enough to read back easily.
+ */
+function defaultScreenshotPath(): string {
+  const outputDir = (globalThis as { EGO_BROWSER_OUTPUT_DIR?: unknown })
+    .EGO_BROWSER_OUTPUT_DIR;
+  let directory = tmpdir();
+  if (outputDir !== undefined) {
+    // Same rule as an explicit screenshot path: the Node context does not run
+    // in the caller's working directory, so a relative directory would land
+    // somewhere unexpected (or fail with EPERM on Windows).
+    if (
+      typeof outputDir !== "string" ||
+      outputDir.length === 0 ||
+      !isAbsolute(outputDir)
+    ) {
+      throw new TypeError(
+        "globalThis.EGO_BROWSER_OUTPUT_DIR must be an absolute directory path",
+      );
+    }
+    directory = outputDir;
+  }
+  const suffix = String(randomInt(0, 1_000_000)).padStart(6, "0");
+  return join(directory, `ego-browser-shot-${suffix}.png`);
+}
 
 export async function captureScreenshot(
   path?: string,
@@ -111,9 +140,7 @@ export async function captureScreenshotForSession(
   sessionId?: string,
 ) {
   assertScreenshotScale(options.scale);
-  const outputPath =
-    path ??
-    join(tmpdir(), `ego-browser-shot-${process.pid}-${++screenshotSeq}.png`);
+  const outputPath = path ?? defaultScreenshotPath();
   const full = options.full ?? false;
   // CSS-pixel sizing is the default and the only declarative scale mode. Keep
   // the legacy raw flag as an internal compatibility escape hatch.

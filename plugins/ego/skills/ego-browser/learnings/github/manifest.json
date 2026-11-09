@@ -1,0 +1,61 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "domains": ["github.com", "*.github.com"],
+  "notes": ["notes/overview.md"],
+  "nodeTools": {
+    "search_repos": {
+      "description": "Search GitHub repositories and extract results.",
+      "path": "tools/search-repos.js",
+      "callable": "searchRepos",
+      "args": {
+        "query": {
+          "type": "string",
+          "required": true,
+          "description": "Search query for repos."
+        },
+        "maxResults": {
+          "type": "integer",
+          "required": false,
+          "description": "Maximum number of repos to extract."
+        }
+      },
+      "returns": {
+        "type": "array",
+        "description": "Array of {name, owner, stars, description} objects."
+      }
+    },
+    "get_open_issues": {
+      "description": "Extract open issues from a repository.",
+      "path": "tools/open-issues.js",
+      "callable": "getOpenIssues",
+      "args": {
+        "owner": {
+          "type": "string",
+          "required": true,
+          "description": "Repository owner (username or org)."
+        },
+        "repo": {
+          "type": "string",
+          "required": true,
+          "description": "Repository name."
+        }
+      },
+      "returns": {
+        "type": "array",
+        "description": "Array of {title, number, state} objects."
+      }
+    }
+  },
+  "browserTools": {
+    "get_repo_stats": {
+      "description": "Extract stars, forks, and language from a GitHub repo page.",
+      "path": "browser-tools/repo-stats.js",
+      "args": {},
+      "returns": {
+        "type": "object",
+        "description": "Object with stars, forks, language."
+      }
+    }
+  }
+}

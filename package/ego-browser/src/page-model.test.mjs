@@ -12,7 +12,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { NativeOperationGate } from "../dist/src/native-gate.js";
-import { CdpRequestTimeoutError } from "../dist/src/browser-runtime.js";
+import {
+  CdpRequestTimeoutError,
+  PageUnresponsiveError,
+} from "../dist/src/browser-runtime.js";
 import { PageLedgerStore } from "../dist/src/page-ledger.js";
 import {
   captureTaskSpaceUserBoundary,
@@ -53,6 +56,8 @@ function createFixture(rootDir) {
   let rejectedClickPointsRemaining = 0;
   let interceptedClickPointsRemaining = 0;
   let scrollClickPointsRemaining = 0;
+  let trapClickPoints = false;
+  let wheelDispatchDurationMs = 0;
   let fillElementKind = "input";
   let fillText = "";
   let fillTransform = null;
@@ -74,6 +79,7 @@ function createFixture(rootDir) {
   let timeoutNextLifecycleEvaluate = false;
   let timeoutNextUrlEvaluate = false;
   let waitFunctionResults = [];
+  let viewportMetrics = { viewportHeight: 600, scrollY: 0, pageHeight: 600 };
   let fetchFailure = null;
   let nowMs = 1_000;
   const pageEvents = new Map();
@@ -85,6 +91,13 @@ function createFixture(rootDir) {
   const snapshotOptions = [];
   const browserEventListeners = new Set();
   const sleepDurations = [];
+  let targetDiscovery = true;
+  let domActivity = null;
+  let fileInputClicked = false;
+
+  function dispatchBrowserEvent(event) {
+    for (const listener of [...browserEventListeners]) listener(event);
+  }
 
   function openPendingPopup() {
     if (!popupOnNextClick) return;
@@ -96,6 +109,12 @@ function createFixture(rootDir) {
       active: false,
     });
     popupOnNextClick = null;
+    dispatchBrowserEvent({
+      method: "Target.targetCreated",
+      params: {
+        targetInfo: { targetId, type: "page", url: tabs.get(targetId).url },
+      },
+    });
   }
   async function ensureTargetSession(targetId) {
     assert(tabs.has(targetId), `unknown target ${targetId}`);
@@ -154,6 +173,19 @@ function createFixture(rootDir) {
         return { frameId: "frame-1" };
       }
       if (method === "Runtime.evaluate") {
+        if (params.expression.includes("__egoBrowserFileInputProbe")) {
+          const reading = params.expression.includes("probe.seen === true");
+          calls.push([
+            reading ? "fileInputProbeRead" : "fileInputProbeInstall",
+            sessionId,
+          ]);
+          return {
+            result: {
+              type: "boolean",
+              value: reading ? fileInputClicked : true,
+            },
+          };
+        }
         if (loseFrameOnNextResolution) {
           const failure = loseFrameOnNextResolution;
           loseFrameOnNextResolution = null;
@@ -325,6 +357,9 @@ function createFixture(rootDir) {
             result: { type: "number", value: elementPresent ? 1 : 0 },
           };
         }
+        if (params.expression.includes("viewportHeight")) {
+          return { result: { type: "object", value: viewportMetrics } };
+        }
         if (params.expression.includes("innerWidth")) {
           return {
             result: {
@@ -341,6 +376,12 @@ function createFixture(rootDir) {
               },
             },
           };
+        }
+        if (params.expression.includes("__egoBrowserDomActivity")) {
+          calls.push(["domActivityProbe", sessionId]);
+          return domActivity
+            ? { result: { type: "object", value: domActivity } }
+            : { result: { type: "string", value: "complete" } };
         }
         if (params.returnByValue === false) {
           if (!elementPresent) {
@@ -501,6 +542,19 @@ function createFixture(rootDir) {
           };
         }
         if (params.functionDeclaration.includes("getBoundingClientRect")) {
+          if (trapClickPoints) {
+            // The wheel point sits on an element that swallows wheel events:
+            // the target never moves, so every evaluation asks for the same
+            // scroll until a programmatic scroll finally brings it in.
+            return {
+              result: {
+                type: "object",
+                value: {
+                  scroll: { x: 80, y: 599, deltaX: 0, deltaY: 900 },
+                },
+              },
+            };
+          }
           if (scrollClickPointsRemaining > 0) {
             scrollClickPointsRemaining -= 1;
             return {
@@ -616,7 +670,12 @@ function createFixture(rootDir) {
       if (method === "Browser.getVersion") {
         return { product: "Ego Lite/Test" };
       }
+      if (method === "DOM.scrollIntoViewIfNeeded") {
+        trapClickPoints = false;
+        return {};
+      }
       if (method === "Input.dispatchMouseEvent") {
+        if (params.type === "mouseWheel") nowMs += wheelDispatchDurationMs;
         if (timeoutNextMouseDispatch) {
           timeoutNextMouseDispatch = false;
           throw new Error("CDP request timed out: Input.dispatchMouseEvent");
@@ -778,6 +837,10 @@ function createFixture(rootDir) {
       calls.push(["setPreferredTarget", targetId]);
     },
     supportsBackgroundPageDiscovery: () => true,
+    async ensureTargetDiscovery(spaceId) {
+      calls.push(["ensureTargetDiscovery", spaceId]);
+      return targetDiscovery;
+    },
     subscribeBrowserEvents(listener) {
       browserEventListeners.add(listener);
       return () => browserEventListeners.delete(listener);
@@ -803,6 +866,25 @@ function createFixture(rootDir) {
     },
     openPopupOnNextClick(url) {
       popupOnNextClick = url;
+    },
+    setTargetDiscovery(enabled) {
+      targetDiscovery = enabled;
+    },
+    setDomActivity(value) {
+      domActivity = value;
+    },
+    setFileInputClicked(value) {
+      fileInputClicked = value;
+    },
+    emitFileChooser(value = { backendNodeId: 91 }) {
+      activeFileChooserWaiter?.emit(value);
+    },
+    markNetworkTracked(sessionId, { lastActivityAt = 0 } = {}) {
+      networkSessions.add(sessionId);
+      networkLastActivityAt.set(sessionId, lastActivityAt);
+    },
+    setViewportMetrics(metrics) {
+      viewportMetrics = metrics;
     },
     openFileChooserOnNextClick(options = {}) {
       fileChooserOnNextClick = {
@@ -855,6 +937,12 @@ function createFixture(rootDir) {
     },
     scrollNextClickPoint(count = 1) {
       scrollClickPointsRemaining = count;
+    },
+    trapClickPoints() {
+      trapClickPoints = true;
+    },
+    setWheelDispatchDuration(ms) {
+      wheelDispatchDurationMs = ms;
     },
     navigateOnNextClick(url) {
       navigateOnNextClickUrl = url;
@@ -1511,6 +1599,158 @@ test("TaskSpace finish closes the whole space when no Pages are retained", async
   });
 });
 
+function finishFixtureTask(fixture, lifecycleCalls) {
+  const ledger = new PageLedgerStore({ rootDir: fixture.rootDir });
+  const task = taskForRound(fixture, "round-a", {
+    ledger,
+    async completeTaskSpace() {
+      lifecycleCalls.push("finish");
+    },
+    async closeTaskSpace() {
+      lifecycleCalls.push("close");
+    },
+  });
+  return { ledger, task };
+}
+
+test("TaskSpace finish closes the space after the only Page was closed", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const { ledger, task } = finishFixtureTask(fixture, lifecycleCalls);
+    const p1 = await openTestPage(task, "https://example.test/one");
+    await p1.close();
+
+    const tabs = await task.tabs();
+    assert.equal(tabs.length, 1, "page.close leaves a blank anchor tab");
+    assert.equal(tabs[0].label, undefined, "the anchor stays unmanaged");
+    assert.equal(tabs[0].openedBy, "agent", "the anchor is SDK-owned");
+
+    const receipt = await task.finish({ keep: [] });
+
+    assert.deepEqual(receipt, {
+      spaceId: 7,
+      closedSpace: true,
+      keptManagedLabels: [],
+      closedManagedLabels: [],
+      preservedUnmanagedCount: 0,
+    });
+    assert.deepEqual(lifecycleCalls, ["close"]);
+    assert.deepEqual((await ledger.read(7)).pages, {});
+  });
+});
+
+test("TaskSpace finish closes the space when a new Page follows the last close", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const { task } = finishFixtureTask(fixture, lifecycleCalls);
+    const p1 = await openTestPage(task, "https://example.test/one");
+    await p1.close();
+    const p2 = await openTestPage(task, "https://example.test/two");
+    assert.equal(p2.label, "p2");
+    assert.equal((await task.tabs()).length, 2, "anchor and p2 are live");
+
+    const receipt = await task.finish({ keep: [] });
+
+    assert.deepEqual(receipt, {
+      spaceId: 7,
+      closedSpace: true,
+      keptManagedLabels: [],
+      closedManagedLabels: ["p2"],
+      preservedUnmanagedCount: 0,
+    });
+    assert.deepEqual(lifecycleCalls, ["close"]);
+  });
+});
+
+test("TaskSpace finish closes the SDK anchor tab when a Page is kept", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const { task } = finishFixtureTask(fixture, lifecycleCalls);
+    const p1 = await openTestPage(task, "https://example.test/one");
+    await p1.close();
+    const anchorTargetId = (await task.tabs())[0].targetId;
+    const p2 = await openTestPage(task, "https://example.test/two");
+
+    const receipt = await task.finish({ keep: ["p2"] });
+
+    assert.deepEqual(receipt, {
+      spaceId: 7,
+      closedSpace: false,
+      keptManagedLabels: ["p2"],
+      closedManagedLabels: [],
+      preservedUnmanagedCount: 0,
+    });
+    assert.deepEqual(lifecycleCalls, ["finish"]);
+    assert.equal(
+      fixture.tabs.has(anchorTargetId),
+      false,
+      "the anchor is closed",
+    );
+    assert.equal(fixture.tabs.has(p2.targetId), true, "the kept Page remains");
+  });
+});
+
+test("TaskSpace finish closes the SDK anchor tab but keeps user tabs", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const { ledger, task } = finishFixtureTask(fixture, lifecycleCalls);
+    const p1 = await openTestPage(task, "https://example.test/one");
+    await p1.close();
+    const anchorTargetId = (await task.tabs())[0].targetId;
+    fixture.addExternalTab("target-user", "https://example.test/user");
+    await ledger.keepUnmanaged(7, "target-user", "unknown");
+    const p2 = await openTestPage(task, "https://example.test/two");
+
+    const receipt = await task.finish({ keep: [] });
+
+    assert.deepEqual(receipt, {
+      spaceId: 7,
+      closedSpace: false,
+      keptManagedLabels: [],
+      closedManagedLabels: ["p2"],
+      preservedUnmanagedCount: 1,
+    });
+    assert.equal(
+      fixture.tabs.has(p2.targetId),
+      false,
+      "the Agent Page is closed",
+    );
+    assert.deepEqual(lifecycleCalls, ["finish"]);
+    assert.equal(
+      fixture.tabs.has(anchorTargetId),
+      false,
+      "the anchor is closed",
+    );
+    assert.equal(fixture.tabs.has("target-user"), true, "the user tab remains");
+  });
+});
+
+test("TaskSpace finish keeps an SDK anchor that is the last tab of a kept space", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const { task } = finishFixtureTask(fixture, lifecycleCalls);
+    const p1 = await openTestPage(task, "https://example.test/one");
+    await p1.close();
+    const anchorTargetId = (await task.tabs())[0].targetId;
+
+    const receipt = await task.finish({ keep: "all" });
+
+    assert.deepEqual(receipt, {
+      spaceId: 7,
+      closedSpace: false,
+      keptManagedLabels: [],
+      closedManagedLabels: [],
+      preservedUnmanagedCount: 0,
+    });
+    assert.deepEqual(lifecycleCalls, ["finish"]);
+    assert.equal(
+      fixture.tabs.has(anchorTargetId),
+      true,
+      "closing the last tab would destroy the space the caller kept",
+    );
+  });
+});
+
 test("TaskSpace finish keeps protected unmanaged tabs even with an empty keep list", async () => {
   await withFixture(async (fixture) => {
     const lifecycleCalls = [];
@@ -1812,7 +2052,11 @@ test("Page.goto commit waits for this navigation without waiting for the DOM", a
       waitUntil: "commit",
     });
 
-    assert.equal(commitChecks, 2);
+    assert.equal(
+      commitChecks,
+      3,
+      "one frame check records the previous document, two wait for the commit",
+    );
     assert.equal(
       fixture.calls
         .slice(callsBeforeGoto)
@@ -1913,6 +2157,300 @@ test("Page.goto timeout reports when no new document committed", async () => {
         return true;
       },
     );
+  });
+});
+
+test("Page.goto stops a navigation that has not committed by its timeout", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let nowMs = 0;
+    let held = false;
+    const stops = [];
+    let frameChecksAfterStop = 0;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.navigate") {
+          const response = await baseCdp(method, params, sessionId, timeoutMs);
+          if (params.url !== "https://example.test/held") return response;
+          // Chromium answers Page.navigate only once the response arrives.
+          held = true;
+          nowMs += timeoutMs;
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Page.stopLoading") {
+          stops.push({ sessionId, timeoutMs });
+          held = false;
+          return {};
+        }
+        if (method === "Page.getFrameTree") {
+          if (held)
+            throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+          if (stops.length > 0) frameChecksAfterStop += 1;
+          return {
+            result: {
+              frameTree: { frame: { id: "frame-1", loaderId: "loader-old" } },
+            },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+      now: () => nowMs,
+      async sleep(ms) {
+        nowMs += ms;
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    nowMs = 0;
+
+    await assert.rejects(
+      () =>
+        page.goto("https://example.test/held", {
+          timeout: 100,
+          waitUntil: "load",
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_NAVIGATION_TIMEOUT");
+        assert.equal(error.committed, false);
+        assert.equal(error.stopped, true);
+        assert.equal(error.url, undefined);
+        assert.match(
+          error.message,
+          /^page\.goto timed out after 100ms waiting for load; the navigation to "https:\/\/example\.test\/held" had not committed and was stopped, so the Page still shows its previous document\./,
+        );
+        assert.match(error.message, /Retry page\.goto\(url, \{ timeout \}\)/);
+        assert.match(error.message, /task\.newPage\(\)/);
+        return true;
+      },
+    );
+    assert.equal(stops.length, 1, "the pending navigation is stopped once");
+    assert.equal(typeof stops[0].sessionId, "string");
+    assert.equal(
+      stops[0].timeoutMs,
+      1_000,
+      "stopping never waits a transport timeout",
+    );
+    assert.equal(
+      frameChecksAfterStop,
+      1,
+      "the Page is confirmed responsive after the navigation stops",
+    );
+  });
+});
+
+test("Page.goto names a pending navigation it could not stop", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let nowMs = 0;
+    let held = false;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.navigate") {
+          const response = await baseCdp(method, params, sessionId, timeoutMs);
+          if (params.url !== "https://example.test/held") return response;
+          held = true;
+          nowMs += timeoutMs;
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Page.stopLoading") {
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Page.getFrameTree") {
+          if (held)
+            throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+          return {
+            result: {
+              frameTree: { frame: { id: "frame-1", loaderId: "loader-old" } },
+            },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+      now: () => nowMs,
+      async sleep(ms) {
+        nowMs += ms;
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    nowMs = 0;
+
+    await assert.rejects(
+      () =>
+        page.goto("https://example.test/held", {
+          timeout: 100,
+          waitUntil: "load",
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_NAVIGATION_TIMEOUT");
+        assert.equal(error.committed, false);
+        assert.equal(error.stopped, false);
+        assert.match(
+          error.message,
+          /the navigation to "https:\/\/example\.test\/held" has not committed and the Page did not answer even after Page\.stopLoading, so its renderer is probably hung/,
+        );
+        assert.match(error.message, /task\.newPage\(\)/);
+        assert.doesNotMatch(error.message, /was stopped/);
+        return true;
+      },
+    );
+  });
+});
+
+test("Page.goto reports a navigation that commits while it is being stopped", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let nowMs = 0;
+    let held = false;
+    let loaderId = "loader-old";
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.navigate") {
+          const response = await baseCdp(method, params, sessionId, timeoutMs);
+          if (params.url !== "https://example.test/held") return response;
+          held = true;
+          nowMs += timeoutMs;
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Page.stopLoading") {
+          // The response arrived just before the stop: the new document is
+          // in place by the time the Page answers again.
+          held = false;
+          loaderId = "loader-new";
+          return {};
+        }
+        if (method === "Page.getFrameTree") {
+          if (held)
+            throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+          return {
+            result: { frameTree: { frame: { id: "frame-1", loaderId } } },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+      now: () => nowMs,
+      async sleep(ms) {
+        nowMs += ms;
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    nowMs = 0;
+
+    await assert.rejects(
+      () =>
+        page.goto("https://example.test/held", {
+          timeout: 100,
+          waitUntil: "load",
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_NAVIGATION_TIMEOUT");
+        assert.equal(error.committed, true);
+        assert.equal(error.stopped, true);
+        assert.match(
+          error.message,
+          /navigation committed at "https:\/\/example\.test\/held".*but its loading was stopped at the deadline\. Call page\.reload\(\{ timeout \}\)/,
+        );
+        assert.doesNotMatch(error.message, /previous document/);
+        return true;
+      },
+    );
+  });
+});
+
+test("Page.goto does not stop anything when its budget ends before Page.navigate", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let nowMs = 0;
+    let stops = 0;
+    let navigates = 0;
+    let armed = false;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.getFrameTree" && armed) {
+          // The pre-navigation probe is the last thing the budget covers.
+          nowMs += timeoutMs;
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Page.navigate" && armed) navigates += 1;
+        if (method === "Page.stopLoading") stops += 1;
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+      now: () => nowMs,
+      async sleep(ms) {
+        nowMs += ms;
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    nowMs = 0;
+    armed = true;
+
+    await assert.rejects(
+      () =>
+        page.goto("https://example.test/never-sent", {
+          timeout: 100,
+          waitUntil: "load",
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_NAVIGATION_TIMEOUT");
+        assert.equal(error.committed, false);
+        assert.equal(error.stopped, false);
+        assert.doesNotMatch(error.message, /pending|stopped|hung/);
+        return true;
+      },
+    );
+    assert.equal(navigates, 0, "Page.navigate was never dispatched");
+    assert.equal(stops, 0, "nothing in flight belongs to this call");
+  });
+});
+
+test("Page.goto timeout on a responsive Page does not stop anything", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let nowMs = 0;
+    let stops = 0;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.navigate") {
+          const response = await baseCdp(method, params, sessionId, timeoutMs);
+          if (params.url !== "https://example.test/answering") return response;
+          return {
+            result: { frameId: "frame-1", loaderId: "loader-new" },
+          };
+        }
+        if (method === "Page.stopLoading") {
+          stops += 1;
+          return {};
+        }
+        if (method === "Page.getFrameTree") {
+          return {
+            result: {
+              frameTree: { frame: { id: "frame-1", loaderId: "loader-old" } },
+            },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+      now: () => nowMs,
+      async sleep(ms) {
+        nowMs += ms;
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    nowMs = 0;
+
+    await assert.rejects(
+      () =>
+        page.goto("https://example.test/answering", {
+          timeout: 100,
+          waitUntil: "load",
+        }),
+      (error) => {
+        assert.equal(error.code, "EGO_NAVIGATION_TIMEOUT");
+        assert.equal(error.committed, false);
+        assert.equal(error.stopped, false);
+        assert.doesNotMatch(error.message, /pending|stopped/);
+        return true;
+      },
+    );
+    assert.equal(stops, 0, "a Page that answers has nothing to stop");
   });
 });
 
@@ -2019,13 +2557,17 @@ test("Page.reload reloads the current document and waits for the requested state
   });
 });
 
-test("Page.reload times out when no new document commits", async () => {
+test("Page.reload stops a reload that has not committed by its timeout", async () => {
   await withFixture(async (fixture) => {
     const baseCdp = fixture.services.cdp;
     let nowMs = 0;
+    let held = false;
+    let stops = 0;
     const task = taskForRound(fixture, "round-a", {
       async cdp(method, params, sessionId, timeoutMs) {
         if (method === "Page.getFrameTree") {
+          if (held)
+            throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
           return {
             result: {
               frameTree: {
@@ -2034,7 +2576,15 @@ test("Page.reload times out when no new document commits", async () => {
             },
           };
         }
-        if (method === "Page.reload") return {};
+        if (method === "Page.reload") {
+          held = true;
+          return {};
+        }
+        if (method === "Page.stopLoading") {
+          stops += 1;
+          held = false;
+          return {};
+        }
         return baseCdp(method, params, sessionId, timeoutMs);
       },
       now: () => nowMs,
@@ -2046,8 +2596,9 @@ test("Page.reload times out when no new document commits", async () => {
 
     await assert.rejects(
       () => page.reload({ timeout: 100, waitUntil: "commit" }),
-      /page\.reload timed out after 100ms waiting for commit/,
+      /page\.reload timed out after 100ms waiting for commit; the reload had not committed and was stopped, so the Page still shows its previous document\. Retry page\.reload\(\{ timeout \}\)/,
     );
+    assert.equal(stops, 1, "the pending reload is stopped");
   });
 });
 
@@ -2134,6 +2685,90 @@ test("snapshot defaults to the viewport, reports its source, and validates optio
     await assert.rejects(
       () => page.snapshot({ diff: true }),
       /page\.snapshot received unknown option: diff/,
+    );
+  });
+});
+
+test("a viewport snapshot reports content outside the viewport", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/overflow");
+    const lastLine = (text) => text.split("\n").at(-1);
+
+    fixture.setViewportMetrics({
+      viewportHeight: 778,
+      scrollY: 0,
+      pageHeight: 880,
+    });
+    assert.equal(
+      lastLine(await page.snapshot()),
+      '[more content below the viewport: scrollY=0, viewport 778 / page 880 px; scroll or use snapshot({ scope: "full_page" })]',
+    );
+
+    fixture.setViewportMetrics({
+      viewportHeight: 778,
+      scrollY: 102,
+      pageHeight: 880,
+    });
+    assert.match(
+      lastLine(await page.snapshot()),
+      /^\[more content above the viewport: scrollY=102, viewport 778 \/ page 880 px;/,
+    );
+
+    fixture.setViewportMetrics({
+      viewportHeight: 778,
+      scrollY: 50,
+      pageHeight: 1600,
+    });
+    assert.match(
+      lastLine(await page.snapshot({ scope: "only_within_viewport" })),
+      /^\[more content above and below the viewport: scrollY=50, viewport 778 \/ page 1600 px;/,
+    );
+
+    for (const scope of ["full_page", "subtree"]) {
+      const calls = fixture.calls.length;
+      const text = await page.snapshot(
+        scope === "subtree" ? { scope, root: "@21" } : { scope },
+      );
+      assert.doesNotMatch(text, /more content/);
+      assert(
+        !fixture.calls
+          .slice(calls)
+          .some(
+            ([kind, method, params]) =>
+              kind === "cdp" &&
+              method === "Runtime.evaluate" &&
+              params.expression.includes("viewportHeight"),
+          ),
+        `${scope} snapshot must not read viewport metrics`,
+      );
+    }
+  });
+});
+
+test("a viewport snapshot stays silent when the document fits the viewport", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/fits");
+
+    for (const metrics of [
+      { viewportHeight: 600, scrollY: 0, pageHeight: 600 },
+      { viewportHeight: 600, scrollY: 0, pageHeight: 400 },
+      { viewportHeight: 600, scrollY: 0.5, pageHeight: 600.75 },
+    ]) {
+      fixture.setViewportMetrics(metrics);
+      assert.equal(
+        (await page.snapshot()).split("\n").at(-1),
+        "snapshot:https://example.test/fits",
+        `no hint for ${JSON.stringify(metrics)}`,
+      );
+    }
+
+    fixture.setViewportMetrics("complete");
+    assert.equal(
+      (await page.snapshot()).split("\n").at(-1),
+      "snapshot:https://example.test/fits",
+      "an unreadable metrics result degrades to no hint",
     );
   });
 });
@@ -5575,9 +6210,10 @@ for (const mode of ["page", "same-process iframe", "OOPIF"]) {
   });
 }
 
-test("a navigation during snapshot capture never publishes refs for a mixed document", async () => {
+test("a navigation during snapshot capture is retried against the new document", async () => {
   await withFixture(async (fixture) => {
     let loaderId = "before";
+    let captures = 0;
     const baseCdp = fixture.services.cdp;
     const task = taskForRound(fixture, "round-a", {
       async cdp(method, params, sessionId) {
@@ -5586,7 +6222,103 @@ test("a navigation during snapshot capture never publishes refs for a mixed docu
         return baseCdp(method, params, sessionId);
       },
       async snapshot() {
+        captures += 1;
+        // The commit lands while the first capture is in flight; the retry
+        // sees the stable new document.
         loaderId = "after";
+        return {
+          content:
+            captures === 1
+              ? 'button "Old document" [ref=1]'
+              : 'button "Save" [ref=1]',
+          refs: [{ refId: 1, backendNodeId: 40 + captures }],
+        };
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    const content = await page.snapshot();
+    assert.equal(
+      captures,
+      2,
+      "the mixed capture is discarded and retried once",
+    );
+    assert.match(content, /Save.*\[ref=1\]/);
+    assert.doesNotMatch(content, /Old document/);
+    assert.equal(
+      fixture.services.pageRefs.forTarget(page.targetId).get("1")
+        ?.backendNodeId,
+      42,
+      "only the stable capture publishes refs",
+    );
+  });
+});
+
+test("a subtree snapshot whose root document commits away is stale, not retried with the old root", async () => {
+  await withFixture(async (fixture) => {
+    let loaderId = "before";
+    const requestedRoots = [];
+    const baseCdp = fixture.services.cdp;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId) {
+        if (method === "Page.getFrameTree")
+          return { frameTree: { frame: { id: "main", loaderId } } };
+        return baseCdp(method, params, sessionId);
+      },
+      async snapshot(options) {
+        if (options.scope !== "subtree") {
+          return {
+            content: 'button "First" [ref=21]',
+            refs: [{ refId: 21, backendNodeId: 21 }],
+          };
+        }
+        requestedRoots.push(options.root);
+        // The navigation commits while the subtree capture is in flight.
+        loaderId = "after";
+        return {
+          content: 'button "First" [ref=21]',
+          refs: [{ refId: 21, backendNodeId: 21 }],
+        };
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/first");
+    await page.snapshot({ scope: "full_page" });
+
+    await assert.rejects(
+      () => page.snapshot({ scope: "subtree", root: "@21" }),
+      (error) => {
+        assert.match(error.message, /Stale ref: @21; take a new snapshot/);
+        assert.equal(error.kind, "permanent");
+        return true;
+      },
+    );
+    assert.deepEqual(
+      requestedRoots,
+      [21],
+      "the old document's root is not reused for a retry",
+    );
+    assert.equal(
+      fixture.services.pageRefs.isInvalidated(page.targetId, "21"),
+      true,
+    );
+  });
+});
+
+test("a page that keeps navigating during snapshot captures fails after bounded retries", async () => {
+  await withFixture(async (fixture) => {
+    let loaderId = 0;
+    let captures = 0;
+    const baseCdp = fixture.services.cdp;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId) {
+        if (method === "Page.getFrameTree")
+          return {
+            frameTree: { frame: { id: "main", loaderId: `load-${loaderId}` } },
+          };
+        return baseCdp(method, params, sessionId);
+      },
+      async snapshot() {
+        captures += 1;
+        loaderId += 1;
         return {
           content: 'button "Save" [ref=1]',
           refs: [{ refId: 1, backendNodeId: 42 }],
@@ -5594,15 +6326,19 @@ test("a navigation during snapshot capture never publishes refs for a mixed docu
       },
     });
     const page = await openTestPage(task, "https://example.test/first");
-    await assert.rejects(() => page.snapshot(), /Page changed during snapshot/);
+    await assert.rejects(
+      () => page.snapshot(),
+      (error) => {
+        assert.match(error.message, /Page changed during snapshot/);
+        assert.equal(error.kind, "transient");
+        return true;
+      },
+    );
+    assert.equal(captures, 3, "one capture plus two retries");
     assert.equal(
       fixture.services.pageRefs.forTarget(page.targetId).get("1"),
       undefined,
-    );
-    assert.match(
-      await page.snapshot(),
-      /\[ref=1\]/,
-      "an explicit retry captures the stable new document",
+      "a mixed capture never publishes refs",
     );
   });
 });
@@ -5711,6 +6447,137 @@ test("Page fill uses the wheel motion engine to bring an element into view", asy
   });
 });
 
+test("Page fill falls back to a programmatic scroll when wheel input does not move the target", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/map");
+    fixture.trapClickPoints();
+
+    await page.fill("#below-the-map", "hello");
+
+    const wheelCalls = fixture.calls.filter(
+      ([kind, method, params]) =>
+        kind === "cdp" &&
+        method === "Input.dispatchMouseEvent" &&
+        params.type === "mouseWheel",
+    );
+    assert(wheelCalls.length > 1, "wheel input is still tried first");
+    assert(
+      wheelCalls.length <= 12,
+      `one ineffective motion must not be repeated: ${wheelCalls.length} wheel events`,
+    );
+    const fallbackIndex = fixture.calls.findIndex(
+      ([kind, method, params, session]) =>
+        kind === "cdp" &&
+        method === "DOM.scrollIntoViewIfNeeded" &&
+        params.objectId === `element:${page.targetId}` &&
+        session === `session:${page.targetId}`,
+    );
+    assert(
+      fallbackIndex > 0,
+      "a stalled motion falls back to DOM.scrollIntoViewIfNeeded",
+    );
+    assert(
+      fallbackIndex > fixture.calls.lastIndexOf(wheelCalls.at(-1)),
+      "the fallback runs after the wheel motion proved ineffective",
+    );
+    assert(
+      fixture.calls.findIndex(
+        ([kind, method]) => kind === "cdp" && method === "Input.insertText",
+      ) > fallbackIndex,
+      "text input waits for the fallback scroll",
+    );
+  });
+});
+
+test("Page click gives up when neither wheel input nor the fallback scroll moves the target", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/map");
+    fixture.trapClickPoints();
+    const task2 = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        const result = await fixture.services.cdp(
+          method,
+          params,
+          sessionId,
+          timeoutMs,
+        );
+        // The programmatic scroll is accepted but changes nothing either.
+        if (method === "DOM.scrollIntoViewIfNeeded") fixture.trapClickPoints();
+        return result;
+      },
+    });
+    const stuck = task2.page(page.label);
+
+    await assert.rejects(
+      () => stuck.click("#below-the-map", { timeout: 1_000 }),
+      /page\.click timed out after \d+ms: page\.click failed: element is not visible in the viewport/,
+    );
+    // A motion is a run of consecutive wheel events.
+    let wheelMotions = 0;
+    let inMotion = false;
+    for (const [kind, method, params] of fixture.calls) {
+      const wheel =
+        kind === "cdp" &&
+        method === "Input.dispatchMouseEvent" &&
+        params.type === "mouseWheel";
+      if (wheel && !inMotion) wheelMotions += 1;
+      inMotion = wheel;
+    }
+    const fallbacks = fixture.calls.filter(
+      ([kind, method]) =>
+        kind === "cdp" && method === "DOM.scrollIntoViewIfNeeded",
+    ).length;
+    assert(fallbacks >= 1, "the fallback scroll was attempted");
+    assert(
+      wheelMotions <= fallbacks * 2,
+      `each retry tries at most one wheel motion before and after the fallback: ${wheelMotions} motions, ${fallbacks} fallbacks`,
+    );
+  });
+});
+
+test("Page fill stops auto-scrolling at the action deadline and reports the real duration", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/map");
+    fixture.trapClickPoints();
+    // A map that zooms on every wheel event keeps the renderer busy, so each
+    // dispatched wheel event takes about two seconds to be acknowledged.
+    fixture.setWheelDispatchDuration(2_000);
+    const startedAt = fixture.services.now();
+
+    await assert.rejects(
+      () => page.fill("#below-the-map", "hello", { timeout: 3_000 }),
+      (error) => {
+        const elapsed = fixture.services.now() - startedAt;
+        const reported = Number(
+          /page\.fill timed out after (\d+)ms: /.exec(error.message)?.[1],
+        );
+        assert(
+          reported > 3_000 && reported <= elapsed,
+          `the timeout message reports the real duration, not the configured 3000ms: ${error.message} (elapsed ${elapsed}ms)`,
+        );
+        assert(
+          elapsed < 6_000,
+          `the action overran its 3000ms budget by ${elapsed - 3_000}ms`,
+        );
+        return true;
+      },
+    );
+    const wheelCalls = fixture.calls.filter(
+      ([kind, method, params]) =>
+        kind === "cdp" &&
+        method === "Input.dispatchMouseEvent" &&
+        params.type === "mouseWheel",
+    );
+    assert(
+      wheelCalls.length <= 3,
+      `the motion stops at the deadline instead of finishing: ${wheelCalls.length} wheel events`,
+    );
+  });
+});
+
 test("Page click retries a transient visibility change before dispatching input", async () => {
   await withFixture(async (fixture) => {
     const task = taskForRound(fixture, "round-a");
@@ -5756,7 +6623,8 @@ test("Page click retries when an iframe disappears during session discovery", as
 
     assert.deepEqual(await page.click("#ready", { timeout: 1_000 }), {});
     assert.equal(discoveries, 2);
-    assert.deepEqual(discoveryTimeouts, [1_000, 500]);
+    // The retry runs 50ms later on the remaining budget.
+    assert.deepEqual(discoveryTimeouts, [1_000, 950]);
   });
 });
 
@@ -5790,6 +6658,8 @@ test("Page click reports the action timeout instead of a tail discovery timeout"
       async ensureFrameSessions(_targetId, timeoutMs) {
         discoveryTimeouts.push(timeoutMs);
         if (timeoutMs < 250) {
+          // A discovery timeout consumes its whole budget before failing.
+          await fixture.services.sleep(timeoutMs);
           const error = new Error("CDP request timed out: Target.getTargets");
           error.code = "EGO_CDP_REQUEST_TIMEOUT";
           throw error;
@@ -5878,6 +6748,7 @@ test("Page click reports the last transient state after its timeout", async () =
       () => page.click("#changing", { timeout: 1_000 }),
       /page\.click timed out after 1000ms.*not visible/i,
     );
+    // The blocked target is re-examined every 50ms until the 1000ms deadline.
     assert.equal(
       fixture.calls.filter(
         ([kind, method, params]) =>
@@ -5885,7 +6756,7 @@ test("Page click reports the last transient state after its timeout", async () =
           method === "Runtime.callFunctionOn" &&
           params.functionDeclaration.includes("getBoundingClientRect"),
       ).length,
-      3,
+      21,
     );
     assert.equal(
       fixture.calls.some(
@@ -6361,5 +7232,484 @@ test("newPage never closes a managed page when native returns its target again",
       ).length,
       closeCallsBefore,
     );
+  });
+});
+
+test("an input action without a popup skips tab polling and settle delays", async () => {
+  await withFixture(async (fixture) => {
+    let tabListCalls = 0;
+    const task = taskForRound(fixture, "round-a", {
+      async listTabs() {
+        tabListCalls += 1;
+        return fixture.services.listTabs();
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/source");
+    tabListCalls = 0;
+    const sleepsBefore = fixture.sleepDurations.length;
+    const callsBefore = fixture.calls.length;
+
+    const receipt = await page.click("#plain-button");
+
+    assert.deepEqual(receipt, {});
+    assert.equal(tabListCalls, 0, "no popup means no tab list round trips");
+    assert.deepEqual(
+      fixture.sleepDurations.slice(sleepsBefore),
+      [],
+      "the action boundary no longer sleeps to settle the tab list",
+    );
+    const syncCalls = fixture.calls
+      .slice(callsBefore)
+      .filter(
+        ([kind, method, params]) =>
+          kind === "cdp" &&
+          method === "Runtime.evaluate" &&
+          params?.expression === "0",
+      );
+    assert.equal(
+      syncCalls.length,
+      1,
+      "one page round trip orders a popup event ahead of the receipt",
+    );
+  });
+});
+
+test("a popup reported by Target.targetCreated is adopted without a settle delay", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/source");
+    const sleepsBefore = fixture.sleepDurations.length;
+    fixture.openPopupOnNextClick("https://example.test/popup");
+
+    const receipt = await page.click("#open-popup");
+
+    assert.equal(receipt.popups.length, 1);
+    assert.equal(receipt.popups[0].label, "p2");
+    assert.equal(
+      await task.page("p2").url(),
+      "https://example.test/popup",
+      "the popup Page is usable from the receipt",
+    );
+    assert.deepEqual(fixture.sleepDurations.slice(sleepsBefore), []);
+  });
+});
+
+test("a target created outside this task space is not adopted as a popup", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/source");
+    const baseCdp = fixture.services.cdp;
+    fixture.services.cdp = async (method, params, sessionId, timeoutMs) => {
+      if (method === "Input.dispatchMouseEvent") {
+        // The user opens a tab in another window while the click runs.
+        fixture.emitBrowserEvent("Target.targetCreated", {
+          targetInfo: {
+            targetId: "target-elsewhere",
+            type: "page",
+            url: "https://example.test/elsewhere",
+          },
+        });
+      }
+      return baseCdp(method, params, sessionId, timeoutMs);
+    };
+
+    const receipt = await page.click("#plain-button");
+
+    assert.deepEqual(
+      receipt,
+      {},
+      "a foreign target is not in this space's tab list",
+    );
+    const ledger = await new PageLedgerStore({ rootDir: fixture.rootDir }).read(
+      7,
+    );
+    assert.equal(
+      Object.values(ledger.pages).some(
+        (entry) => entry.targetId === "target-elsewhere",
+      ),
+      false,
+    );
+  });
+});
+
+test("without target discovery the action boundary falls back to tab polling", async () => {
+  await withFixture(async (fixture) => {
+    fixture.setTargetDiscovery(false);
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/source");
+    const sleepsBefore = fixture.sleepDurations.length;
+    fixture.openPopupOnNextClick("https://example.test/popup");
+
+    const receipt = await page.click("#open-popup");
+
+    assert.equal(receipt.popups.length, 1);
+    assert.deepEqual(
+      fixture.sleepDurations.slice(sleepsBefore),
+      [50],
+      "the polling fallback keeps its settle delay",
+    );
+  });
+});
+
+test("a missing action target fails fast once the page is idle", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/source");
+    fixture.markNetworkTracked("session:target-1", { lastActivityAt: 0 });
+    fixture.setElementState({ present: false });
+    fixture.setDomActivity({
+      readyState: "complete",
+      visible: true,
+      idleMs: 650,
+      framesLoading: false,
+    });
+    const startedAt = fixture.services.now();
+
+    await assert.rejects(
+      () => page.click("#nope"),
+      (error) => {
+        assert.equal(error.name, "ElementResolutionError");
+        assert.equal(error.kind, "permanent");
+        assert.match(
+          error.message,
+          /page\.click failed: Selector #nope matched 0 elements/,
+        );
+        assert.match(error.message, /idle for 650ms/);
+        assert.match(error.message, /page\.waitForSelector\(\)/);
+        return true;
+      },
+    );
+    assert.equal(
+      fixture.services.now() - startedAt,
+      500,
+      "the first attempt never gives up; the second attempt proves the page idle",
+    );
+    const probes = fixture.calls.filter(
+      ([kind]) => kind === "domActivityProbe",
+    );
+    assert.equal(
+      probes.length,
+      1,
+      "the page is probed only once idle time could have elapsed",
+    );
+  });
+});
+
+test("a missing action target keeps waiting while the page is busy", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/source");
+    fixture.markNetworkTracked("session:target-1", { lastActivityAt: 0 });
+    fixture.setElementState({ present: false });
+
+    // Still mutating: the observer saw a change a moment ago.
+    fixture.setDomActivity({
+      readyState: "complete",
+      visible: true,
+      idleMs: 120,
+      framesLoading: false,
+    });
+    let startedAt = fixture.services.now();
+    await assert.rejects(
+      () => page.click("#nope", { timeout: 1_000 }),
+      /page\.click timed out after 1000ms: Selector #nope matched 0 elements/,
+    );
+    assert.equal(fixture.services.now() - startedAt, 1_000);
+
+    // Idle DOM, but a request is in flight.
+    fixture.setDomActivity({
+      readyState: "complete",
+      visible: true,
+      idleMs: 900,
+      framesLoading: false,
+    });
+    const baseActivity = fixture.services.networkActivity;
+    const task2 = taskForRound(fixture, "round-a", {
+      networkActivity(sessionIds) {
+        return { ...baseActivity(sessionIds), tracking: true, inflight: 1 };
+      },
+    });
+    const busyPage = task2.page("p1");
+    startedAt = fixture.services.now();
+    await assert.rejects(
+      () => busyPage.click("#nope", { timeout: 1_000 }),
+      /page\.click timed out after 1000ms/,
+    );
+    assert.equal(fixture.services.now() - startedAt, 1_000);
+
+    // Network cannot be observed at all: never fail early.
+    const task3 = taskForRound(fixture, "round-a", {
+      networkActivity() {
+        return { tracking: false, inflight: 0, lastActivityAt: 0 };
+      },
+    });
+    startedAt = fixture.services.now();
+    await assert.rejects(
+      () => task3.page("p1").click("#nope", { timeout: 1_000 }),
+      /page\.click timed out after 1000ms/,
+    );
+    assert.equal(fixture.services.now() - startedAt, 1_000);
+  });
+});
+
+test("page.fill returns after the first accepted read-back", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/source");
+    const callsBefore = fixture.calls.length;
+    const sleepsBefore = fixture.sleepDurations.length;
+
+    await page.fill("#text-input", "hello");
+
+    const readBacks = fixture.calls
+      .slice(callsBefore)
+      .filter(
+        ([kind, method, params]) =>
+          kind === "cdp" &&
+          method === "Runtime.callFunctionOn" &&
+          params?.functionDeclaration?.includes("readFilledValue"),
+      );
+    assert.equal(readBacks.length, 1, "an accepted value is not re-read");
+    assert.equal(
+      fixture.sleepDurations.slice(sleepsBefore).includes(50),
+      false,
+      "no verification interval is spent on an accepted value",
+    );
+    assert.equal(fixture.fillText(), "hello");
+  });
+});
+
+test("a missing action target keeps waiting while the page is hidden", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/source");
+    fixture.markNetworkTracked("session:target-1", { lastActivityAt: 0 });
+    fixture.setElementState({ present: false });
+    fixture.setDomActivity({
+      readyState: "complete",
+      visible: false,
+      idleMs: 5_000,
+      framesLoading: false,
+    });
+    const startedAt = fixture.services.now();
+
+    await assert.rejects(
+      () => page.click("#nope", { timeout: 1_000 }),
+      /page\.click timed out after 1000ms: Selector #nope matched 0 elements/,
+    );
+    assert.equal(fixture.services.now() - startedAt, 1_000);
+  });
+});
+
+test("a popup waiter ignores the URL refresh of an earlier popup", async () => {
+  await withFixture(async (fixture) => {
+    resetPageNotices();
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/source");
+    fixture.openPopupOnNextClick("about:blank");
+    const oldReceipt = await page.click("#old-popup-link");
+    const oldTargetId = oldReceipt.popups[0].targetId;
+
+    const pending = page.waitForEvent("popup", { timeout: 200 });
+    fixture.tabs.get(oldTargetId).url = "https://example.test/old-final";
+    fixture.emitBrowserEvent("Target.targetInfoChanged", {
+      targetInfo: {
+        targetId: oldTargetId,
+        type: "page",
+        url: "https://example.test/old-final",
+      },
+    });
+    fixture.openPopupOnNextClick("https://example.test/next");
+    const nextReceipt = await page.click("#next-popup-link");
+
+    const popup = await pending;
+    assert.equal(popup.label, nextReceipt.popups[0].label);
+    assert.notEqual(popup.label, oldReceipt.popups[0].label);
+  });
+});
+
+test("a click that reaches a file input waits for the trailing chooser event", async () => {
+  await withFixture(async (fixture) => {
+    fixture.setFileInputClicked(true);
+    const task = taskForRound(fixture, "round-a", {
+      async sleep(ms) {
+        fixture.sleepDurations.push(ms);
+        // The chooser event lands only after the action acknowledged its input.
+        fixture.emitFileChooser();
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/upload-guard");
+
+    await assert.rejects(
+      () => page.click("#open-upload"),
+      (error) => {
+        assert.equal(error.code, "EGO_FILE_CHOOSER_OPENED");
+        return true;
+      },
+    );
+    assert.deepEqual(
+      fixture.sleepDurations.slice(-1),
+      [1_000],
+      "a confirmed file-input click waits for the chooser rather than a blind settle",
+    );
+  });
+});
+
+test("snapshot names the Page and the next step when the Page does not answer", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a", {
+      async ensureFrameSessions() {
+        throw new PageUnresponsiveError("Page.getFrameTree", 1_500, "target-1");
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/pending");
+
+    await assert.rejects(
+      () => page.snapshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_UNRESPONSIVE");
+        assert.equal(error.method, "Page.getFrameTree");
+        assert.equal(error.waitedMs, 1_500);
+        assert.equal(error.targetId, "target-1");
+        assert.match(
+          error.message,
+          /^Page p1 .*did not answer Page\.getFrameTree within 1500ms\./,
+        );
+        assert.match(error.message, /navigation has started but not committed/);
+        assert.match(error.message, /page\.cdp\("Page\.stopLoading"\)/);
+        assert.match(error.message, /task\.newPage\(\)/);
+        return true;
+      },
+    );
+  });
+});
+
+test("snapshot stops a pending navigation after its wait and says what the Page shows", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    const stops = [];
+    const task = taskForRound(fixture, "round-a", {
+      async ensureFrameSessions() {
+        throw new PageUnresponsiveError(
+          "Page.getFrameTree",
+          15_000,
+          "target-1",
+          "session-1",
+        );
+      },
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Target.getTargetInfo") {
+          return { targetInfo: { url: "https://example.test/pending" } };
+        }
+        if (method === "Page.stopLoading") {
+          stops.push({ sessionId, timeoutMs });
+          return {};
+        }
+        if (method === "Page.getFrameTree" && stops.length > 0) {
+          return {
+            result: {
+              frameTree: {
+                frame: {
+                  id: "frame-1",
+                  loaderId: "loader-old",
+                  url: "https://example.test/previous",
+                },
+              },
+            },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/previous");
+
+    await assert.rejects(
+      () => page.snapshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_UNRESPONSIVE");
+        assert.equal(error.stopped, true);
+        assert.equal(error.currentUrl, "https://example.test/previous");
+        assert.match(
+          error.message,
+          /^Page p1 \(https:\/\/example\.test\/pending\) did not answer Page\.getFrameTree within 15000ms: a main-frame navigation had started but not committed\. It was stopped once that wait ran out, so the Page answers again and shows https:\/\/example\.test\/previous\./,
+        );
+        assert.match(error.message, /Retry the call/);
+        assert.match(error.message, /page\.goto\(url, \{ timeout \}\)/);
+        assert.doesNotMatch(error.message, /page\.cdp\("Page\.stopLoading"\)/);
+        return true;
+      },
+    );
+    assert.deepEqual(stops, [{ sessionId: "session-1", timeoutMs: 1_000 }]);
+  });
+});
+
+test("snapshot names a probably hung renderer when stopping does not help", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    const task = taskForRound(fixture, "round-a", {
+      async ensureFrameSessions() {
+        throw new PageUnresponsiveError(
+          "Page.getFrameTree",
+          15_000,
+          "target-1",
+          "session-1",
+        );
+      },
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.stopLoading") {
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/hung");
+
+    await assert.rejects(
+      () => page.snapshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_UNRESPONSIVE");
+        assert.equal(error.stopped, false);
+        assert.match(
+          error.message,
+          /did not answer Page\.getFrameTree within 15000ms, and still did not answer after Page\.stopLoading, so its renderer is probably hung\./,
+        );
+        assert.match(error.message, /task\.newPage\(\)/);
+        return true;
+      },
+    );
+  });
+});
+
+test("snapshot describes a Page that stops answering after the first document check", async () => {
+  await withFixture(async (fixture) => {
+    let calls = 0;
+    const task = taskForRound(fixture, "round-a", {
+      async ensureFrameSessions() {
+        calls += 1;
+        if (calls === 1) return new Map();
+        throw new PageUnresponsiveError("Page.getFrameTree", 800, "target-1");
+      },
+      async snapshot() {
+        return {
+          content: 'button "Go" [ref=1]',
+          refs: [{ refId: 1, backendNodeId: 1, role: "button", name: "Go" }],
+        };
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/late");
+
+    await assert.rejects(
+      () => page.snapshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_UNRESPONSIVE");
+        assert.match(
+          error.message,
+          /^Page p1 .*did not answer Page\.getFrameTree within 800ms\./,
+        );
+        assert.match(error.message, /Page\.stopLoading/);
+        return true;
+      },
+    );
+    assert.equal(calls, 2, "the second frame discovery is the one that failed");
   });
 });

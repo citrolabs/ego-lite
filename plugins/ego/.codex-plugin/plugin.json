@@ -1,6 +1,6 @@
 {
   "name": "ego",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Browser automation with the ego-browser Skill",
   "author": {
     "name": "citrolabs",
@@ -17,6 +17,10 @@
     "shortDescription": "Automate user's ego browser",
     "longDescription": "Control ego lite through the packaged ego-browser Skill while keeping agent browsing isolated from the user's own tabs.",
     "developerName": "citrolabs",
+    "websiteURL": "https://lite.ego.app/",
+    "supportURL": "https://github.com/citrolabs/ego-lite/issues",
+    "privacyPolicyURL": "https://lite.ego.app/privacy",
+    "termsOfServiceURL": "https://lite.ego.app/terms",
     "category": "Developer Tools",
     "capabilities": ["Interactive", "Read", "Write"],
     "defaultPrompt": [

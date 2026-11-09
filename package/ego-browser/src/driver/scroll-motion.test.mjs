@@ -80,3 +80,40 @@ test("dispatchWheelMotion keeps small wheel actions immediate", async () => {
   assert.equal(events[0].deltaY, 100);
   assert.deepEqual(sleeps, []);
 });
+
+test("dispatchWheelMotion stops before the next event once the budget is exhausted", async () => {
+  const events = [];
+  let dispatched = 0;
+
+  const completed = await dispatchWheelMotion(
+    {
+      async dispatch(event) {
+        events.push(event);
+        dispatched += 1;
+      },
+      async sleep() {},
+      exhausted: () => dispatched >= 2,
+    },
+    { x: 0, y: 0, deltaX: 0, deltaY: 960 },
+  );
+
+  assert.equal(completed, false);
+  assert.equal(events.length, 2);
+  assert(
+    events.reduce((total, event) => total + event.deltaY, 0) < 960,
+    "a cut motion does not flush the remaining delta",
+  );
+
+  assert.equal(
+    await dispatchWheelMotion(
+      {
+        async dispatch() {},
+        async sleep() {},
+        exhausted: () => true,
+      },
+      { x: 0, y: 0, deltaX: 0, deltaY: 100 },
+    ),
+    true,
+    "a single-event motion still dispatches its one event",
+  );
+});

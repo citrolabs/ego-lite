@@ -187,6 +187,9 @@ export function pageLoadStatesCase() {
     );
     await faviconPage.close();
 
+    // The markers below are console messages, which Ego automation hooks
+    // keep from reaching the session.
+    await page.cdp("egoAutomated.disable");
     await page.cdp("Runtime.enable");
     const networkEventMarker = "ego-networkidle-event-preserved";
     await page.evaluate(({ url, marker }) => {
@@ -236,6 +239,7 @@ export function pageLoadStatesCase() {
       waitUntil: "domcontentloaded",
       timeout: 2_000,
     });
+    await busyPage.cdp("egoAutomated.disable");
     await busyPage.cdp("Runtime.enable");
     await quietPage.cdp("Runtime.enable");
     await busyPage.events();
@@ -347,11 +351,7 @@ export function pageLoadStatesCase() {
       });
       document.body.append(button);
     }, baseUrl + "/secondary?page-load-states=delayed-popup");
-    const ledgerPath = join(
-      process.env.EGO_BROWSER_STATE_DIR,
-      "space-" + task.spaceId + ".json"
-    );
-    const beforeLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
+    const beforeLedger = await readPageLedger(task.spaceId);
     const beforeTargets = new Set(
       Object.values(beforeLedger.pages).map((entry) => entry.targetId)
     );
@@ -362,7 +362,7 @@ export function pageLoadStatesCase() {
       "the popup is created after the action receipt window"
     );
     await page.waitForTimeout(1_000);
-    const afterLedger = JSON.parse(await readFile(ledgerPath, "utf8"));
+    const afterLedger = await readPageLedger(task.spaceId);
     const delayedPopup = Object.entries(afterLedger.pages).find(
       ([, entry]) => !beforeTargets.has(entry.targetId)
     );

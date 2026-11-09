@@ -1,11 +1,12 @@
 {
   "name": "@citrolabs/ego",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Portable ego-browser Skill for AI agent hosts",
   "type": "module",
   "scripts": {
     "test": "node --test \"tests/**/*.test.mjs\"",
-    "package": "node ../scripts/package-plugins.mjs ego"
+    "package": "node ../scripts/package-plugins.mjs ego",
+    "sync-skills": "node ../scripts/sync-skills.mjs ego"
   },
   "exports": {
     ".": "./index.js",
@@ -19,7 +20,6 @@
     ".codex-plugin",
     ".cursor-plugin",
     ".codebuddy-plugin",
-    ".workbuddy-plugin",
     ".qoder-plugin",
     "index.js",
     "cordis.patch.yml",
@@ -32,10 +32,14 @@
       "patch": "./cordis.patch.yml"
     }
   },
+  "npmPackages": {
+    "opencode": "@ego-lite/opencode-plugin",
+    "deepseek-harness": "@ego-lite/dsh-plugin",
+    "pi": "@ego-lite/pi-plugin"
+  },
+  "npmVersion": "1.0.0",
   "keywords": [
     "agent-plugin",
-    "deepseek-harness",
-    "opencode",
     "browser",
     "automation",
     "skill"
@@ -43,6 +47,7 @@
   "author": "citrolabs",
   "license": "MIT",
   "homepage": "https://github.com/citrolabs/ego-lite",
+  "repository": "https://github.com/citrolabs/ego-lite",
   "publishConfig": {
     "access": "public"
   }

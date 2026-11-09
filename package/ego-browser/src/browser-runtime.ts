@@ -6,6 +6,11 @@ import {
 } from "./ego-errors.js";
 
 const RESPONSE_TIMEOUT_MS = 15000;
+// Page.enable, Network.enable, and Target.setAutoAttach answer within
+// milliseconds on a responsive Page. A Page whose main-frame navigation has
+// started but not committed, or whose renderer hangs, answers none of them
+// until it recovers, so one caller never waits longer than this for setup.
+const SESSION_SETUP_WAIT_MS = 2000;
 const SESSION_TTL_MS = 2000;
 // Upper bound for buffered CDP events. The runtime can be long-lived (installEgoSdk
 // inside the browser); without a cap, undrained events grow without bound.
@@ -20,13 +25,11 @@ const OOPIF_AUTO_ATTACH_PARAMS = {
   autoAttach: true,
   waitForDebuggerOnStart: true,
   flatten: true,
-  // Ego Lite can pause an excluded dedicated worker without attaching it,
-  // leaving no session through which the harness can resume that worker.
-  filter: [
-    { type: "iframe", exclude: false },
-    { type: "worker", exclude: false },
-    { exclude: true },
-  ],
+  // Ego Lite can pause an excluded related target (dedicated worker,
+  // AudioWorklet, ...) without attaching it, leaving no session through which
+  // the harness can resume it. Attach every type; the attach handler resumes
+  // and detaches everything except iframes.
+  filter: [{}],
 };
 // A modal JavaScript dialog stalls every command the renderer has to answer,
 // including Page.getFrameTree, Page.captureScreenshot, DOM.*, Accessibility.*,
@@ -57,7 +60,8 @@ type EgoCdpCallbackRuntime = {
 let callbackRuntime: EgoCdpCallbackRuntime | undefined;
 
 export class CdpRequestTimeoutError extends Error {
-  readonly code = "EGO_CDP_REQUEST_TIMEOUT";
+  readonly code: "EGO_CDP_REQUEST_TIMEOUT" | "EGO_PAGE_UNRESPONSIVE" =
+    "EGO_CDP_REQUEST_TIMEOUT";
   readonly method: string;
   readonly timeoutMs: number;
   readonly sessionId?: string;
@@ -69,6 +73,48 @@ export class CdpRequestTimeoutError extends Error {
     this.timeoutMs = timeoutMs;
     this.sessionId = sessionId;
   }
+}
+
+/**
+ * The Page's renderer did not answer a command it has to answer itself.
+ * Chromium suspends every renderer-bound command while a main-frame navigation
+ * has started but not committed; a hung renderer behaves the same way. It is
+ * still a request timeout, so budget-driven retry loops that treat a timeout
+ * at their deadline as their own timeout keep doing so.
+ */
+export class PageUnresponsiveError extends CdpRequestTimeoutError {
+  override readonly code = "EGO_PAGE_UNRESPONSIVE";
+  readonly waitedMs: number;
+  readonly targetId?: string;
+  /**
+   * The pending navigation was stopped once the wait ran out and the Page
+   * answers again; `currentUrl` is what its main frame showed afterwards.
+   */
+  stopped = false;
+  currentUrl?: string;
+
+  constructor(
+    method: string,
+    waitedMs: number,
+    targetId?: string,
+    sessionId?: string,
+  ) {
+    super(method, waitedMs, sessionId);
+    this.name = "PageUnresponsiveError";
+    this.message = `Page did not answer ${method} within ${waitedMs}ms; its main-frame navigation has not committed or its renderer is unresponsive`;
+    this.waitedMs = waitedMs;
+    this.targetId = targetId;
+  }
+}
+
+export function isPageUnresponsiveError(
+  error: unknown,
+): error is PageUnresponsiveError {
+  return (
+    error instanceof PageUnresponsiveError ||
+    (error instanceof Error &&
+      (error as { code?: unknown }).code === "EGO_PAGE_UNRESPONSIVE")
+  );
 }
 
 export function isCdpRequestTimeoutError(
@@ -177,7 +223,9 @@ function targetState(targetId) {
       sessionAt: 0,
       sessionInflight: null,
       events: [],
+      egoAutomationEnabled: false,
       pageEventsEnabled: false,
+      pageEnableInflight: null,
       networkDomainEnabled: false,
       networkEnableInflight: null,
       autoAttachEnabled: false,
@@ -189,6 +237,7 @@ function targetState(targetId) {
           frameId?: string;
           loaderId?: string;
           type?: string;
+          url?: string;
         }
       >(),
       ignoredFaviconRequestIds: new Set<string>(),
@@ -213,7 +262,9 @@ function registerSession(targetId, sessionId) {
   }
   target.sessionId = sessionId;
   target.sessionAt = Date.now();
+  target.egoAutomationEnabled = false;
   target.pageEventsEnabled = false;
+  target.pageEnableInflight = null;
   target.networkDomainEnabled = false;
   target.networkEnableInflight = null;
   target.autoAttachEnabled = false;
@@ -317,7 +368,9 @@ function clearTargetSession(targetId, { remove = false } = {}) {
   target.sessionAt = 0;
   target.sessionInflight = null;
   target.events.length = 0;
+  target.egoAutomationEnabled = false;
   target.pageEventsEnabled = false;
+  target.pageEnableInflight = null;
   target.networkDomainEnabled = false;
   target.networkEnableInflight = null;
   target.autoAttachEnabled = false;
@@ -553,6 +606,7 @@ function recordCommandState(method, params, sessionId, response) {
     const attachedSessionId = response.result?.sessionId || response.sessionId;
     if (params?.targetId && attachedSessionId) {
       registerSession(params.targetId, attachedSessionId);
+      enableEgoAutomation(attachedSessionId);
     }
     return;
   }
@@ -590,11 +644,15 @@ export async function ensureSession(
   const cachedTargetId =
     requestedTargetId || state.preferredTargetId || defaultTargetId;
   const cached = cachedTargetId ? targetStates.get(cachedTargetId) : undefined;
+  // Session setup is best-effort and shared: an unanswered request keeps
+  // running for later callers, while this caller's wait stays short so that
+  // the command it actually came for gets the rest of its budget.
+  const setupWaitMs = Math.min(Math.max(1, timeoutMs), SESSION_SETUP_WAIT_MS);
   if (cached?.sessionId && Date.now() - cached.sessionAt < SESSION_TTL_MS) {
     await Promise.all([
-      enablePageEvents(cached.sessionId, timeoutMs),
-      enableNetworkTrackingForSession(cached.sessionId, false, timeoutMs),
-      enableOopifAutoAttach(cached.sessionId, timeoutMs),
+      enablePageEvents(cached.sessionId, setupWaitMs),
+      enableNetworkTrackingForSession(cached.sessionId, false, setupWaitMs),
+      enableOopifAutoAttach(cached.sessionId, setupWaitMs),
     ]);
     cached.sessionAt = Date.now();
     return cached.sessionId;
@@ -637,10 +695,11 @@ export async function ensureSession(
         }
         registerSession(targetId, sessionId);
       }
+      enableEgoAutomation(target.sessionId);
       await Promise.all([
-        enablePageEvents(target.sessionId, timeoutMs),
-        enableNetworkTrackingForSession(target.sessionId, false, timeoutMs),
-        enableOopifAutoAttach(target.sessionId, timeoutMs),
+        enablePageEvents(target.sessionId, setupWaitMs),
+        enableNetworkTrackingForSession(target.sessionId, false, setupWaitMs),
+        enableOopifAutoAttach(target.sessionId, setupWaitMs),
       ]);
       target.sessionAt = Date.now();
       return target.sessionId;
@@ -664,13 +723,34 @@ export async function ensureFrameSessions(
   if (typeof pageTargetId !== "string" || pageTargetId.length === 0) {
     throw new TypeError("ensureFrameSessions requires a non-empty targetId");
   }
-  const deadline = state.now() + Math.max(1, timeoutMs);
+  const startedAt = state.now();
+  const deadline = startedAt + Math.max(1, timeoutMs);
   const remaining = () => Math.max(1, deadline - state.now());
   const pageSessionId = await ensureSession(pageTargetId, remaining());
-  const [response, frameTreeResponse] = await Promise.all([
-    browserCdp("Target.getTargets", {}, undefined, remaining()),
-    browserCdp("Page.getFrameTree", {}, pageSessionId, remaining()),
-  ]);
+  let response;
+  let frameTreeResponse;
+  try {
+    [response, frameTreeResponse] = await Promise.all([
+      browserCdp("Target.getTargets", {}, undefined, remaining()),
+      browserCdp("Page.getFrameTree", {}, pageSessionId, remaining()),
+    ]);
+  } catch (error) {
+    // The browser process answers Target.getTargets on its own, so a frame
+    // tree timeout means the Page's renderer did not answer within the budget
+    // this call had left: name that instead of the last command sent.
+    if (
+      isCdpRequestTimeoutError(error) &&
+      error.method === "Page.getFrameTree"
+    ) {
+      throw new PageUnresponsiveError(
+        "Page.getFrameTree",
+        state.now() - startedAt,
+        pageTargetId,
+        pageSessionId,
+      );
+    }
+    throw error;
+  }
   const targetInfos =
     response?.result?.targetInfos || response?.targetInfos || [];
   const frameTree =
@@ -920,10 +1000,13 @@ export function networkActivity(sessionIds: string[]): {
   tracking: boolean;
   inflight: number;
   lastActivityAt: number;
+  pendingRequests: string[];
 } {
   let tracking = sessionIds.length > 0;
   let inflight = 0;
   let lastActivityAt = 0;
+  const pendingRequests: string[] = [];
+  const counted = new Set<string>();
   for (const sessionId of new Set(sessionIds)) {
     const targetId = sessionTargets.get(sessionId);
     const target = targetId ? targetStates.get(targetId) : undefined;
@@ -935,10 +1018,24 @@ export function networkActivity(sessionIds: string[]): {
       tracking = false;
       continue;
     }
-    inflight += target.inflightNetworkRequests.size;
-    lastActivityAt = Math.max(lastActivityAt, target.lastNetworkActivityAt);
+    // A request migrates to a child frame target the moment that target
+    // attaches, which can precede the caller's next frame enumeration. Count
+    // the whole subtree so migration never hides an in-flight request.
+    for (const treeTargetId of pageTreeTargetIds(targetId!)) {
+      if (counted.has(treeTargetId)) continue;
+      counted.add(treeTargetId);
+      const member = targetStates.get(treeTargetId);
+      if (!member) continue;
+      inflight += member.inflightNetworkRequests.size;
+      lastActivityAt = Math.max(lastActivityAt, member.lastNetworkActivityAt);
+      for (const request of member.inflightNetworkRequests.values()) {
+        pendingRequests.push(
+          `${request.type || "Other"} ${request.url || request.requestId}`,
+        );
+      }
+    }
   }
-  return { tracking, inflight, lastActivityAt };
+  return { tracking, inflight, lastActivityAt, pendingRequests };
 }
 
 /** Refresh and return the main and known OOPIF sessions for one Page. */
@@ -1066,18 +1163,50 @@ export function prepareFileChooser(
   return interception;
 }
 
+/**
+ * Turn on Ego Lite's automation hooks for one renderer session. They keep the
+ * session's Runtime domain from reporting console messages and capturing call
+ * stacks, both of which pages can observe to detect CDP automation. The
+ * browser keeps the flag across renderer swaps, so it is sent once per session
+ * and before anything else, without waiting: older browsers reject the unknown
+ * domain, and a renderer stalled by a dialog must not block attachment.
+ */
+function enableEgoAutomation(sessionId: string): void {
+  const targetId = sessionId ? sessionTargets.get(sessionId) : undefined;
+  const target = targetId ? targetStates.get(targetId) : undefined;
+  if (
+    !target ||
+    target.sessionId !== sessionId ||
+    target.egoAutomationEnabled
+  ) {
+    return;
+  }
+  target.egoAutomationEnabled = true;
+  void rawCdp("egoAutomated.enable", {}, sessionId).catch(() => {});
+}
+
 async function enablePageEvents(sessionId, timeoutMs = RESPONSE_TIMEOUT_MS) {
   const targetId = sessionId ? sessionTargets.get(sessionId) : undefined;
   const target = targetId ? targetStates.get(targetId) : undefined;
-  if (!target || target.pageEventsEnabled) {
+  if (!target || target.sessionId !== sessionId || target.pageEventsEnabled) {
     return;
   }
   try {
-    await rawCdp("Page.enable", {}, sessionId, timeoutMs);
-    target.pageEventsEnabled = true;
+    await sharedSetupCommand(
+      target,
+      "pageEnableInflight",
+      "Page.enable",
+      {},
+      sessionId,
+      timeoutMs,
+      () => {
+        target.pageEventsEnabled = true;
+      },
+    );
   } catch {
     // Dialog tracking is best-effort. Do not make all helpers fail on targets
-    // that reject Page.enable, such as unusual internal pages.
+    // that reject Page.enable, such as unusual internal pages, or that cannot
+    // answer yet because a navigation has not committed.
   }
 }
 
@@ -1098,42 +1227,25 @@ async function enableNetworkTrackingForSession(
   }
   if (target.networkDomainEnabled) return;
 
-  let inflight = target.networkEnableInflight;
-  const reusedInflight = Boolean(inflight);
-  if (!inflight) {
-    inflight = rawCdp("Network.enable", {}, sessionId, timeoutMs).then(() => {
-      // Events and an OOPIF request migration can race ahead of this response.
-      // Network.disable and session replacement already clear stale state, so
-      // enabling must preserve everything observed for the current session.
-      if (target.sessionId === sessionId && !target.networkDomainEnabled) {
-        target.lastNetworkActivityAt = state.now();
-        target.networkDomainEnabled = true;
-      }
-    });
-    target.networkEnableInflight = inflight;
-    void inflight.then(
+  try {
+    await sharedSetupCommand(
+      target,
+      "networkEnableInflight",
+      "Network.enable",
+      {},
+      sessionId,
+      timeoutMs,
       () => {
-        if (target.networkEnableInflight === inflight) {
-          target.networkEnableInflight = null;
-        }
-      },
-      () => {
-        if (target.networkEnableInflight === inflight) {
-          target.networkEnableInflight = null;
+        // Events and an OOPIF request migration can race ahead of this
+        // response. Network.disable and session replacement already clear
+        // stale state, so enabling must preserve everything observed for the
+        // current session.
+        if (!target.networkDomainEnabled) {
+          target.lastNetworkActivityAt = state.now();
+          target.networkDomainEnabled = true;
         }
       },
     );
-  }
-
-  try {
-    await (reusedInflight
-      ? waitForSharedCdpRequest(
-          inflight,
-          "Network.enable",
-          sessionId,
-          timeoutMs,
-        )
-      : inflight);
   } catch (error) {
     if (required) throw error;
   }
@@ -1153,45 +1265,57 @@ async function enableOopifAutoAttach(
   if (!target || target.sessionId !== sessionId || target.autoAttachEnabled) {
     return;
   }
-
-  let inflight = target.autoAttachInflight;
-  const reusedInflight = Boolean(inflight);
-  if (!inflight) {
-    inflight = rawCdp(
+  try {
+    await sharedSetupCommand(
+      target,
+      "autoAttachInflight",
       "Target.setAutoAttach",
       OOPIF_AUTO_ATTACH_PARAMS,
       sessionId,
       timeoutMs,
-    ).then(() => {
-      if (target.sessionId === sessionId) target.autoAttachEnabled = true;
-    });
-    target.autoAttachInflight = inflight;
-    void inflight.then(
       () => {
-        if (target.autoAttachInflight === inflight) {
-          target.autoAttachInflight = null;
-        }
-      },
-      () => {
-        if (target.autoAttachInflight === inflight) {
-          target.autoAttachInflight = null;
-        }
+        target.autoAttachEnabled = true;
       },
     );
-  }
-  try {
-    await (reusedInflight
-      ? waitForSharedCdpRequest(
-          inflight,
-          "Target.setAutoAttach",
-          sessionId,
-          timeoutMs,
-        )
-      : inflight);
   } catch {
     // Page APIs still work on bridges without auto-attach. Frame discovery can
     // attach explicitly later, but exact network-idle tracking needs support.
   }
+}
+
+type SetupInflightKey =
+  | "pageEnableInflight"
+  | "networkEnableInflight"
+  | "autoAttachInflight";
+
+/**
+ * Send one session-setup command at most once at a time per session, and
+ * bound this caller's wait without cancelling the request. The request keeps
+ * the full transport timeout, so a Page that answers late (after its pending
+ * navigation commits) still records the enabled state for later callers
+ * instead of each caller sending the command again and waiting again.
+ */
+function sharedSetupCommand(
+  target,
+  key: SetupInflightKey,
+  method: string,
+  params: Record<string, unknown>,
+  sessionId: string,
+  timeoutMs: number,
+  onSuccess: () => void,
+): Promise<void> {
+  let inflight: Promise<void> | null = target[key];
+  if (!inflight) {
+    inflight = rawCdp(method, params, sessionId).then(() => {
+      if (target.sessionId === sessionId) onSuccess();
+    });
+    target[key] = inflight;
+    const clear = () => {
+      if (target[key] === inflight) target[key] = null;
+    };
+    void inflight.then(clear, clear);
+  }
+  return waitForSharedCdpRequest(inflight, method, sessionId, timeoutMs);
 }
 
 /** Bound one caller's wait without cancelling the shared CDP request. */
@@ -1204,7 +1328,17 @@ function waitForSharedCdpRequest(
   const callerTimeoutMs = Math.max(1, timeoutMs);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new CdpRequestTimeoutError(method, callerTimeoutMs, sessionId));
+      // Mirror rawCdp's timeout: name a dialog if one is what stalled it.
+      const dialog = DIALOG_SAFE_METHOD(method)
+        ? null
+        : pendingDialog(sessionId);
+      reject(
+        dialog
+          ? new PageDialogOpenedError(method, sessionId, dialog, {
+              alreadyOpen: true,
+            })
+          : new CdpRequestTimeoutError(method, callerTimeoutMs, sessionId),
+      );
     }, callerTimeoutMs);
     request.then(
       () => {
@@ -1226,6 +1360,8 @@ function initializeAutoAttachedTarget(
   // Invoke every initializer before awaiting any result. Chromium can pause an
   // OOPIF at attachment, so waiting for Network.enable before sending resume
   // would deadlock if the protocol response depends on renderer progress.
+  // Automation hooks go first so they cover the frame's first script.
+  enableEgoAutomation(sessionId);
   const pageEvents = enablePageEvents(sessionId);
   const networkEvents = enableNetworkTrackingForSession(sessionId);
   const nestedFrames = enableOopifAutoAttach(sessionId);
@@ -1233,6 +1369,29 @@ function initializeAutoAttachedTarget(
     ? rawCdp("Runtime.runIfWaitingForDebugger", {}, sessionId).catch(() => {})
     : Promise.resolve();
   void Promise.allSettled([pageEvents, networkEvents, nestedFrames, resume]);
+}
+
+/**
+ * Resume a non-frame target (worker, worklet, ...) paused by auto-attach and
+ * drop its session, so the harness never holds a debugger on targets it does
+ * not drive.
+ */
+function releaseAutoAttachedTarget(
+  sessionId: string,
+  parentSessionId: string,
+  waitingForDebugger: boolean,
+): void {
+  // Detach is answered by the browser and could overtake a resume still on its
+  // way to the renderer, so only detach after the resume has been answered.
+  const resume = waitingForDebugger
+    ? rawCdp("Runtime.runIfWaitingForDebugger", {}, sessionId)
+    : Promise.resolve();
+  void resume
+    .catch(() => {})
+    .then(() =>
+      rawCdp("Target.detachFromTarget", { sessionId }, parentSessionId),
+    )
+    .catch(() => {});
 }
 
 function finishNetworkRequest(targetId: string, requestId: string): void {
@@ -1306,6 +1465,7 @@ function recordNetworkEvent(targetId: string, target, data): void {
       ...(typeof data.params?.type === "string"
         ? { type: data.params.type }
         : {}),
+      ...(typeof url === "string" ? { url } : {}),
     });
     target.lastNetworkActivityAt = state.now();
     return;
@@ -1479,9 +1639,17 @@ function handleMessage(message) {
         sessionId,
         data.params?.waitingForDebugger === true,
       );
+    } else if (sessionId && sourceTargetId && targetType !== "page") {
+      // Auto-attached by one of this runtime's sessions: a worker, worklet, or
+      // other related target the harness does not drive.
+      releaseAutoAttachedTarget(
+        sessionId,
+        data.sessionId,
+        data.params?.waitingForDebugger === true,
+      );
     } else if (sessionId && data.params?.waitingForDebugger === true) {
       // A foreign auto-attach configuration may still deliver other related
-      // target types. Never leave an unrelated worker paused by this runtime.
+      // target types. Never leave an unrelated target paused by this runtime.
       void rawCdp("Runtime.runIfWaitingForDebugger", {}, sessionId).catch(
         () => {},
       );

@@ -1,0 +1,14 @@
+{
+  "name": "ego-agent-skills",
+  "owner": {
+    "name": "citrolabs",
+    "email": "contact@citrolabs.ai"
+  },
+  "plugins": [
+    {
+      "name": "ego",
+      "source": "./plugins/ego",
+      "description": "Browser automation with the ego-browser Skill"
+    }
+  ]
+}

@@ -8,7 +8,10 @@ The ego-browser Skill has two layers:
   cookie/cache/storage guide that must be readable before ego lite exists.
 - **Usage guide** — `package/ego-browser/skill-body/SKILL.md`. It is versioned
   with the SDK and printed by `ego-browser skill`, so the agent always reads the
-  guide that matches the installed browser.
+  guide that matches the installed browser. The build renders one guide per
+  operating system from this single source: passages between
+  `<!-- platform: windows -->` and `<!-- /platform -->` markers (or
+  `platform: macos`) only reach that platform's guide.
 
 This document lists what the ego lite app and its native `ego-browser` launcher
 must implement. Everything else lives in this repository.
@@ -22,7 +25,9 @@ must implement. Everything else lives in this repository.
 dist/out/
 ├── index.js                     SDK bundle
 ├── ego-browser/
-│   └── SKILL.md                 usage guide printed by `ego-browser skill`
+│   ├── SKILL.md                 all-platform usage guide (fallback)
+│   ├── SKILL.macos.md           usage guide printed by `ego-browser skill` on macOS
+│   └── SKILL.windows.md         usage guide printed by `ego-browser skill` on Windows
 └── agent-skills/
     └── ego-browser/             entry Skill to install into ~/.agents/skills/ego-browser
         ├── SKILL.md
@@ -43,11 +48,17 @@ Ship `dist/out/` as one unit inside the app, keeping `ego-browser/` next to
    (`~/Library/Application Support/Citro Labs/debug/index.js`), then the bundled
    SDK. Do not implement a separate lookup, or the guide and SDK can come from
    different builds.
-2. Read `ego-browser/SKILL.md` from the directory that contains the resolved
-   `index.js`.
+2. Pick the guide for the operating system the launcher runs on, from the
+   directory that contains the resolved `index.js`: `ego-browser/SKILL.macos.md`
+   on macOS, `ego-browser/SKILL.windows.md` on Windows. When that file does not
+   exist (an older SDK passed through `--sdk-path`, or a platform without its
+   own guide, such as Linux), read `ego-browser/SKILL.md` instead. Choose by
+   operating system, not by the parent shell: the Windows guide already covers
+   Git Bash, PowerShell, and cmd.
 3. Write it to stdout unchanged and exit 0. The build already adds the first
-   line (`[ego-browser:skill] ego-browser usage guide v<version>`) and the last
-   line (`[ego-browser:skill] end of guide v<version>`); do not add or parse
+   line (`[ego-browser:skill] ego-browser usage guide v<version> (<platform>)`,
+   without the parenthesis in the all-platform `SKILL.md`) and the last line
+   (`[ego-browser:skill] end of guide v<version>`); do not add or parse
    anything else.
 4. When the SDK is not the bundled one, print one extra line before the guide so
    developers notice the override:
@@ -63,7 +74,7 @@ Errors:
 | Case                                                    | Behavior                                                                                     |
 | ------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
 | Any extra argument, e.g. `ego-browser skill foo`        | Print usage to stderr, exit non-zero                                                         |
-| `ego-browser/SKILL.md` missing next to the resolved SDK | Print the path that was checked to stderr, exit non-zero; do not fall back to another source |
+| Neither the platform guide nor `ego-browser/SKILL.md` exists next to the resolved SDK | Print the paths that were checked to stderr, exit non-zero; do not fall back to another source |
 
 Also list `skill` in `ego-browser help`, e.g. "Print the usage guide for this
 ego lite version".
@@ -89,8 +100,13 @@ upgrades only replace the bundled payload.
 ## Acceptance checks
 
 - [ ] `ego-browser skill` output is byte-identical to the bundled
-      `ego-browser/SKILL.md`, starts with the version line, and ends with
-      `[ego-browser:skill] end of guide v<version>`.
+      `ego-browser/SKILL.macos.md` on macOS and `ego-browser/SKILL.windows.md`
+      on Windows, starts with the version line naming that platform, and ends
+      with `[ego-browser:skill] end of guide v<version>`.
+- [ ] On macOS the printed guide has no `### PowerShell` section; on Windows it
+      has both the `### Bash, Zsh, Git Bash` and `### PowerShell` sections.
+- [ ] With an SDK directory that only contains `ego-browser/SKILL.md`, the
+      command prints that file.
 - [ ] With `--sdk-path <checkout>/package/ego-browser/dist/out/index.js` or the
       debug override, the output is the checkout's guide and starts with a
       `source=` line; removing the override restores the bundled guide.
