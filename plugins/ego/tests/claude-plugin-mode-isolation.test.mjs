@@ -37,17 +37,17 @@ function assertPureSkillText(value, label) {
 function assertTaskSpaceSafety(skill, label) {
   assert.match(
     skill,
-    /One user goal uses one TaskSpace across all of your replies about it/i,
+    /One user goal keeps one TaskSpace across your replies while that space\s+exists/i,
     `${label} must keep one TaskSpace per user goal`,
   );
   assert.match(
     skill,
-    /continues in that goal's\s+space, whatever state your last reply left it in/i,
+    /continues in that goal's\s+space if it still exists, whatever state your last reply left it in/i,
     `${label} must resume the existing TaskSpace across rounds`,
   );
   assert.match(
     skill,
-    /Claim a user-owned or inactive space that is not yours to continue only when the\s+user explicitly asks/i,
+    /Claim any other user-owned or inactive space only when the user explicitly\s+asks/i,
     `${label} must not implicitly claim a user-owned TaskSpace`,
   );
   assert.match(
@@ -67,7 +67,7 @@ function assertTaskSpaceSafety(skill, label) {
   );
   assert.match(
     skill,
-    /End each message's browser work with one `finish\(\)` in a separate last script,[\s\S]*?wait for it\s+before you report/i,
+    /End each reply's browser work with one `finish\(\)` in a separate last script,[\s\S]*?wait for it\s+before you report/i,
     `${label} must wait for cleanup before reporting completion`,
   );
   assert.match(
