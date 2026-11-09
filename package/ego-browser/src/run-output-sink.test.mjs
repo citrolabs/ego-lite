@@ -1,23 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 
 import { runMain } from "../dist/src/run.js";
-import {
-  __testing as screencastTesting,
-  stopScreencast,
-} from "../dist/src/driver/screencast.js";
 
 // A minimal native ego whose only method reports a hard stop, the same shape the real
 // bindings return when the user holds (or has not handed over) the task space. The
-// `listTaskSpaces` helper lifts it through assertNoEgoError -> buildEgoError, which is
+// `listTaskSpaces` helper lifts it through invokeEgo -> buildEgoError, which is
 // where the sink is told a hard stop occurred.
-function hardStopEgo(error_code) {
+function hardStopEgo(
+  error_code,
+  error = "native wording that should never reach the agent",
+) {
   return {
     calls: 0,
     async listTaskSpaces() {
       this.calls += 1;
       return {
-        error: "native wording that should never reach the agent",
+        error,
         error_code,
       };
     },
@@ -69,7 +69,6 @@ async function runScript(code, ego) {
       stdinText: code,
       stdout,
       stderr,
-      services: { printUpdateBanner() {} },
     });
   } catch (err) {
     error = err;
@@ -83,10 +82,66 @@ async function runScript(code, ego) {
   return { exitCode, error, stdout: stdout.text(), stderr: stderr.text() };
 }
 
-test("a clean run flushes buffered console.log output in order", async () => {
-  const result = await runScript(`console.log("one"); console.log("two");`);
+test("a clean run flushes buffered cliLog output in order", async () => {
+  const result = await runScript(`cliLog("one"); cliLog("two");`);
   assert.equal(result.exitCode, 0);
   assert.equal(result.stdout, "one\ntwo\n");
+});
+
+test("help() prints its text without an explicit log", async () => {
+  const result = await runScript(`help("TaskSpace.newPage");`);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(
+    result.stdout,
+    "TaskSpace.newPage\n\nCreate and durably label a blank Page.\n\nawait task.newPage()\n",
+  );
+});
+
+test("the embedded SDK prints help() through the host cliLog and returns the text", async () => {
+  const { installEgoSdk } = await import("../dist/src/index.js");
+  const lines = [];
+  const target = {};
+  installEgoSdk(target, { cliLog: (line) => lines.push(line) });
+
+  const text = target.help("TaskSpace.newPage");
+
+  assert.equal(
+    text,
+    "TaskSpace.newPage\n\nCreate and durably label a blank Page.\n\nawait task.newPage()",
+  );
+  assert.deepEqual(lines, [text]);
+});
+
+test("round console methods share the buffered output channel", async () => {
+  const result = await runScript(`
+    console.log("plain", { value: 1 });
+    console.info("info");
+    console.warn("careful");
+    console.error("broken");
+    cliLog("legacy");
+  `);
+
+  assert.equal(result.exitCode, 0);
+  assert.equal(
+    result.stdout,
+    "plain { value: 1 }\ninfo\n[warn] careful\n[error] broken\nlegacy\n",
+  );
+});
+
+test("a hard stop discards console output together with cliLog output", async () => {
+  const ego = hardStopEgo("EGO_TASK_SPACE_USER_IN_CONTROL");
+  const result = await runScript(
+    `
+      console.log("before");
+      try { await listTaskSpaces(); } catch {}
+      console.warn("after");
+    `,
+    ego,
+  );
+
+  assert.match(result.stdout, /Control of this task space is with the user/);
+  assert.doesNotMatch(result.stdout, /before|after/);
 });
 
 test("a swallowed user-control hard stop discards all output and prints the guidance once", async () => {
@@ -94,27 +149,64 @@ test("a swallowed user-control hard stop discards all output and prints the guid
   const result = await runScript(
     `
       for (const site of ["a", "b", "c"]) {
-        console.log("visiting " + site);
+        cliLog("visiting " + site);
         try {
-          await taskSpaces.list();
-          console.log("ok " + site);
+          await listTaskSpaces();
+          cliLog("ok " + site);
         } catch (e) {
-          console.log("failed " + site + ": " + e.message);
+          cliLog("failed " + site + ": " + e.message);
         }
       }
-      console.log("summary: done");
+      cliLog("summary: done");
     `,
     ego,
   );
 
   assert.equal(result.exitCode, 0);
   // Only the owned guidance survives — none of the script's own logging.
-  assert.match(result.stdout, /taken control of this task space/);
-  assert.match(result.stdout, /taskSpaces\.takeOver\(\)/);
+  assert.match(result.stdout, /Control of this task space is with the user/);
+  assert.match(result.stdout, /takeOverTaskSpace\(spaceId\)/);
   assert.doesNotMatch(result.stdout, /visiting|failed|ok |summary/);
   // Printed exactly once, even though every loop iteration re-reported the hard stop.
-  assert.equal(result.stdout.match(/taskSpaces\.takeOver\(\)/g).length, 1);
+  assert.equal(result.stdout.match(/takeOverTaskSpace\(spaceId\)/g).length, 1);
   assert.ok(ego.calls >= 3, "every iteration should have hit the hard stop");
+});
+
+test("a swallowed 1.3 skill mismatch discards business output and explains recovery", async () => {
+  const result = await runScript(`
+    console.log("before stale call");
+    try {
+      await egoBrowser.newTaskSpace("stale skill");
+    } catch (error) {
+      console.log("caught: " + error.message);
+    }
+    console.log("after stale call");
+  `);
+
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /\[ego-browser:skill-stale\]/);
+  assert.match(result.stdout, /Run `ego-browser skill`/);
+  assert.match(result.stdout, /taskSpace\(nameOrId\)/);
+  assert.doesNotMatch(result.stdout, /before stale|caught:|after stale/);
+  assert.equal(result.stdout.match(/\[ego-browser:skill-stale\]/g).length, 1);
+});
+
+test("a permission hard stop discards business output and keeps its specific guidance", async () => {
+  const ego = hardStopEgo("EGO_TASK_SPACE_USER_IN_CONTROL", "camera");
+  const result = await runScript(
+    `
+      console.log("before permission");
+      try { await listTaskSpaces(); } catch {}
+      console.log("after permission");
+    `,
+    ego,
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.match(result.stdout, /camera access/);
+  assert.match(result.stdout, /takeOverTaskSpace\(spaceId\)/);
+  assert.doesNotMatch(result.stdout, /before permission|after permission/);
+  assert.equal(result.stdout.match(/camera access/g).length, 1);
 });
 
 test("an inactive / unassigned task space is also a hard stop", async () => {
@@ -122,48 +214,48 @@ test("an inactive / unassigned task space is also a hard stop", async () => {
   const result = await runScript(
     `
       try {
-        await taskSpaces.list();
+        await listTaskSpaces();
       } catch (e) {
-        console.log("swallowed: " + e.message);
+        cliLog("swallowed: " + e.message);
       }
-      console.log("more business output");
+      cliLog("more business output");
     `,
     ego,
   );
 
   assert.equal(result.exitCode, 0);
   assert.match(result.stdout, /no longer assigned to the agent/);
-  assert.match(result.stdout, /taskSpaces\.claim\(id\)/);
+  assert.match(result.stdout, /claimTaskSpace\(spaceId\)/);
   assert.doesNotMatch(result.stdout, /swallowed|business/);
 });
 
 test("a swallowed snapshot hard stop (rejected, not resolved) also collapses to one message", async () => {
   // snapshot rejects directly instead of resolving with { error }, so it bypasses
-  // assertNoEgoError; the collapse only works if snapshot() rebuilds it via buildEgoError.
+  // invokeEgo; the collapse only works if snapshot() rebuilds it via buildEgoError.
   const ego = snapshotHardStopEgo("EGO_TASK_SPACE_USER_IN_CONTROL");
   const result = await runScript(
     `
       for (const site of ["a", "b", "c"]) {
-        console.log("visiting " + site);
+        cliLog("visiting " + site);
         try {
-          await page.snapshot();
-          console.log("ok " + site);
+          await snapshotText();
+          cliLog("ok " + site);
         } catch (e) {
-          console.log("failed " + site + ": " + e.message);
+          cliLog("failed " + site + ": " + e.message);
         }
       }
-      console.log("summary: done");
+      cliLog("summary: done");
     `,
     ego,
   );
 
   assert.equal(result.exitCode, 0);
   // The owned guidance survives once; the native wording and business logs are dropped.
-  assert.match(result.stdout, /taken control of this task space/);
-  assert.match(result.stdout, /taskSpaces\.takeOver\(\)/);
+  assert.match(result.stdout, /Control of this task space is with the user/);
+  assert.match(result.stdout, /takeOverTaskSpace\(spaceId\)/);
   assert.doesNotMatch(result.stdout, /native wording/);
   assert.doesNotMatch(result.stdout, /visiting|failed|ok |summary/);
-  assert.equal(result.stdout.match(/taskSpaces\.takeOver\(\)/g).length, 1);
+  assert.equal(result.stdout.match(/takeOverTaskSpace\(spaceId\)/g).length, 1);
   assert.ok(
     ego.calls >= 3,
     "every iteration should have hit the snapshot hard stop",
@@ -174,9 +266,9 @@ test("an uncaught hard stop discards output without double-printing the message"
   const ego = hardStopEgo("EGO_TASK_SPACE_USER_IN_CONTROL");
   const result = await runScript(
     `
-      console.log("before");
-      await taskSpaces.list();
-      console.log("after");
+      cliLog("before");
+      await listTaskSpaces();
+      cliLog("after");
     `,
     ego,
   );
@@ -184,13 +276,16 @@ test("an uncaught hard stop discards output without double-printing the message"
   // The thrown Error already surfaces the message (the host prints it), so the sink
   // discards the buffer and stays silent rather than printing the guidance a second time.
   assert.ok(result.error, "expected runMain to reject");
-  assert.match(result.error.message, /taken control of this task space/);
+  assert.match(
+    result.error.message,
+    /Control of this task space is with the user/,
+  );
   assert.equal(result.stdout, "");
 });
 
 test("an ordinary uncaught error still flushes the output logged before it", async () => {
   const result = await runScript(`
-    console.log("partial result");
+    cliLog("partial result");
     throw new Error("boom");
   `);
 
@@ -199,39 +294,66 @@ test("an ordinary uncaught error still flushes the output logged before it", asy
   assert.equal(result.stdout, "partial result\n");
 });
 
-test("runMain finalizes an active screencast when the script ends", async () => {
-  let stopCalls = 0;
-  const restore = screencastTesting.setOverrides({
-    ensureSession: async () => "session-1",
-    subscribeBrowserEvent: () => () => {},
-    browserCdp: async (method) => {
-      if (method === "Page.captureScreenshot") {
-        return { result: { data: Buffer.from("fallback").toString("base64") } };
-      }
-      return { result: {} };
-    },
-    createRecorder: () => ({
-      async start() {},
-      writeFrame() {},
-      async stop() {
-        stopCalls += 1;
-      },
-    }),
-  });
-  try {
-    const result = await runScript(`
-      await page.screencast.start({
-        path: "/tmp/auto-finalized.webm",
-        size: { width: 640, height: 480 },
-      });
-      console.log("recorded");
-    `);
+for (const [globalName, expression] of [
+  ["document", "document.body"],
+  ["window", "window.scrollY"],
+  ["location", "location.href"],
+  ["scrollY", "scrollY"],
+]) {
+  test(`a top-level ${globalName} ReferenceError explains the Node and Page execution boundary`, async () => {
+    const result = await runScript(`console.log(${expression});`);
 
-    assert.equal(result.exitCode, 0);
-    assert.equal(result.stdout, "recorded\n");
-    assert.equal(stopCalls, 1);
-  } finally {
-    await stopScreencast().catch(() => {});
-    restore();
+    assert.ok(result.error, "expected runMain to reject");
+    assert.match(
+      result.error.message,
+      new RegExp(`${globalName} is not defined`, "i"),
+    );
+    assert.match(
+      result.error.message,
+      /heredoc runs in Node\.js, not in the Page/i,
+    );
+    assert.match(result.error.message, /page\.evaluate\(\)/i);
+  });
+}
+
+test("a syntax error points to the invalid user-script line", async () => {
+  const result = await runScript(`
+const task = await taskSpace(556);
+const rows = (await task.pages()).map(page => ({ title: await page.title() }));
+console.log(rows);
+`);
+
+  assert.ok(result.error, "expected runMain to reject");
+  assert.match(result.error.message, /syntax error at line 3, column \d+/i);
+  assert.match(result.error.message, /3 \| const rows =/);
+  assert.match(result.error.message, /\^/);
+  assert.doesNotMatch(result.error.message, /node:internal\/vm/);
+});
+
+test("the direct CLI rejects removed placeholder commands", async () => {
+  for (const command of ["--doctor", "--reload", "--debug-clicks"]) {
+    const stdout = captureStream();
+    const stderr = captureStream();
+    const exitCode = await runMain({
+      argv: [command],
+      stdinText: "",
+      stdout,
+      stderr,
+    });
+
+    assert.equal(exitCode, 2, command);
+    assert.equal(stdout.text(), "", command);
+    assert.match(stderr.text(), /^Usage:/, command);
   }
+});
+
+test("the direct CLI prints an ordinary uncaught error once", () => {
+  const entry = new URL("../dist/out/index.js", import.meta.url);
+  const result = spawnSync(process.execPath, [entry.pathname], {
+    input: 'throw new Error("single-error-probe")\n',
+    encoding: "utf8",
+  });
+
+  assert.equal(result.status, 1);
+  assert.equal(result.stderr.match(/single-error-probe/g)?.length, 1);
 });

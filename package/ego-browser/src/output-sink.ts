@@ -1,46 +1,50 @@
+import { writeSync } from "node:fs";
+
+import { formatCliLogValue } from "./format.js";
+import {
+  consumeUnhandledPageNotices,
+  resetPageNotices,
+  type UnhandledPageNotice,
+} from "./page-discovery.js";
+
 /**
- * Output sink for the agent-facing heredoc runtime.
- *
- * `console.log` is the only channel an agent reads (the runtime routes it here). A
- * single user takeover turns that channel into noise: while the user holds control,
- * every browser command re-reports the same hard-stop error, so a script that loops
- * over work and swallows each error (try/catch, `.catch()`) prints the same guidance
- * on every iteration, buried under its own business logging and success rows.
- *
- * To collapse that to one clean line we buffer console.log output instead of writing it
- * straight through. When a hard-stop error is born (see `buildEgoError`) we record its
- * owned message once. At the end of the run we either:
- *   - a hard stop occurred -> discard the whole buffer and emit the owned message once
- *   - otherwise            -> flush the buffered output verbatim
- * and in both cases append the update-notice trailer (if any) last, so an out-of-band
- * "ego lite update available" hint reads as a footer after the command's own output.
- *
- * Buffering is the price of discarding pre-stop output: bytes already written cannot be
- * recalled, so nothing may be written until we know the run did not hard-stop. Each
- * heredoc runs in its own short-lived process, so this module state is per-run and needs
- * no cross-round reset; `resetSink()` exists only so in-process tests can reuse the run.
+ * Round output stays buffered until completion because bytes written before a hard
+ * stop cannot be recalled. A hard stop discards business output and Page notices,
+ * then emits its owned guidance once. The short-lived process makes this state
+ * round-local; reset functions exist only for in-process tests.
  */
 
-type WritableLike = { write(chunk: string): unknown };
+type WritableLike = { write(chunk: string): unknown; fd?: number };
+type LifecycleLike = {
+  on(event: "beforeExit" | "exit", listener: () => void): unknown;
+};
+
+export type RoundConsole = Pick<Console, "log" | "info" | "warn" | "error">;
 
 let buffer: string[] = [];
 let hardStopMessage: string | null = null;
-let noticeTrailer: string | null = null;
 let flushed = false;
 let lifecycleHooked = false;
 
-/** Buffer one already-formatted console.log chunk (the trailing newline is included). */
+/** Buffer one already-formatted cliLog chunk (the trailing newline is included). */
 export function bufferOutput(chunk: string): void {
   buffer.push(chunk);
 }
 
-/**
- * Record the update-notice line to append after this run's output. Set out-of-band by
- * the fire-and-forget version check; appended by `flushSink` so it trails the command's
- * own output rather than racing ahead of it. Last write wins.
- */
-export function setNoticeTrailer(line: string): void {
-  noticeTrailer = line;
+/** Create the console object injected into one agent round. */
+export function createRoundConsole(
+  writeLine: (line: string) => void = bufferOutput,
+): RoundConsole {
+  const append = (prefix: string, args: unknown[]) => {
+    const body = args.map(formatCliLogValue).join(" ");
+    writeLine(`${prefix}${body}\n`);
+  };
+  return Object.freeze({
+    log: (...args: unknown[]) => append("", args),
+    info: (...args: unknown[]) => append("", args),
+    warn: (...args: unknown[]) => append("[warn] ", args),
+    error: (...args: unknown[]) => append("[error] ", args),
+  });
 }
 
 /**
@@ -66,6 +70,7 @@ export function markHardStop(message: string): void {
 export function flushSink(stream: WritableLike, thrown: boolean): void {
   if (flushed) return;
   flushed = true;
+  const pageNotices = consumeUnhandledPageNotices();
   if (hardStopMessage !== null) {
     // Drop every buffered line — business logs, success rows, and the repeated error
     // echoes — so the owned guidance is all that remains.
@@ -78,13 +83,9 @@ export function flushSink(stream: WritableLike, thrown: boolean): void {
     }
   } else {
     for (const chunk of buffer) stream.write(chunk);
-  }
-  // The update hint is independent of the run's own output (and of a hard stop), so it
-  // is appended last in every case — after the business output or the owned guidance.
-  if (noticeTrailer !== null) {
-    stream.write(
-      noticeTrailer.endsWith("\n") ? noticeTrailer : `${noticeTrailer}\n`,
-    );
+    if (pageNotices.length > 0) {
+      stream.write(formatPageNotices(pageNotices));
+    }
   }
   buffer = [];
 }
@@ -93,8 +94,21 @@ export function flushSink(stream: WritableLike, thrown: boolean): void {
 export function resetSink(): void {
   buffer = [];
   hardStopMessage = null;
-  noticeTrailer = null;
   flushed = false;
+  resetPageNotices();
+}
+
+function formatPageNotices(notices: UnhandledPageNotice[]): string {
+  const lines = notices.map((notice) => {
+    const source = notice.openerLabel ? ` from ${notice.openerLabel}` : "";
+    const url = oneLine(notice.url || "about:blank");
+    return `Unhandled page ${notice.label}${source}: ${url}`;
+  });
+  return `[ego-browser:pages]\n${lines.join("\n")}\n`;
+}
+
+function oneLine(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 /**
@@ -106,9 +120,21 @@ export function resetSink(): void {
  * stays silent and lets the propagating Error surface the message). The stream still
  * accepts writes in both events, so the same `stream` serves both. Registered once.
  */
-export function installLifecycleFlush(stream: WritableLike): void {
+export function installLifecycleFlush(
+  stream: WritableLike,
+  lifecycle: LifecycleLike = process,
+): void {
   if (lifecycleHooked) return;
   lifecycleHooked = true;
-  process.on("beforeExit", () => flushSink(stream, false));
-  process.on("exit", () => flushSink(stream, true));
+  const writer = Number.isInteger(stream.fd)
+    ? {
+        write(chunk: string) {
+          // `exit` cannot wait for a piped Writable to drain. A synchronous fd
+          // write preserves the final buffered lines on both lifecycle paths.
+          writeSync(stream.fd!, chunk);
+        },
+      }
+    : stream;
+  lifecycle.on("beforeExit", () => flushSink(writer, false));
+  lifecycle.on("exit", () => flushSink(writer, true));
 }

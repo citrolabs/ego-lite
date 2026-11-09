@@ -5,10 +5,9 @@ export function runCommand(command, args, options = {}) {
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const echo = options.echo !== false;
     const child = spawn(command, args, {
       cwd: options.cwd ?? process.cwd(),
-      env: process.env,
+      env: { ...process.env, ...options.env },
       stdio: options.input ? ["pipe", "pipe", "pipe"] : "inherit",
     });
     const timer =
@@ -26,10 +25,10 @@ export function runCommand(command, args, options = {}) {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      if (error.code === "ENOENT" && command === "ego-browser") {
+      if (error.code === "ENOENT" && options.egoBrowserSdkPath) {
         reject(
           new Error(
-            "ego-browser command not found; install/open ego lite before running real browser e2e",
+            `Ego Lite CLI not found at ${command}; install/open Ego Lite or set EGO_BROWSER_REAL_E2E_CLI`,
           ),
         );
         return;
@@ -38,11 +37,11 @@ export function runCommand(command, args, options = {}) {
     });
     child.stdout?.on("data", (chunk) => {
       stdout += chunk;
-      if (echo) process.stdout.write(chunk);
+      process.stdout.write(chunk);
     });
     child.stderr?.on("data", (chunk) => {
       stderr += chunk;
-      if (echo) process.stderr.write(chunk);
+      process.stderr.write(chunk);
     });
     child.on("close", (code) => {
       if (settled) return;

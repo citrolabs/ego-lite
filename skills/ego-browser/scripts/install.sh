@@ -213,7 +213,7 @@ install_ego_lite() {
 }
 
 main() {
-	[ "$(uname -s)" = "Darwin" ] || die "this script only supports macOS"
+	[ "$(uname -s)" = "Darwin" ] || die "this script only supports macOS; on Windows and other platforms install from https://lite.ego.app/"
 
 	# Install first if not present; otherwise use the ego-browser bundled inside the app.
 	installed_app_path=$(find_ego_lite_app || true)

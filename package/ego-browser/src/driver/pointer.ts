@@ -1,8 +1,7 @@
-import { cdp, evaluate } from "../cdp-eval.js";
+import { cdp, js } from "../cdp-eval.js";
 import { browserCdp } from "../browser-runtime.js";
 import { elementCenter } from "./observe.js";
 import { resolveAndCall } from "./element-ops.js";
-import { waitForSelector } from "./waits.js";
 
 type MouseButton = "left" | "middle" | "right";
 type Point = {
@@ -18,28 +17,53 @@ export type MouseTarget =
 type ClickOptions = {
   button?: MouseButton;
   clickCount?: number;
+  clicks?: number;
   label?: string;
-  timeout?: number;
 };
-type DragOptions = {
+type DragMouseOptions = {
   button?: MouseButton;
-  delay?: number;
+  delayMs?: number;
   label?: string;
-  timeout?: number;
 };
 type HoverOptions = {
   label?: string;
-  timeout?: number;
 };
-type WheelOptions = {
+type ScrollOptions = {
   x?: number;
   y?: number;
+  dx?: number;
+  dy?: number;
 };
+type ScrollByOptions = {
+  dx?: number;
+  dy?: number;
+  left?: number;
+  top?: number;
+  behavior?: ScrollBehavior;
+};
+type ScrollState = {
+  x: number;
+  y: number;
+  viewportHeight: number;
+  scrollHeight: number;
+  atBottom: boolean;
+};
+type ScrollUntilOptions = {
+  step?: number;
+  dy?: number;
+  maxSteps?: number;
+  wait?: number;
+  waitSeconds?: number;
+  stallLimit?: number;
+};
+type ScrollUntilCondition =
+  | ((state: ScrollState) => boolean | Promise<boolean>)
+  | string
+  | null;
 type MouseEventOptions = Record<string, unknown>;
 
 const INPUT_EVENT_DELAY_MS = 25;
 const INPUT_DISPATCH_TIMEOUT_MS = 1000;
-let currentMousePoint: Point = { x: 0, y: 0, sessionId: undefined };
 
 /**
  * Mouse target accepted by mouse helpers.
@@ -57,15 +81,14 @@ let currentMousePoint: Point = { x: 0, y: 0, sessionId: undefined };
 /**
  * Click a mouse target.
  * @param {MouseTarget} target CSS selector, @ref, viewport point, or selector-relative point.
- * @param {{button?: "left"|"middle"|"right", clickCount?: number, label?: string}} [options]
+ * @param {{button?: "left"|"middle"|"right", clickCount?: number, clicks?: number, label?: string}} [options]
  * @returns {Promise<void>}
  */
 export async function click(target: MouseTarget, options: ClickOptions = {}) {
-  const point = await resolveMouseTarget(target, options.timeout);
-  rememberMousePoint(point);
+  const point = await resolveMouseTarget(target);
   const button = options.button || "left";
   const buttons = pressedButtons(button);
-  const clickCount = options.clickCount ?? 1;
+  const clickCount = options.clickCount ?? options.clicks ?? 1;
   maybeHighlight(point, options.label);
   const probeId = await installClickProbe(point);
   let dispatchError: unknown = null;
@@ -100,7 +123,7 @@ export async function click(target: MouseTarget, options: ClickOptions = {}) {
  * @param {{button?: "left"|"middle"|"right", label?: string}} [options]
  * @returns {Promise<void>}
  */
-export async function dblclick(
+export async function doubleClick(
   target: MouseTarget,
   options: ClickOptions = {},
 ) {
@@ -114,8 +137,7 @@ export async function dblclick(
  * @returns {Promise<void>}
  */
 export async function hover(target: MouseTarget, options: HoverOptions = {}) {
-  const point = await resolveMouseTarget(target, options.timeout);
-  rememberMousePoint(point);
+  const point = await resolveMouseTarget(target);
   maybeHighlight(point, options.label);
   const probeId = await installHoverProbe(point);
   let dispatchError: unknown = null;
@@ -132,24 +154,24 @@ export async function hover(target: MouseTarget, options: HoverOptions = {}) {
 /**
  * Drag the mouse through a sequence of targets while holding a button.
  * @param {MouseTarget[]} points Ordered drag path. Must contain at least two targets.
- * @param {{button?: "left"|"middle"|"right", delay?: number, label?: string}} [options]
+ * @param {{button?: "left"|"middle"|"right", delayMs?: number, label?: string}} [options]
  * @returns {Promise<void>}
  */
-export async function drag(points: MouseTarget[], options: DragOptions = {}) {
+export async function dragMouse(
+  points: MouseTarget[],
+  options: DragMouseOptions = {},
+) {
   if (!Array.isArray(points) || points.length < 2) {
-    throw new Error("drag requires at least two points");
+    throw new Error("dragMouse requires at least two points");
   }
   const resolved: Point[] = [];
   for (const point of points) {
-    resolved.push(await resolveMouseTarget(point, options.timeout));
+    resolved.push(await resolveMouseTarget(point));
   }
   const button = options.button || "left";
   const buttons = pressedButtons(button);
   const first = resolved[0];
   const last = resolved.at(-1);
-  if (last) {
-    rememberMousePoint(last);
-  }
   maybeHighlight(first, options.label);
   const probeId = await installMouseUpProbe(last);
   let dispatchError: unknown = null;
@@ -170,7 +192,7 @@ export async function drag(points: MouseTarget[], options: DragOptions = {}) {
           buttons,
         },
       );
-      await inputEventDelay(options.delay > 0 ? options.delay : undefined);
+      await inputEventDelay(options.delayMs > 0 ? options.delayMs : undefined);
     }
     await dispatchMouse(
       { ...last, sessionId: last.sessionId ?? first.sessionId },
@@ -187,34 +209,6 @@ export async function drag(points: MouseTarget[], options: DragOptions = {}) {
   }
   const completed = await finishDragProbe(resolved, probeId, button);
   if (dispatchError && !completed) throw dispatchError;
-}
-
-/**
- * Press a mouse button at the current mouse position, Playwright-style.
- * @param {{button?: "left"|"middle"|"right", clickCount?: number}} [options]
- * @returns {Promise<void>}
- */
-export async function down(options: ClickOptions = {}) {
-  const button = options.button || "left";
-  await dispatchMouse(currentMousePoint, "mousePressed", {
-    button,
-    buttons: pressedButtons(button),
-    clickCount: options.clickCount ?? 1,
-  });
-}
-
-/**
- * Release a mouse button at the current mouse position, Playwright-style.
- * @param {{button?: "left"|"middle"|"right", clickCount?: number}} [options]
- * @returns {Promise<void>}
- */
-export async function up(options: ClickOptions = {}) {
-  const button = options.button || "left";
-  await dispatchMouse(currentMousePoint, "mouseReleased", {
-    button,
-    buttons: 0,
-    clickCount: options.clickCount ?? 1,
-  });
 }
 
 function inputEventDelay(ms = INPUT_EVENT_DELAY_MS) {
@@ -461,106 +455,137 @@ function canProbeInputFallback() {
 }
 
 /**
- * Dispatch a mouse wheel scroll, Playwright-style (mouse.wheel(deltaX, deltaY)).
- *
- * Sign convention follows the DOM WheelEvent: positive deltaY scrolls down,
- * negative scrolls up (CDP negates deltas internally when building the Blink
- * wheel event, so the DOM convention applies end to end). Defaults to scrolling
- * down by 300 CSS pixels.
- *
- * A visible, focused page receives the wheel through CDP
- * (Input.dispatchMouseEvent), exactly like Playwright. A backgrounded or
- * unfocused tab silently drops CDP wheel input, so there the scroll is
- * dispatched as a synthetic WheelEvent on the element at (x, y) instead.
- *
- * @param {number} [deltaX=0] Horizontal scroll delta in CSS pixels.
- * @param {number} [deltaY=300] Vertical scroll delta in CSS pixels; positive scrolls down.
- * @param {{x?: number, y?: number}} [options] Viewport point to dispatch the wheel at (default 0,0).
+ * Scroll by dispatching a CDP mouse wheel event.
+ * Sign convention follows DOM WheelEvent: positive dy scrolls down, negative dy scrolls up
+ * (CDP negates deltas internally when building the Blink wheel event, so the DOM convention
+ * applies end to end). Defaults to scrolling down by 300 CSS pixels, matching the downward
+ * defaults of scrollBy and scrollToBottomUntil.
+ * @param {number|{x?:number,y?:number,dx?:number,dy?:number}} [x=0] Viewport x, or scroll options.
+ * @param {number|{dx?: number, dy?: number}} [y=0] Viewport y, or scroll delta options.
+ * @param {{dx?: number, dy?: number}} [options] Deltas in CSS pixels; positive dy scrolls down.
  * @returns {Promise<void>}
  */
-export async function wheel(
-  deltaX = 0,
-  deltaY = 300,
-  options: WheelOptions = {},
+export async function scroll(
+  x: number | ScrollOptions = 0,
+  y: number | ScrollOptions = 0,
+  options: ScrollOptions = {},
 ) {
-  const x = numberValue(options.x ?? 0);
-  const y = numberValue(options.y ?? 0);
-  const dx = numberValue(deltaX);
-  const dy = numberValue(deltaY);
-  if (await isVisibleAndFocused()) {
-    await browserCdp(
-      "Input.dispatchMouseEvent",
-      { type: "mouseWheel", x, y, deltaX: dx, deltaY: dy },
-      undefined,
-      1000,
-    );
-    return;
+  if (x && typeof x === "object" && !Array.isArray(x)) {
+    options = x;
+    y = options.y ?? 0;
+    x = options.x ?? 0;
+  } else if (y && typeof y === "object" && !Array.isArray(y)) {
+    options = y;
+    y = 0;
   }
-  await dispatchSyntheticWheel(x, y, dx, dy);
-}
-
-/**
- * Whether the page is currently visible and focused. CDP wheel input is
- * delivered only to a foreground, focused target; otherwise wheel() routes
- * through a synthetic WheelEvent. Defaults to true when the probe fails so a
- * flaky probe never blocks a real foreground scroll.
- */
-async function isVisibleAndFocused() {
+  const params = {
+    type: "mouseWheel",
+    x: Number(x) || 0,
+    y: Number(y) || 0,
+    deltaX: options.dx ?? 0,
+    deltaY: options.dy ?? 300,
+  };
   try {
-    return Boolean(
-      await evaluate(
-        "document.visibilityState === 'visible' && document.hasFocus()",
-      ),
-    );
-  } catch {
-    return true;
+    // Chromium may acknowledge wheel input only after the compositor has
+    // processed it. Use the normal CDP deadline; retrying a timed-out wheel is
+    // unsafe because the original event may still be applied later.
+    await browserCdp("Input.dispatchMouseEvent", params);
+  } catch (error) {
+    // Degrade to DOM scrolling only when the target genuinely cannot dispatch
+    // wheel events. Everything else (timeouts, "user is controlling", session
+    // loss) propagates — window.scrollBy is NOT equivalent to a real wheel
+    // event (virtualized lists and inner scroll panes ignore window scrolling),
+    // so a silent fallback would hide the failure behind a different behavior.
+    if (!isWheelDispatchUnsupported(error)) {
+      throw error;
+    }
+    if (!hasWarnedAboutWheelFallback) {
+      hasWarnedAboutWheelFallback = true;
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(
+        `[ego-browser] scroll(): wheel dispatch unsupported on this target (${message}); ` +
+          `falling back to DOM scrollBy(). Wheel-only behaviors (virtualized lists, inner scroll panes) may not trigger.\n`,
+      );
+    }
+    return scrollBy({ dx: params.deltaX, dy: params.deltaY });
   }
 }
 
+let hasWarnedAboutWheelFallback = false;
+
+function isWheelDispatchUnsupported(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /not (?:supported|implemented)|wasn't found|isn't found|unknown (?:method|command)|method not found/i.test(
+    message,
+  );
+}
+
 /**
- * Dispatch a synthetic WheelEvent on the element under (x, y), then perform the
- * native scroll. Used when the tab is backgrounded/unfocused and CDP wheel input
- * would be dropped. The WheelEvent triggers page wheel handlers (virtualized
- * lists, custom scrollers); the window.scrollBy actually moves an ordinary page,
- * since an untrusted WheelEvent does not perform the default scroll action.
- * The manual scroll is skipped when a handler calls preventDefault(), matching
- * how a real CDP wheel leaves the page in place (maps, canvases, custom scrollers).
+ * Scroll the window with DOM APIs. Positive dy scrolls down, negative dy scrolls up
+ * (same sign convention as scroll()).
+ * @param {number|{dx?:number,dy?:number,left?:number,top?:number,behavior?: ScrollBehavior}} [amount=900] Vertical pixels (positive scrolls down), or scroll options.
+ * @param {{dx?:number,dy?:number,left?:number,top?:number,behavior?: ScrollBehavior}} [options]
+ * @returns {Promise<{x:number,y:number}>} New window scroll position.
  */
-async function dispatchSyntheticWheel(
-  x: number,
-  y: number,
-  deltaX: number,
-  deltaY: number,
+export async function scrollBy(
+  amount: number | ScrollByOptions = 900,
+  options: ScrollByOptions = {},
 ) {
-  await evaluate(`(() => {
-    const target = document.elementFromPoint(${JSON.stringify(x)}, ${JSON.stringify(y)})
-      || document.scrollingElement || document.body;
-    if (!target) return;
-    const notPrevented = target.dispatchEvent(new WheelEvent("wheel", {
-      bubbles: true,
-      cancelable: true,
-      deltaX: ${JSON.stringify(deltaX)},
-      deltaY: ${JSON.stringify(deltaY)},
-      clientX: ${JSON.stringify(x)},
-      clientY: ${JSON.stringify(y)}
-    }));
-    if (notPrevented) {
-      window.scrollBy(${JSON.stringify(deltaX)}, ${JSON.stringify(deltaY)});
-    }
+  const params = scrollByParams(amount, options);
+  return js(`(() => {
+    window.scrollBy({
+      left: ${JSON.stringify(params.left)},
+      top: ${JSON.stringify(params.top)},
+      behavior: ${JSON.stringify(params.behavior)}
+    });
+    return { x: window.scrollX, y: window.scrollY };
   })()`);
 }
 
 /**
- * Scroll an element into view only if it is not already fully visible,
- * mirroring Playwright's locator.scrollIntoViewIfNeeded.
- * @param {string} selector CSS selector or @ref of the element to reveal.
- * @returns {Promise<void>}
+ * Scroll downward until a condition is met, the page bottom is reached, or scrolling stalls.
+ * @param {Function|string|null} [condition] Function receiving scroll state, or browser JS expression string.
+ * @param {{step?:number,dy?:number,maxSteps?:number,wait?:number,waitSeconds?:number,stallLimit?:number}} [options]
+ * @returns {Promise<{done:boolean,reason:string,steps:number,state:object}>}
  */
-export async function scrollIntoViewIfNeeded(selector: string) {
-  await resolveAndCall(
-    selector,
-    "function(){ if (typeof this.scrollIntoViewIfNeeded === 'function') { this.scrollIntoViewIfNeeded(true); } else { this.scrollIntoView({ block: 'center', inline: 'center' }); } }",
+export async function scrollToBottomUntil(
+  condition: ScrollUntilCondition = null,
+  options: ScrollUntilOptions = {},
+) {
+  const step = numberValue(options.step ?? options.dy ?? 900);
+  const maxSteps = Math.max(0, Math.floor(numberValue(options.maxSteps ?? 30)));
+  const stallLimit = Math.max(
+    1,
+    Math.floor(numberValue(options.stallLimit ?? 2)),
   );
+  const waitSeconds = numberValue(options.waitSeconds ?? options.wait ?? 0.5);
+  let previousY = -1;
+  let stalls = 0;
+  let state = await scrollState();
+
+  for (let steps = 0; steps <= maxSteps; steps += 1) {
+    if (await conditionMet(condition, state)) {
+      return { done: true, reason: "condition", steps, state };
+    }
+    if (state.atBottom) {
+      return { done: false, reason: "bottom", steps, state };
+    }
+    if (steps === maxSteps) {
+      return { done: false, reason: "maxSteps", steps, state };
+    }
+
+    await scrollBy(step);
+    if (waitSeconds > 0) {
+      await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000));
+    }
+    state = await scrollState();
+    stalls = state.y === previousY ? stalls + 1 : 0;
+    previousY = state.y;
+    if (stalls >= stallLimit) {
+      return { done: false, reason: "stalled", steps: steps + 1, state };
+    }
+  }
+  return { done: false, reason: "maxSteps", steps: maxSteps, state };
 }
 
 function maybeHighlight(point: Point, label?: string) {
@@ -570,10 +595,6 @@ function maybeHighlight(point: Point, label?: string) {
   if (label) {
     ego.setAgentTaskState?.(label);
   }
-}
-
-function rememberMousePoint(point: Point) {
-  currentMousePoint = { ...point };
 }
 
 async function dispatchMouse(
@@ -599,13 +620,8 @@ function isInputDispatchTimeout(error: unknown) {
   return /CDP request timed out: Input\.dispatchMouseEvent/.test(message);
 }
 
-async function resolveMouseTarget(
-  target: MouseTarget,
-  timeout = undefined,
-): Promise<Point> {
+async function resolveMouseTarget(target: MouseTarget): Promise<Point> {
   if (typeof target === "string") {
-    await waitForSelector(target, { timeout, state: "visible" });
-    await scrollIntoViewIfNeeded(target);
     return elementCenter(target);
   }
   if (Array.isArray(target)) {
@@ -618,12 +634,8 @@ async function resolveMouseTarget(
       target.selector
     ) {
       if (target.x === undefined && target.y === undefined) {
-        await waitForSelector(target.selector, { timeout, state: "visible" });
-        await scrollIntoViewIfNeeded(target.selector);
         return elementCenter(target.selector);
       }
-      await waitForSelector(target.selector, { timeout, state: "visible" });
-      await scrollIntoViewIfNeeded(target.selector);
       const [topLeft, center] = await Promise.all([
         elementTopLeft(target.selector),
         elementCenter(target.selector),
@@ -668,6 +680,65 @@ function numberValue(value: unknown) {
     throw new Error(`invalid mouse offset: ${JSON.stringify(value)}`);
   }
   return out;
+}
+
+function scrollByParams(
+  amount: number | ScrollByOptions,
+  options: ScrollByOptions,
+) {
+  const input =
+    amount && typeof amount === "object" && !Array.isArray(amount)
+      ? amount
+      : options;
+  const top =
+    amount && typeof amount === "object" && !Array.isArray(amount)
+      ? (input.top ?? input.dy ?? 900)
+      : (input.top ?? input.dy ?? amount);
+  return {
+    left: numberValue(input.left ?? input.dx ?? 0),
+    top: numberValue(top),
+    behavior: input.behavior === "smooth" ? "smooth" : "instant",
+  };
+}
+
+async function scrollState(): Promise<ScrollState> {
+  return js(`(() => {
+    const doc = document.documentElement;
+    const body = document.body;
+    const height = Math.max(
+      doc?.scrollHeight || 0,
+      body?.scrollHeight || 0,
+      doc?.offsetHeight || 0,
+      body?.offsetHeight || 0
+    );
+    const viewportHeight = window.innerHeight || doc?.clientHeight || 0;
+    const y = window.scrollY || window.pageYOffset || 0;
+    return {
+      x: window.scrollX || window.pageXOffset || 0,
+      y,
+      viewportHeight,
+      scrollHeight: height,
+      atBottom: y + viewportHeight >= height - 2
+    };
+  })()`);
+}
+
+async function conditionMet(
+  condition: ScrollUntilCondition,
+  state: ScrollState,
+) {
+  if (!condition) {
+    return false;
+  }
+  if (typeof condition === "function") {
+    return Boolean(await condition(state));
+  }
+  if (typeof condition === "string") {
+    return Boolean(await js(`Boolean(${condition})`));
+  }
+  throw new TypeError(
+    `scrollToBottomUntil condition must be a function or string, got ${typeof condition}`,
+  );
 }
 
 function pressedButtons(button: MouseButton) {

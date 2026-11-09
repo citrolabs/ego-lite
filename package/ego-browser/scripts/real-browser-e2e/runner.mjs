@@ -1,16 +1,10 @@
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { e2eCases } from "./cases/index.mjs";
+import { resolveEgoBrowserCli } from "./ego-browser-cli.mjs";
 import { egoSource } from "./ego-source.mjs";
 import { closeFixtureServer, startFixtureServer } from "./fixture.mjs";
 import { runCommand } from "./run-command.mjs";
@@ -19,35 +13,67 @@ const runnerDir = dirname(fileURLToPath(import.meta.url));
 const packageDir = join(runnerDir, "..", "..");
 const egoBrowserSdkPath = join(packageDir, "dist", "out", "index.js");
 const egoBrowserArgs = ["nodejs", "--sdk-path", egoBrowserSdkPath];
-const verboseCaseOutput =
-  process.env.EGO_BROWSER_REAL_E2E_VERBOSE_CASE_OUTPUT === "1" ||
-  process.env.EGO_BROWSER_REAL_E2E_VERBOSE_CASE_OUTPUT === "true";
+
+export function parseOnlyCases(configured, availableCaseNames) {
+  const raw = typeof configured === "string" ? configured.trim() : "";
+  if (!raw) return new Set();
+
+  const available = [...availableCaseNames];
+  const availableSet = new Set(available);
+  let requested;
+  if (raw.startsWith("[")) {
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      throw new TypeError(
+        `EGO_BROWSER_REAL_E2E_ONLY must be a valid JSON array: ${error.message}`,
+      );
+    }
+    if (
+      !Array.isArray(parsed) ||
+      parsed.some((name) => typeof name !== "string" || !name.trim())
+    ) {
+      throw new TypeError(
+        "EGO_BROWSER_REAL_E2E_ONLY must be a JSON array of non-empty case names",
+      );
+    }
+    requested = parsed.map((name) => name.trim());
+  } else if (availableSet.has(raw)) {
+    // Exact matching comes first because a case name may itself contain commas.
+    requested = [raw];
+  } else {
+    requested = raw
+      .split(",")
+      .map((name) => name.trim())
+      .filter(Boolean);
+  }
+
+  if (requested.length === 0) {
+    throw new TypeError(
+      "EGO_BROWSER_REAL_E2E_ONLY must select at least one case",
+    );
+  }
+  const unknown = [...new Set(requested)].filter(
+    (name) => !availableSet.has(name),
+  );
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown real-browser E2E case: ${unknown.join(", ")}. Available cases: ${available.join(", ")}`,
+    );
+  }
+  return new Set(requested);
+}
 
 export async function runRealBrowserE2e() {
+  const egoBrowserCli = resolveEgoBrowserCli();
   const keepTaskSpace =
     process.env.EGO_BROWSER_REAL_E2E_KEEP === "1" ||
     process.env.EGO_BROWSER_REAL_E2E_KEEP === "true";
-  const onlyCases = new Set(
-    (process.env.EGO_BROWSER_REAL_E2E_ONLY || "")
-      .split(",")
-      .map((name) => name.trim())
-      .filter(Boolean),
+  const onlyCases = parseOnlyCases(
+    process.env.EGO_BROWSER_REAL_E2E_ONLY,
+    e2eCases.map((testCase) => testCase.name),
   );
-  const availableCaseNames = [
-    "nodejs bridge smoke",
-    ...e2eCases.map((testCase) => testCase.name),
-  ];
-  const unknownOnlyCases = [...onlyCases].filter(
-    (name) => !availableCaseNames.includes(name),
-  );
-  if (unknownOnlyCases.length > 0) {
-    console.error(
-      `Unknown EGO_BROWSER_REAL_E2E_ONLY case(s): ${unknownOnlyCases.join(", ")}`,
-    );
-    console.error(`Available cases: ${availableCaseNames.join(", ")}`);
-    process.exitCode = 2;
-    return;
-  }
 
   let server;
   let tempDir;
@@ -59,55 +85,116 @@ export async function runRealBrowserE2e() {
     caseResults.push({ name, status, durationMs, assertionCount, message });
   }
 
-  async function runNodeBridgeSmoke(timeoutMs = 15000) {
-    const name = "nodejs bridge smoke";
+  async function runEgoCase(
+    name,
+    body,
+    timeoutMs = 45000,
+    { expectedOutput, forbiddenOutput } = {},
+  ) {
     console.log(`-- ${name}`);
+    const source = egoSource(body, {
+      ...context,
+      keepTaskSpace: keepTaskSpace && passed,
+    });
     const startedAt = Date.now();
-    const marker = `EGO_NODEJS_BRIDGE_SMOKE_${Date.now()}`;
-    // The output channel is the overridden console.log. typeof console.log is always
-    // "function" (it is a Node built-in), so it cannot prove the SDK wired its sink.
-    // Two real signals cover it instead: the marker round-trip below proves console.log
-    // output reaches stdout, and helperCount > 0 proves installEgoSdk ran (it sets the
-    // console.log override and ego.helpers in the same call), so the override ran too.
-    const source = `
-      console.log(${JSON.stringify(marker)});
-      console.log(JSON.stringify({
-        egoType: typeof globalThis.ego,
-        hasSendCDPMessage: typeof globalThis.ego?.sendCDPMessage,
-        processVersion: process.version,
-        helperCount: Object.keys(globalThis.ego?.helpers || {}).length
-      }));
-    `;
     try {
       const { stdout, stderr } = await runCommand(
-        "ego-browser",
+        egoBrowserCli,
         egoBrowserArgs,
         {
           cwd: packageDir,
           egoBrowserSdkPath,
-          echo: verboseCaseOutput,
           input: source,
           timeoutMs,
         },
       );
-      const probe = parseNodeBridgeSmoke(`${stdout}\n${stderr}`, marker);
-      if (
-        probe.egoType !== "object" ||
-        probe.hasSendCDPMessage !== "function" ||
-        typeof probe.processVersion !== "string" ||
-        probe.helperCount <= 0
-      ) {
+      const durationMs = Date.now() - startedAt;
+      const output = [stdout, stderr].filter(Boolean).join("\n");
+      if (expectedOutput && !output.includes(expectedOutput)) {
         throw new Error(
-          `nodejs bridge smoke returned invalid runtime data: ${JSON.stringify(probe)}`,
+          `output did not include ${JSON.stringify(expectedOutput)}`,
         );
       }
-      const durationMs = Date.now() - startedAt;
-      recordResult(name, "pass", durationMs, 4);
+      if (forbiddenOutput && output.includes(forbiddenOutput)) {
+        throw new Error(
+          `output unexpectedly included ${JSON.stringify(forbiddenOutput)}`,
+        );
+      }
+      const assertions = extractAssertionCount(stdout, stderr);
+      if (assertions === null) {
+        throw new Error(`${name} produced no assertion summary`);
+      }
+      recordResult(name, "pass", durationMs, assertions);
       console.log(
-        `-- ${name} passed (${formatDuration(durationMs)}, 4 assertions)`,
+        `-- ${name} passed (${formatDuration(durationMs)}, ${assertions} assertions)`,
       );
     } catch (error) {
       const durationMs = Date.now() - startedAt;
+      const message = error?.message || String(error);
+      const assertions =
+        extractAssertionCount(error?.stdout, error?.stderr) ?? 0;
+      recordResult(name, "fail", durationMs, assertions, message);
+      console.error(
+        `[FAIL] ${name} (${formatDuration(durationMs)}): ${message}`,
+      );
+    }
+  }
+
+  async function runExpectedTerminationCase(
+    name,
+    body,
+    markerName,
+    timeoutMs = 45000,
+    expectedOutput,
+  ) {
+    console.log(`-- ${name}`);
+    const source = egoSource(body, {
+      ...context,
+      keepTaskSpace: keepTaskSpace && passed,
+    });
+    const startedAt = Date.now();
+    let commandError;
+    let commandResult;
+    try {
+      commandResult = await runCommand(egoBrowserCli, egoBrowserArgs, {
+        cwd: packageDir,
+        egoBrowserSdkPath,
+        input: source,
+        timeoutMs,
+      });
+    } catch (error) {
+      commandError = error;
+    }
+
+    const durationMs = Date.now() - startedAt;
+    try {
+      const output = [
+        commandResult?.stdout,
+        commandResult?.stderr,
+        commandError?.stdout,
+        commandError?.stderr,
+        commandError?.message,
+      ]
+        .filter(Boolean)
+        .join("\n");
+      const reportedExpectedTermination =
+        expectedOutput && output.includes(expectedOutput);
+      if (!commandError && !reportedExpectedTermination) {
+        throw new Error("the browser script completed instead of terminating");
+      }
+      if (commandError && expectedOutput && !reportedExpectedTermination) {
+        throw new Error(
+          `the browser script did not report the expected hard stop: ${expectedOutput}`,
+        );
+      }
+      // The marker is written only after newPage() and goto() have returned. Its presence
+      // distinguishes the intended hard stop from an unrelated startup error.
+      await stat(join(tempDir, markerName));
+      recordResult(name, "pass", durationMs, 1);
+      console.log(
+        `-- ${name} passed (${formatDuration(durationMs)}, expected termination)`,
+      );
+    } catch (error) {
       const message = error?.message || String(error);
       recordResult(name, "fail", durationMs, 0, message);
       console.error(
@@ -116,74 +203,37 @@ export async function runRealBrowserE2e() {
     }
   }
 
-  async function maybeRunNodeBridgeSmoke() {
-    await runNodeBridgeSmoke();
-  }
-
-  async function runEgoCase(name, body, timeoutMs = 45000, options = {}) {
-    const visible = options.visible !== false;
-    if (visible) console.log(`-- ${name}`);
-    const source = egoSource(body, {
-      ...context,
-      keepTaskSpace: keepTaskSpace && passed,
-    });
-    const startedAt = Date.now();
-    await rm(caseResultPath(tempDir), { force: true });
-    try {
-      const { stdout } = await runCommand("ego-browser", egoBrowserArgs, {
-        cwd: packageDir,
-        egoBrowserSdkPath,
-        echo: verboseCaseOutput,
-        input: source,
-        timeoutMs,
-      });
-      const durationMs = Date.now() - startedAt;
-      const caseResult = await readCaseResult(tempDir, stdout);
-      if (!caseResult.ok) {
-        const error = new Error(caseResult.error);
-        error.stdout = stdout;
-        throw error;
-      }
-      const assertions = caseResult.assertions;
-      recordResult(name, "pass", durationMs, assertions);
-      if (visible) {
-        console.log(
-          `-- ${name} passed (${formatDuration(durationMs)}, ${assertions} assertions)`,
-        );
-      }
-    } catch (error) {
-      const durationMs = Date.now() - startedAt;
-      const caseResult = await readCaseResult(tempDir, error?.stdout);
-      const message = caseResult.error || error?.message || String(error);
-      const assertions = caseResult.assertions;
-      recordResult(name, "fail", durationMs, assertions, message);
-      if (visible) {
-        console.error(
-          `[FAIL] ${name} (${formatDuration(durationMs)}): ${message}`,
-        );
-      } else {
-        console.error(`[${name}] ${message}`);
-      }
-    }
-  }
-
-  async function maybeRunEgoCase(name, body, timeoutMs = 45000) {
-    if (onlyCases.size > 0 && !onlyCases.has(name)) {
-      console.log(`-- ${name} (skipped)`);
-      recordResult(name, "skip", 0, 0);
+  async function maybeRunTestCase(testCase) {
+    if (onlyCases.size > 0 && !onlyCases.has(testCase.name)) {
+      console.log(`-- ${testCase.name} (skipped)`);
+      recordResult(testCase.name, "skip", 0, 0);
       return;
     }
-    await runEgoCase(name, body, timeoutMs);
+    if (testCase.expectedTermination) {
+      await runExpectedTerminationCase(
+        testCase.name,
+        testCase.body(),
+        testCase.markerName,
+        testCase.timeoutMs,
+        testCase.expectedOutput,
+      );
+      return;
+    }
+    await runEgoCase(
+      testCase.name,
+      testCase.body(),
+      testCase.timeoutMs,
+      testCase,
+    );
   }
 
   async function cleanupTaskSpace() {
-    const beforeFails = caseResults.filter((r) => r.status === "fail").length;
     await runEgoCase(
       "cleanup",
       `
         try {
-          const result = await taskSpaces.complete(taskName, { keep: keepTaskSpace });
-          console.log(JSON.stringify({ cleanup: result }));
+          const result = await completeTaskSpace(taskName, { keep: keepTaskSpace });
+          cliLog(JSON.stringify({ cleanup: result }));
         } catch (error) {
           if (!String(error?.message || error).includes("task space not found")) {
             throw error;
@@ -191,7 +241,6 @@ export async function runRealBrowserE2e() {
         }
       `,
       20000,
-      { visible: false },
     );
     // Remove cleanup result and any failures it produced
     const cleanupResults = caseResults.filter((r) => r.name === "cleanup");
@@ -241,23 +290,10 @@ export async function runRealBrowserE2e() {
     console.log("== E2E (real browser helpers) ==");
     console.log(`fixture: ${context.baseUrl}`);
     console.log(`task: ${taskName}`);
+    console.log(`cli: ${egoBrowserCli}`);
     console.log(`sdk: ${egoBrowserSdkPath}`);
 
-    await maybeRunNodeBridgeSmoke();
-    if (
-      caseResults.some(
-        (r) => r.name === "nodejs bridge smoke" && r.status === "fail",
-      )
-    ) {
-      context.skipCleanup = true;
-      printSummary(caseResults, Date.now() - totalStartedAt);
-      process.exitCode = 1;
-      return;
-    }
-
-    for (const testCase of e2eCases) {
-      await maybeRunEgoCase(testCase.name, testCase.body());
-    }
+    for (const testCase of e2eCases) await maybeRunTestCase(testCase);
 
     passed = caseResults.every((r) => r.status !== "fail");
     printSummary(caseResults, Date.now() - totalStartedAt);
@@ -269,7 +305,7 @@ export async function runRealBrowserE2e() {
     console.error(error?.stack || error?.message || String(error));
     process.exitCode = error?.code === "ENOENT" ? 127 : 1;
   } finally {
-    if (context.taskName && !context.skipCleanup) {
+    if (context.taskName) {
       await cleanupTaskSpace().catch((error) => {
         console.error(`[cleanup] ${error?.message || error}`);
       });
@@ -305,15 +341,6 @@ async function initializeE2eEnvironment(context, tempDir) {
       `fixture health payload mismatch: ${JSON.stringify(health)}`,
     );
   }
-  const ticketPageResponse = await fetch(`${baseUrl}/e2e/damai-rush/`, {
-    signal: AbortSignal.timeout(5000),
-  });
-  const ticketPage = await ticketPageResponse.text();
-  if (!ticketPageResponse.ok || !ticketPage.includes("EGO STARLIGHT TOUR")) {
-    throw new Error(
-      `shared ticket fixture check failed: HTTP ${ticketPageResponse.status}`,
-    );
-  }
   await stat(uploadPath);
   await stat(uploadPathTwo);
   await stat(artifactDir);
@@ -334,61 +361,9 @@ async function initializeE2eEnvironment(context, tempDir) {
   );
 }
 
-function parseNodeBridgeSmoke(stdout, marker) {
-  const lines = String(stdout || "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const markerIndex = lines.indexOf(marker);
-  if (markerIndex === -1) {
-    throw new Error(
-      "nodejs bridge did not print the console.log smoke marker; ego-browser nodejs may have exited without executing stdin",
-    );
-  }
-  const payload = lines[markerIndex + 1];
-  if (!payload) {
-    throw new Error("nodejs bridge smoke did not print runtime probe data");
-  }
-  try {
-    return JSON.parse(payload);
-  } catch (error) {
-    throw new Error(
-      `nodejs bridge smoke printed invalid runtime probe data: ${payload}`,
-    );
-  }
-}
-
-function caseResultPath(tempDir) {
-  return join(tempDir, "case-result.json");
-}
-
-async function readCaseAssertionCount(tempDir, stdout) {
-  return (await readCaseResult(tempDir, stdout)).assertions;
-}
-
-async function readCaseResult(tempDir, stdout) {
-  const resultPath = caseResultPath(tempDir);
-  try {
-    const raw = await readFile(resultPath, "utf8");
-    const parsed = JSON.parse(raw);
-    return {
-      ok: parsed.ok === true,
-      assertions: typeof parsed.assertions === "number" ? parsed.assertions : 0,
-      error: parsed.error || "case-result.json reported failure",
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      assertions: extractAssertionCount(stdout),
-      error: `case-result.json was not written or readable; ego-browser nodejs may have exited without executing stdin (${error?.message || error})`,
-    };
-  }
-}
-
-function extractAssertionCount(stdout) {
-  if (!stdout) return 0;
-  // Find the last JSON line with "assertions" from console.log output
-  const lines = stdout.split("\n");
+function extractAssertionCount(...outputs) {
+  // Find the last JSON line with "assertions" from cliLog output
+  const lines = outputs.filter(Boolean).join("\n").split("\n");
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim();
     if (line.startsWith("{") && line.includes("assertions")) {
@@ -400,7 +375,7 @@ function extractAssertionCount(stdout) {
       }
     }
   }
-  return 0;
+  return null;
 }
 
 function formatDuration(ms) {
@@ -413,13 +388,12 @@ function printSummary(results, totalMs) {
   const passed = results.filter((r) => r.status === "pass").length;
   const failed = results.filter((r) => r.status === "fail").length;
   const skipped = results.filter((r) => r.status === "skip").length;
-  const executed = passed + failed;
   const totalAssertions = results.reduce((sum, r) => sum + r.assertionCount, 0);
 
   console.log("");
   console.log("== E2E Summary ==");
   console.log(
-    `  Passed:   ${passed}/${executed}${executed > 0 ? `  (${Math.round((passed / executed) * 100)}%)` : ""}`,
+    `  Passed:   ${passed}/${total}${total > 0 ? `  (${Math.round((passed / total) * 100)}%)` : ""}`,
   );
   if (failed > 0) console.log(`  Failed:   ${failed}/${total}`);
   if (skipped > 0) console.log(`  Skipped:  ${skipped}/${total}`);

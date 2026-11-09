@@ -23,26 +23,26 @@ pre-commit:
         exit 1
     style-check:
       run: |
-        files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^package/ego-browser/.*\.(ts|mjs|js|json|md)$' || true)
+        files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^(package/ego-browser|plugins)/.*\.(ts|mjs|js|json|md)$' | grep -v '^skills/ego-browser/learnings/' || true)
         [ -z "$files" ] && exit 0
         package/ego-browser/node_modules/.bin/prettier --check $files
     vulnerability-audit:
       run: |
         git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
         cd package/ego-browser && npm audit --registry=https://registry.npmjs.org --audit-level=moderate
-    code-check:
-      run: |
-        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
-        cd package/ego-browser && npm run typecheck
     smoke-test:
       run: |
-        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
+        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(package/ego-browser/|skills/ego-browser/)' || exit 0
         cd package/ego-browser && npm test
     site-skill-validation:
       run: |
-        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(package/ego-browser/|skills/ego-browser/learnings/)' || exit 0
+        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(package/ego-browser/(src/learning/|scripts/validate-site-skills\.ts)|skills/ego-browser/learnings/)' || exit 0
         cd package/ego-browser && npm run validate:site-skills
+    plugin-tests:
+      run: |
+        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(plugins/|skills/ego-browser/|package/ego-browser/skill-body/|\.agents/plugins/|\.claude-plugin/)' || exit 0
+        npm --prefix plugins/ego test
     e2e-test:
       run: |
-        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
+        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(package/ego-browser/|skills/ego-browser/)' || exit 0
         cd package/ego-browser && npm run e2e

@@ -1,0 +1,13 @@
+Patrick Hand
+Copyright (c) 2012 Patrick Wagesreiter (mail@patrickwagesreiter.at)
+
+Licensed under the SIL Open Font License, Version 1.1.
+http://scripts.sil.org/OFL
+https://fonts.google.com/specimen/Patrick+Hand
+
+patrick-hand.woff2 in this directory is that font, as served by Google Fonts
+for the latin range, inlined into the star history SVGs by postprocess-svg.py.
+
+The OFL permits commercial use, embedding and redistribution, and requires
+that this notice travel with the font. The font is not sold on its own and
+its name is not used to promote anything derived from it.

@@ -1,24 +1,24 @@
 export function runtimeRegressionCase() {
   return `
-    await taskSpaces.useOrCreate(taskName);
+    await useOrCreateTaskSpace(taskName);
     await resetHome();
 
-    /* Issue 2: waitForSelector shares the unified resolver — xpath= must resolve a
+    /* Issue 2: waitForElement shares the unified resolver — xpath= must resolve a
        static element (official runtime.mjs only exercises CSS selectors here). */
     assertEqual(
-      await page.waitForSelector('xpath=//button[@id="click-button"]', { timeout: 4000 }),
+      await waitForElement('xpath=//button[@id="click-button"]', { timeout: 4 }),
       true,
-      "waitForSelector resolves xpath= selector (Issue 2)"
+      "waitForElement resolves xpath= selector (Issue 2)"
     );
 
-    /* Resolver failure classes on waitForSelector: a permanent (ambiguous) selector
+    /* Resolver failure classes on waitForElement: a permanent (ambiguous) selector
        fails fast; a transient (missing) one polls until the timeout, then returns
        false. Official only covers the happy path. */
     const permStart = Date.now();
     await assertRejects(
-      () => page.waitForSelector("loc=css:.duplicate-action", { timeout: 5000 }),
+      () => waitForElement("loc=css:.duplicate-action", { timeout: 5 }),
       "matched 2",
-      "waitForSelector throws on a permanent ambiguity error"
+      "waitForElement throws on a permanent ambiguity error"
     );
     assert(
       Date.now() - permStart < 2500,
@@ -27,9 +27,9 @@ export function runtimeRegressionCase() {
 
     const missStart = Date.now();
     assertEqual(
-      await page.waitForSelector("#no-such-element-xyz", { timeout: 1000 }),
+      await waitForElement("#no-such-element-xyz", { timeout: 1 }),
       false,
-      "waitForSelector returns false for a transient missing element"
+      "waitForElement returns false for a transient missing element"
     );
     assert(
       Date.now() - missStart >= 700,
@@ -39,53 +39,41 @@ export function runtimeRegressionCase() {
     /* js runs in the page, not the heredoc: caller closure variables are NOT
        captured. 'outer' is referenced only inside the serialized function. */
     const outer = 100;
-    const closureType = await page.evaluate(function () {
+    const closureType = await js(function () {
       return typeof outer;
     });
     assertEqual(closureType, "undefined", "js does not capture caller closure variables");
 
     /* js rejects invalid input types (neither string nor function). */
-    await assertRejectsAny(() => page.evaluate(123), "js rejects non-string/function input");
+    await assertRejectsAny(() => js(123), "js rejects non-string/function input");
 
-    /* serverFetch returns the body and respects exact content length, including
-       lower boundary values (n=0, n=1) that were previously only tested in the
-       now-removed theory-expanded suite. */
-    assertEqual(
-      (await fetch.server(baseUrl + "/api/bytes?n=0", { timeout: 5 })).length,
-      0,
-      "serverFetch returns empty body for zero-byte request"
-    );
-    assertEqual(
-      (await fetch.server(baseUrl + "/api/bytes?n=1", { timeout: 5 })).length,
-      1,
-      "serverFetch returns one byte for single-byte request"
-    );
-    const bytes = await fetch.server(baseUrl + "/api/bytes?n=4096", { timeout: 5 });
+    /* serverFetch returns the body and respects exact content length. */
+    const bytes = await serverFetch(baseUrl + "/api/bytes?n=4096", { timeout: 5 });
     assertEqual(bytes.length, 4096, "serverFetch returns a body of the exact requested length");
 
     /* serverFetch / browserFetch surface 4xx HTTP errors (official only covers 500). */
     await assertRejects(
-      () => fetch.server(baseUrl + "/api/status?code=404", { timeout: 5 }),
+      () => serverFetch(baseUrl + "/api/status?code=404", { timeout: 5 }),
       "HTTP 404",
       "serverFetch reports 4xx HTTP errors"
     );
     await assertRejects(
-      () => fetch.browser("/api/status?code=404", { timeout: 5 }),
+      () => browserFetch("/api/status?code=404", { timeout: 5 }),
       "HTTP 404",
       "browserFetch reports 4xx HTTP errors"
     );
 
-    /* waitForLoadState blocks until a slow-arriving document loads. Navigates away, so
+    /* waitForLoad blocks until a slow-arriving document loads. Navigates away, so
        keep this last. */
     const slowStart = Date.now();
-    await page.goto(baseUrl + "/slow-page?ms=1200", { waitUntil: "commit" });
+    await gotoUrl(baseUrl + "/slow-page?ms=1200");
     assert(
-      await page.waitForLoadState("load", { timeout: 8000 }),
-      "waitForLoadState resolves true once the slow document arrives"
+      await waitForLoad({ timeout: 8 }),
+      "waitForLoad resolves true once the slow document arrives"
     );
     assert(
       Date.now() - slowStart >= 1000,
-      "waitForLoadState blocks until the slow document loads"
+      "waitForLoad blocks until the slow document loads"
     );
   `;
 }

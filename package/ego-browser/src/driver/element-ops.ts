@@ -1,11 +1,11 @@
-import { cdp, runtimeValue } from "../cdp-eval.js";
+import { cdp } from "../cdp-eval.js";
 import { browserRefMap, ensureRefMapForRef } from "../ref-state.js";
 import { resolveElementObjectId } from "../element-resolver.js";
 
 /**
  * Resolve any selector form to a CDP Runtime objectId handle.
- * Accepts @ref / ref=N, loc=css:/loc=role:/loc=href:, xpath=, and raw CSS —
- * the same surface as the pointer/observe helpers, via the unified resolver.
+ * Accepts @ref / ref=N, loc=css:/loc=role:/loc=href:, text=, xpath=, and raw
+ * CSS — the same surface as the pointer/observe helpers, via the unified resolver.
  * Refreshes the RefMap on demand when the input is a ref and the map is empty.
  * @param {string} selectorOrRef Selector or ref string.
  * @returns {Promise<{objectId: string, sessionId?: string}>}
@@ -77,9 +77,6 @@ export async function resolveAndCall(
       },
       sessionId,
     );
-    if (result.exceptionDetails || result.result?.subtype === "error") {
-      runtimeValue(result, functionDeclaration);
-    }
     return { result, objectId, sessionId };
   });
 }

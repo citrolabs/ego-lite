@@ -11,7 +11,9 @@ export async function main(argv = process.argv.slice(2)) {
   const root = resolve(rootArg);
   const canonicalRoot = resolve(siteSkillsRoot());
   if (root !== canonicalRoot) {
-    console.warn(`warning: validating ${root} which differs from siteSkillsRoot() ${canonicalRoot}`);
+    console.warn(
+      `warning: validating ${root} which differs from siteSkillsRoot() ${canonicalRoot}`,
+    );
   }
   const errors = await validateSiteSkills(root);
   if (errors.length > 0) {
@@ -24,6 +26,9 @@ export async function main(argv = process.argv.slice(2)) {
   return 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   process.exitCode = await main();
 }
