@@ -134,7 +134,8 @@ and diagnose the CLI or installation only if it fails.
 
 - Use exactly one TaskSpace for the entire user goal. Create it once, print its
   `spaceId`, and resume that same space in later rounds. Use multiple spaces
-  only when the user explicitly requests them.
+  only when the user explicitly requests them. `finish()` closes the space by
+  default, so a follow-up message after that starts a new space.
 - Task space names are unique. `taskSpace(name)` resumes your own space with
   that name instead of creating a second one. If the name belongs to a
   user-owned space, it fails with `EGO_TASK_SPACE_NAME_IN_USE`: ask the user
@@ -534,8 +535,9 @@ const userPage = task.userPage();
 
 Adopt `userPage` if it is unmanaged. Use `waitForControl()` only when the current
 script must wait in place. Claim a user-owned or inactive space only when the
-user explicitly asks; this includes a space you finished with kept Pages, which
-`takeOverTaskSpace()` cannot resume. Find its numeric id first; names may be
+user explicitly asks. The one exception is a space you finished with kept Pages,
+not one the user stopped or took over: when a follow-up message continues that
+goal, claim it, since `takeOverTaskSpace()` cannot resume it. Find its numeric id first; names may be
 duplicated. `listTaskSpaces()` entries expose that id as `id` (`spaceId` exists
 only on a TaskSpace handle), so pass `entry.id` to `claimTaskSpace()` or
 `taskSpace()`:
@@ -548,13 +550,14 @@ const task = await claimTaskSpace(7);
 const userPage = task.userPage();
 ```
 
-When the task succeeds, close the TaskSpace by default with
-`await task.finish({ keep: [] })`. Call `finish()` exactly once and wait for it
+When the work for the current user message succeeds, close the TaskSpace by
+default with `await task.finish({ keep: [] })`, even if the user may follow up.
+Call `finish()` exactly once and wait for it
 to resolve before reporting completion.
 
 `finish()` ends the task and all of its Page labels, including Pages kept for the
-user. Put it last in the final round only; do not operate any Page after it in
-the same script or in later rounds.
+user. Put it last in the work for that message; do not operate any Page after
+it in the same script or in later rounds.
 
 Keeping Pages is a rare exception: retain only necessary Pages when the user
 explicitly asks, or when the result must remain in the browser for the user to
