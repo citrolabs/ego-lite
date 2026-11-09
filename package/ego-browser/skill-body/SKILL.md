@@ -142,7 +142,8 @@ and diagnose the CLI or installation only if it fails.
   name.
 - Never use a new TaskSpace to recover from a stuck, blocked, timed-out, or
   unexpected Page. Recover within the existing space; if it cannot continue,
-  stop and ask the user.
+  stop and ask the user. After authorized recovery, inspect `task.tabs()` and
+  refresh the intended Page's snapshot or screenshot; discard old refs/coordinates.
 - Every invocation starts a new Node.js process. Task spaces, tabs, and Page labels
   persist; JavaScript variables do not.
 - A new task space starts with Page `p1`; navigate it instead of opening
@@ -375,6 +376,12 @@ keyboard names and `+`-separated chords follow Playwright syntax. Use
 `mouse.wheel()` performs a short wheel-input motion at the current mouse
 position and resolves when that motion completes. In each script invocation, move or
 click over the intended scrollable area before using it.
+
+Viewport screenshots use CSS pixels. If a viewer resizes one, scale `(x,y)` by
+`innerWidth/displayedWidth` and `innerHeight/displayedHeight`; capture viewport
+size with `page.evaluate()` at screenshot time, not `page.info().pw/ph` (document
+size). Crops/full-page images need their captured bounds and current scroll offset;
+prefer a fresh viewport capture.
 
 On macOS and Windows, `keyboard.paste()` sends the native paste shortcut and
 then restores the user's clipboard. Pass `{ text, html }` when a rich editor
