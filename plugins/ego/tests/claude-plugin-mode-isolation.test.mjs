@@ -37,17 +37,17 @@ function assertPureSkillText(value, label) {
 function assertTaskSpaceSafety(skill, label) {
   assert.match(
     skill,
-    /exactly one TaskSpace for the entire user goal/i,
+    /One user goal uses one TaskSpace across all of your replies about it/i,
     `${label} must keep one TaskSpace per user goal`,
   );
   assert.match(
     skill,
-    /resume that same space in later rounds/i,
+    /continues in that goal's\s+space, whatever state your last reply left it in/i,
     `${label} must resume the existing TaskSpace across rounds`,
   );
   assert.match(
     skill,
-    /Claim a user-owned or inactive space only when the\s+user explicitly asks/i,
+    /Claim a user-owned or inactive space that is not yours to continue only when the\s+user explicitly asks/i,
     `${label} must not implicitly claim a user-owned TaskSpace`,
   );
   assert.match(
@@ -67,7 +67,7 @@ function assertTaskSpaceSafety(skill, label) {
   );
   assert.match(
     skill,
-    /Call `finish\(\)` exactly once and wait for it\s+to resolve before reporting completion/i,
+    /End each message's browser work with one `finish\(\)` in a separate last script,[\s\S]*?wait for it\s+before you report/i,
     `${label} must wait for cleanup before reporting completion`,
   );
   assert.match(
@@ -162,7 +162,7 @@ test("versioned guide restores v2 Pages across script rounds", () => {
     skill,
     /Every invocation starts a new Node\.js process[\s\S]*Page labels\s+persist; JavaScript variables do not/i,
   );
-  assert.match(skill, /await taskSpace\(7\);[\s\S]*resumed\.page\("p1"\)/);
+  assert.match(skill, /await taskSpace\(SPACE_ID\);[\s\S]*task\.adopt\(/);
   assert.match(skill, /After the page changes, take a new snapshot/);
   assert.doesNotMatch(
     skill,
