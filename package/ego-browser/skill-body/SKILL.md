@@ -118,12 +118,18 @@ and diagnose the CLI or installation only if it fails.
 
 - Use exactly one TaskSpace for the entire user goal. Create it once, print its
   `spaceId`, and resume that same space in later rounds. Use multiple spaces
-  only when the user explicitly requests them.
+  only when the user explicitly requests them. A follow-up message about the
+  same goal, such as a further question, a correction, or a request to
+  continue, belongs to that goal even after an earlier reply finished the
+  space.
 - Task space names are unique. `taskSpace(name)` resumes your own space with
   that name instead of creating a second one. If the name belongs to a
   user-owned space, it fails with `EGO_TASK_SPACE_NAME_IN_USE`: ask the user
   whether to work in that space (then `claimTaskSpace(id)`), or pick another
   name.
+- End every reply with `finish()` in a separate last script, also when you
+  leave a Page open for the user. A space you do not finish stays under agent
+  control.
 - Never use a new TaskSpace to recover from a stuck, blocked, timed-out, or
   unexpected Page. Recover within the existing space; if it cannot continue,
   stop and ask the user.
@@ -134,11 +140,20 @@ and diagnose the CLI or installation only if it fails.
 - Reuse a Page with `goto()` instead of opening a new Page for every URL.
 - All time values are milliseconds.
 
+When a later message continues the same goal, look up the space you used before
+choosing how to continue:
+
 ```js
-// Later round: use the space id and Page label printed earlier.
-const resumed = await taskSpace(7);
-const source = resumed.page("p1");
-await source.goto("https://example.com/releases");
+// Later message on the same goal: continue in the space printed earlier.
+const entry = (await listTaskSpaces()).find((space) => space.id === 7);
+const task = !entry
+  ? await taskSpace("new descriptive name") // closed: start a new space
+  : entry.ownership === "user"
+    ? await claimTaskSpace(7) // finished with kept Pages
+    : await taskSpace(7); // still yours
+// A claimed space has no Page labels yet: adopt its tab before operating.
+const page =
+  (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
 ```
 
 Do not inspect or select profiles unless the user explicitly requests a
@@ -509,27 +524,24 @@ const userPage = task.userPage();
 
 Adopt `userPage` if it is unmanaged. Use `waitForControl()` only when the current
 script must wait in place. Claim a user-owned or inactive space only when the
-user explicitly asks; this includes a space you finished with kept Pages, which
-`takeOverTaskSpace()` cannot resume. Find its numeric id first; names may be
-duplicated. `listTaskSpaces()` entries expose that id as `id` (`spaceId` exists
-only on a TaskSpace handle), so pass `entry.id` to `claimTaskSpace()` or
-`taskSpace()`:
+user asks to continue in it. A follow-up message about the goal of a space you
+finished with kept Pages is such a request: claim that space instead of
+creating a new one. Claim only the space you used for that goal, never another
+one. `takeOverTaskSpace()` cannot resume a finished space. Find its numeric id
+first; names may be duplicated. `listTaskSpaces()` entries expose that id as
+`id` (`spaceId` exists only on a TaskSpace handle), so pass `entry.id` to
+`claimTaskSpace()` or `taskSpace()`.
 
-```js
-const spaces = await listTaskSpaces();
-console.log(spaces.filter((space) => space.ownership === "user"));
-
-const task = await claimTaskSpace(7);
-const userPage = task.userPage();
-```
-
-When the task succeeds, close the TaskSpace by default with
-`await task.finish({ keep: [] })`. Call `finish()` exactly once and wait for it
+When the task succeeds, close the TaskSpace by default: close its Pages, then
+call `await task.finish({ keep: [] })`, as in the example below. Finish at the
+end of every reply, in a separate last script run after earlier output has
+shown that the request is done. A space finished too early cannot take more
+work in this reply. Call `finish()` exactly once and wait for it
 to resolve before reporting completion.
 
 `finish()` ends the task and all of its Page labels, including Pages kept for the
 user. Put it last in the final round only; do not operate any Page after it in
-the same script or in later rounds.
+the same script. To continue in a later round, claim the space first.
 
 Keeping Pages is a rare exception: retain only necessary Pages when the user
 explicitly asks, or when the result must remain in the browser for the user to
@@ -537,15 +549,18 @@ view or continue working with. Pages merely visited, search results, and
 intermediate steps do not need to remain open.
 
 ```js
-await task.finish({ keep: [] }); // Default: keep no Agent-managed Pages.
-await task.finish({ keep: ["p2"] }); // Exception: keep only the result Page for the user.
+// Default: close the space. Closing its Pages first also covers Pages adopted after a claim,
+// which `keep: []` alone would hand back to the user.
+for (const page of await task.pages()) await page.close();
+await task.finish({ keep: [] });
+
+// Exception: keep only the result Page for the user.
+await task.finish({ keep: ["p2"] });
 ```
 
 User-created and unknown-origin tabs are protected; if any remain, `keep: []`
 does not close the whole space. The blank tab that `page.close()` leaves when it
-closes the last Page is SDK-owned and never blocks closing. Do not close
-unwanted Pages one by one at completion; list the Pages to keep instead.
-Use `page.close()` only while the task is still in progress. Do not call
+closes the last Page is SDK-owned and never blocks closing. Do not call
 `finish()` when the task stops for user control or an error.
 
 If the final output contains `[ego-browser:notice]`, finish the current browser
