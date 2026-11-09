@@ -116,10 +116,10 @@ and diagnose the CLI or installation only if it fails.
 
 ## Spaces, rounds, and pages
 
-- One user goal uses one TaskSpace across all of your replies about it. Use
-  multiple spaces only when the user explicitly requests them.
-- Start and end each message's browser work as described in "Starting and
-  ending a message" below. Task space names are unique; prefer the numeric id
+- One user goal keeps one TaskSpace across your replies while that space
+  exists. Use multiple spaces only when the user explicitly requests them.
+- Start and end each reply's browser work as described in "Starting and
+  ending a reply" below. Task space names are unique; prefer the numeric id
   once you have it.
 - Never use a new TaskSpace to recover from a stuck, blocked, timed-out, or
   unexpected Page. Recover within the existing space; if it cannot continue,
@@ -480,12 +480,12 @@ await page.fetch("/image.png", { saveAs: "/absolute/path/image.png" });
 Use standard Node.js `fetch()` for background requests that do not need Page
 browser semantics.
 
-## Starting and ending a message
+## Starting and ending a reply
 
-Begin the first script of each message by choosing the space. A new goal gets a
-new space. A message that continues an earlier goal, such as a further
+Begin the first script of each reply by choosing the space. A new goal gets a
+new space. A user message that continues an earlier goal, such as a further
 question, a correction, or a request to continue, continues in that goal's
-space, whatever state your last reply left it in:
+space if it still exists, whatever state your last reply left it in:
 
 ```js
 const SPACE_ID = 7; // printed by your last reply about this goal; null for a new goal
@@ -497,28 +497,37 @@ const task = !entry
   ? await taskSpace("descriptive goal name") // new goal, or the earlier space was closed
   : entry.ownership === "user"
     ? await claimTaskSpace(SPACE_ID) // you finished it with kept Pages
-    : await taskSpace(SPACE_ID); // not finished, still yours
-console.log({ taskSpaceId: task.spaceId, tabs: await task.tabs() });
-// A claimed space has no Page labels yet: adopt its tab before operating.
+    : entry.ownership === "agentDelegatedToUser"
+      ? await takeOverTaskSpace(SPACE_ID) // control is with the user
+      : await taskSpace(SPACE_ID); // still in your control
+// After a claim, no tab has a label yet: adopt the tab you kept.
 const page =
   (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
+console.log({
+  taskSpaceId: task.spaceId,
+  page: page.label,
+  tabs: await task.tabs(),
+});
 ```
 
-After a claim, earlier Page labels are gone; use the adopted Page. Do not call
-`taskSpace(name)` or `takeOverTaskSpace()` on a space you finished; both stop.
+`finish()` ends all Page labels, kept Pages included. Until you claim a space
+you finished with kept Pages, neither `taskSpace()` nor `takeOverTaskSpace()`
+can resume it. After the claim, adopt each tab you kept and use the label
+`adopt()` returns.
 
-End each message's browser work with one `finish()` in a separate last script,
+End each reply's browser work with one `finish()` in a separate last script,
 run after earlier output has shown that the request is done, and wait for it
-before you report. A space finished too early cannot take more work in this
-message:
+before you report. A space finished too early must not take more work in this
+reply:
 
 ```js
-// Default: close the space. Closing its Pages first also covers Pages adopted after a claim,
-// which `keep: []` alone would hand back to the user.
+const task = await taskSpace(7); // the taskSpaceId printed earlier in this reply
+// Default: close the space. Close its Pages first: tabs you kept and adopted after
+// a claim read openedBy "unknown", so `keep: []` alone would leave them open.
 for (const page of await task.pages()) await page.close();
 await task.finish({ keep: [] });
 
-// Exception: keep only the result Page for the user.
+// Exception, instead of the default: keep only the result Page for the user.
 await task.finish({ keep: ["p2"] });
 ```
 
@@ -549,15 +558,16 @@ const userPage = task.userPage();
 Adopt `userPage` if it is unmanaged. Use `waitForControl()` only when the current
 script must wait in place.
 
-Claim a user-owned or inactive space that is not yours to continue only when the
-user explicitly asks.
+Claim any other user-owned or inactive space only when the user explicitly
+asks; the space you finished for the current goal is claimed as in "Starting
+and ending a reply".
 
 User-created and unknown-origin tabs are protected; if any remain, `keep: []`
-does not close the whole space. Tabs adopted after a claim keep an unknown
-origin, which is why the default close above closes the Pages first. The blank
-tab that `page.close()` leaves when it closes the last Page is SDK-owned and
-never blocks closing. Do not call `finish()` when the task stops for user
-control or an error.
+does not close the whole space. Tabs you kept and adopted after a claim also
+read `openedBy: "unknown"` but are yours, which is why the default close above
+closes the Pages first. The blank tab that `page.close()` leaves when it closes
+the last Page is SDK-owned and never blocks closing. Do not call `finish()` when
+the task stops for user control or an error.
 
 If the final output contains `[ego-browser:notice]`, finish the current browser
 task, tell the user an Ego Lite update is available, and run
