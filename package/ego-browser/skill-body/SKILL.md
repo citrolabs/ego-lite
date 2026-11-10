@@ -106,6 +106,8 @@ such as Chinese in the file, never in `-e`.
 ego-run --session <id> --file C:/Users/<name>/ego/task.mjs
 ```
 
+`--file` reads UTF-8; keep non-ASCII text in the file, never in `-e`.
+
 <!-- /mode -->
 
 Do not pipe the file with `Get-Content`: 5.1 corrupts non-ASCII text and
