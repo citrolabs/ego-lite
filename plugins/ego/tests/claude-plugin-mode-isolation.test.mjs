@@ -67,8 +67,13 @@ function assertTaskSpaceSafety(skill, label) {
   );
   assert.match(
     skill,
-    /End each reply's browser work with one `finish\(\)` in a separate last script,[\s\S]*?wait for it\s+before you report/i,
+    /End each reply's browser work with one `finish\(\)`[\s\S]*?Wait for it before\s+you report/i,
     `${label} must wait for cleanup before reporting completion`,
+  );
+  assert.doesNotMatch(
+    skill,
+    /separate last script/i,
+    `${label} must not spend an extra script on finish()`,
   );
   assert.match(
     skill,

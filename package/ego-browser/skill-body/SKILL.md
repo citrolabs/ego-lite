@@ -515,13 +515,11 @@ you finished with kept Pages, neither `taskSpace()` nor `takeOverTaskSpace()`
 can resume it. After the claim, adopt each tab you kept and use the label
 `adopt()` returns.
 
-End each reply's browser work with one `finish()` in a separate last script,
-run after earlier output has shown that the request is done, and wait for it
-before you report. A space finished too early must not take more work in this
-reply:
+End each reply's browser work with one `finish()`, called after its last
+browser step; it can run in the same script as that step. Wait for it before
+you report:
 
 ```js
-const task = await taskSpace(7); // the taskSpaceId printed earlier in this reply
 // Default: close the space, including tabs you kept in an earlier reply.
 await task.finish({ keep: [] });
 
