@@ -120,6 +120,7 @@ import {
   subscribeUnhandledPageNotices,
   type UnhandledPageNotice,
 } from "./page-discovery.js";
+import { bufferOutput } from "./output-sink.js";
 import {
   publicApiEntry,
   validatePublicApiOptions,
@@ -447,6 +448,7 @@ type OperationGate = {
 type LedgerPort = {
   read(spaceId: number): Promise<PageLedger>;
   discard(spaceId: number): Promise<void>;
+  retainForUser(spaceId: number, targetIds: string[]): Promise<void>;
   initializeCreatedSpace(
     spaceId: number,
     targetId: string,
@@ -1296,17 +1298,14 @@ class TaskSpace {
           !managedByTarget.has(tab.targetId) &&
           !agentUnmanagedSet.has(tab.targetId),
       ).length;
-      const hasProtectedTabs = tabs.some((tab) => {
+      const protectedTabCount = tabs.filter((tab) => {
         const managed = managedByTarget.get(tab.targetId);
         if (managed) return managed.openedBy === "unknown";
         return !agentUnmanagedSet.has(tab.targetId);
-      });
+      }).length;
+      const keepsNothing = options.keep !== "all" && options.keep.length === 0;
 
-      if (
-        options.keep !== "all" &&
-        options.keep.length === 0 &&
-        !hasProtectedTabs
-      ) {
+      if (keepsNothing && protectedTabCount === 0) {
         await this.#services.closeTaskSpace();
         await this.#discardTerminalState();
         return {
@@ -1321,9 +1320,30 @@ class TaskSpace {
       for (const label of labelsToClose) {
         await this.page(label).close();
       }
-      await this.#closeAgentUnmanagedTabs(agentUnmanagedTargets);
+      // Tabs an earlier finish() left for the user go only when this finish
+      // keeps nothing; a keep list can only name labels, so it cannot cover them.
+      const retainedEarlier = new Set(
+        keepsNothing ? [] : ledger.retainedTargets,
+      );
+      const anchorsLeftOpen = await this.#closeAgentUnmanagedTabs(
+        agentUnmanagedTargets.filter((id) => !retainedEarlier.has(id)),
+      );
       await this.#services.completeTaskSpace();
-      await this.#discardTerminalState();
+      await this.#discardTerminalState([
+        ...keptManagedLabels
+          .map((label) => ledger.pages[label])
+          .filter((page) => page.openedBy === "agent")
+          .map((page) => page.targetId),
+        ...agentUnmanagedTargets.filter((id) => retainedEarlier.has(id)),
+        ...anchorsLeftOpen,
+      ]);
+      if (keepsNothing) {
+        bufferOutput(
+          `[ego-browser] finish({ keep: [] }) did not close task space ${this.spaceId}: ` +
+            `${protectedTabCount} tab(s) of user or unknown origin stayed open, ` +
+            "and the space now belongs to the user.\n",
+        );
+      }
       return {
         spaceId: this.spaceId,
         closedSpace: false,
@@ -1337,15 +1357,20 @@ class TaskSpace {
   /**
    * Close SDK-opened unmanaged tabs (blank anchors) that the space no longer
    * needs. A tab that is the last one in the space stays: closing it would
-   * destroy the space the caller chose to keep.
+   * destroy the space the caller chose to keep. Returns the tabs left open.
    */
-  async #closeAgentUnmanagedTabs(targetIds: string[]): Promise<void> {
-    if (targetIds.length === 0) return;
+  async #closeAgentUnmanagedTabs(targetIds: string[]): Promise<string[]> {
+    if (targetIds.length === 0) return [];
+    const leftOpen: string[] = [];
     let live = new Set(
       (await this.#services.listTabs()).map((tab) => tab.targetId),
     );
     for (const targetId of targetIds) {
-      if (!live.has(targetId) || live.size <= 1) continue;
+      if (!live.has(targetId)) continue;
+      if (live.size <= 1) {
+        leftOpen.push(targetId);
+        continue;
+      }
       const result = await this.#services.cdp("Target.closeTarget", {
         targetId,
       });
@@ -1368,6 +1393,7 @@ class TaskSpace {
         (await this.#services.listTabs()).map((tab) => tab.targetId),
       );
     }
+    return leftOpen;
   }
 
   async [rollbackCreatedTaskSpaceToken](): Promise<void> {
@@ -1377,9 +1403,13 @@ class TaskSpace {
     });
   }
 
-  async #discardTerminalState(): Promise<void> {
+  async #discardTerminalState(retainedTargets: string[] = []): Promise<void> {
     this.#finished = true;
-    await this.#services.ledger.discard(this.spaceId);
+    if (retainedTargets.length > 0) {
+      await this.#services.ledger.retainForUser(this.spaceId, retainedTargets);
+    } else {
+      await this.#services.ledger.discard(this.spaceId);
+    }
     this.#stopBackgroundPageDiscovery();
     clearSpacePageNotices(this.spaceId);
   }

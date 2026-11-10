@@ -139,6 +139,7 @@ test("a newly created space atomically replaces stale state with agent page p1",
       initialized: true,
       userControlPending: false,
       unmanagedTargets: {},
+      retainedTargets: [],
       pages: {
         p1: { targetId: "target-initial", openedBy: "agent" },
       },
@@ -353,6 +354,7 @@ test("writes use a complete ledger document", async () => {
       initialized: true,
       userControlPending: false,
       unmanagedTargets: {},
+      retainedTargets: [],
       pages: {
         p1: {
           targetId: "target-a",
@@ -827,4 +829,24 @@ test("an explicitly unmanaged anchor is not adopted during reconciliation", asyn
     assert.deepEqual(reconciled.pages, {});
     assert.equal(reconciled.unmanagedTargets["target-anchor"], "agent");
   });
+});
+
+test("retained targets default to empty for ledgers from earlier runtimes", async () => {
+  const rootDir = await mkdtemp(join(tmpdir(), "ego-ledger-retained-test-"));
+  try {
+    const store = new PageLedgerStore({ rootDir });
+    await store.retainForUser(5, ["target-kept"]);
+    const retained = await store.read(5);
+    assert.deepEqual(retained.retainedTargets, ["target-kept"]);
+    assert.deepEqual(retained.unmanagedTargets, { "target-kept": "agent" });
+    assert.equal(retained.initialized, false);
+
+    const [file] = await readdir(rootDir);
+    const stored = JSON.parse(await readFile(join(rootDir, file), "utf8"));
+    delete stored.retainedTargets;
+    await writeFile(join(rootDir, file), JSON.stringify(stored));
+    assert.deepEqual((await store.read(5)).retainedTargets, []);
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
 });
