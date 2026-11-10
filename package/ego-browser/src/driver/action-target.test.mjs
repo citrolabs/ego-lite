@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   ACTION_TARGET_STATE_HELPERS,
+  COMPOSED_PARENT_HELPER,
   HIT_TARGET_HELPERS,
+  NATIVE_SELECT_FUNCTIONS,
   SCROLL_TARGET_HELPERS,
 } from "../../dist/src/driver/action-target.js";
 
@@ -205,4 +207,75 @@ test("action targeting chooses a real inline fragment instead of the bounding-bo
   };
 
   assert.deepEqual(actionPointForElement(target), { x: 740, y: 110 });
+});
+
+test("native select detection finds drop-down selects and names a unique locator", () => {
+  const { nativeSelectMenuAt } = Function(`
+    ${COMPOSED_PARENT_HELPER}
+    ${NATIVE_SELECT_FUNCTIONS}
+    return { nativeSelectMenuAt };
+  `)();
+  const matches = new Map();
+  const root = {
+    nodeType: 9,
+    querySelectorAll(selector) {
+      return { length: matches.get(selector) ?? 0 };
+    },
+  };
+  const select = ({
+    id = "",
+    name = null,
+    multiple = false,
+    size = 0,
+    disabled = false,
+    labels = ["Alpha", "Beta"],
+  } = {}) => ({
+    tagName: "SELECT",
+    parentElement: null,
+    id,
+    multiple,
+    size,
+    disabled,
+    options: labels.map((label) => ({ label })),
+    getAttribute: (attribute) => (attribute === "name" ? name : null),
+    getRootNode: () => root,
+    matches: () => disabled,
+  });
+
+  matches.set("select#dropdown", 1);
+  const dropdown = select({ id: "dropdown" });
+  const option = { tagName: "OPTION", parentElement: dropdown };
+  assert.deepEqual(nativeSelectMenuAt(option), {
+    locator: "select#dropdown",
+    options: ["Alpha", "Beta"],
+    optionCount: 2,
+  });
+
+  matches.set('select[name="month"]', 1);
+  assert.equal(
+    nativeSelectMenuAt(select({ name: "month" })).locator,
+    'select[name="month"]',
+  );
+
+  matches.set('select[name="shared"]', 4);
+  assert.equal(
+    nativeSelectMenuAt(select({ name: "shared" })).locator,
+    null,
+    "an ambiguous selector is not offered",
+  );
+
+  const many = select({
+    labels: Array.from({ length: 12 }, (_, i) => `O${i}`),
+  });
+  assert.equal(nativeSelectMenuAt(many).options.length, 10);
+  assert.equal(nativeSelectMenuAt(many).optionCount, 12);
+
+  assert.equal(nativeSelectMenuAt(select({ multiple: true })), null);
+  assert.equal(nativeSelectMenuAt(select({ size: 3 })), null);
+  assert.equal(nativeSelectMenuAt(select({ disabled: true })), null);
+  assert.equal(
+    nativeSelectMenuAt({ tagName: "DIV", parentElement: null }),
+    null,
+  );
+  assert.equal(nativeSelectMenuAt(null), null);
 });

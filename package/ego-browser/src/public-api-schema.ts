@@ -466,7 +466,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     name: "Page.click",
     signature:
       "await page.click(selector, { button?, clickCount?, delay?, position?, force?, timeout?, label? })",
-    summary: "Click an element with native CDP input.",
+    summary:
+      "Click an element with native CDP input. A left press that would land on a drop-down <select> is refused, even with force; use selectOption().",
     options: {
       button,
       clickCount: option("positiveInteger", "Number of clicks."),
@@ -481,7 +482,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     name: "Page.dblclick",
     signature:
       "await page.dblclick(selector, { button?, delay?, position?, force?, timeout?, label? })",
-    summary: "Double-click an element with native CDP input.",
+    summary:
+      "Double-click an element with native CDP input. Refuses a left press on a drop-down <select>, like click().",
     options: { button, delay, position, force, timeout: actionTimeout, label },
   },
   {
@@ -568,7 +570,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     name: "Page.mouse.click",
     signature:
       "await page.mouse.click(x, y, { button?, clickCount?, delay?, label? })",
-    summary: "Click CSS-pixel coordinates with native CDP input.",
+    summary:
+      "Click CSS-pixel coordinates with native CDP input. Refuses a left press on a drop-down <select>; use selectOption().",
     options: {
       button,
       clickCount: option("positiveInteger", "Number of clicks."),
@@ -588,7 +591,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: "Page.mouse.down",
     signature: "await page.mouse.down({ button?, clickCount? })",
-    summary: "Press a mouse button at the current Page position.",
+    summary:
+      "Press a mouse button at the current Page position. Refuses a left press on a drop-down <select>; use selectOption().",
     options: {
       button,
       clickCount: option(

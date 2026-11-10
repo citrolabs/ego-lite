@@ -6,9 +6,11 @@ import {
 import { RefMap } from "../ref-map.js";
 import {
   ACTION_TARGET_STATE_HELPERS,
+  COMPOSED_PARENT_HELPER,
   EDIT_ACTION_TARGET_HELPERS,
   ENABLED_SCROLL_TARGET_HELPERS,
   HIT_TARGET_HELPERS,
+  NATIVE_SELECT_FUNCTIONS,
   SCROLL_TARGET_HELPERS,
 } from "./action-target.js";
 import { dispatchWheelMotion } from "./scroll-motion.js";
@@ -247,6 +249,9 @@ export async function clickInPage(
   assertPageSelector(selector);
   const button = options.button ?? "left";
   const clickCount = options.clickCount ?? 1;
+  // `force` only skips actionability checks; the press itself is the same, so
+  // it would still open a native select menu.
+  const nativeSelect = button === "left";
   const target = await resolveElementObjectId(
     cdpAdapter(services),
     sessionId,
@@ -317,7 +322,7 @@ export async function clickInPage(
         target.sessionId,
         target.objectId,
         point.local,
-        { hitTest: !options.force },
+        { hitTest: !options.force, nativeSelect },
       );
       await dispatchMouseEvent(services, target.sessionId, {
         type: "mouseMoved",
@@ -334,14 +339,18 @@ export async function clickInPage(
       // every press so hover-created overlays fail closed. A same-process
       // iframe must keep its native move/press sequence contiguous; its state
       // was checked immediately before that gesture's final move, and later
-      // presses in any iframe only recheck the enabled state.
-      if (!target.frameId || count > 1) {
+      // presses in any iframe only recheck the enabled state. An out-of-process
+      // iframe had no check since its point was resolved, so its first left
+      // press still checks for a native select.
+      const sameProcessFrame =
+        Boolean(target.frameId) && target.sessionId === sessionId;
+      if (!target.frameId || count > 1 || (nativeSelect && !sameProcessFrame)) {
         await assertClickTargetActionable(
           services,
           target.sessionId,
           target.objectId,
           point.local,
-          { hitTest: !options.force && !target.frameId },
+          { hitTest: !options.force && !target.frameId, nativeSelect },
         );
       }
       await dispatchMouseEvent(services, target.sessionId, {
@@ -1185,6 +1194,14 @@ export async function clickPointInPage(
   const button = options.button ?? "left";
   const clickCount = options.clickCount ?? 1;
   const buttons = pressedButtons(button);
+  if (button === "left") {
+    await assertNoNativeSelectAtViewportPoint(
+      services,
+      sessionId,
+      { x, y },
+      "page.mouse.click",
+    );
+  }
   showAgentActionLabel(services, options.label);
   await dispatchMouseEvent(services, sessionId, {
     type: "mouseMoved",
@@ -1257,6 +1274,14 @@ export async function mouseButtonInPage(
   assertPoint(x, y, `page.mouse.${type === "mousePressed" ? "down" : "up"}`);
   const button = options.button ?? "left";
   const clickCount = options.clickCount ?? 1;
+  if (type === "mousePressed" && button === "left") {
+    await assertNoNativeSelectAtViewportPoint(
+      services,
+      sessionId,
+      { x, y },
+      "page.mouse.down",
+    );
+  }
   await dispatchMouseEvent(services, sessionId, {
     type,
     x,
@@ -1412,11 +1437,13 @@ async function resolveElementPoint(
     if (scroll) return { scroll };
     ${strictStabilityExpression}
     point = ${pointExpression};
-    if (${hitTest ? "true" : "false"}) {
-      const interceptor = interceptingElementAtPoint(this, point);
-      if (interceptor) {
-        return { error: describeHitTarget(interceptor) + " intercepts pointer events" };
-      }
+    ${
+      hitTest
+        ? `const interceptor = interceptingElementAtPoint(this, point);
+    if (interceptor) {
+      return { error: describeHitTarget(interceptor) + " intercepts pointer events" };
+    }`
+        : ""
     }
     return point;
   }`;
@@ -1796,18 +1823,34 @@ async function assertClickTargetActionable(
   sessionId: string,
   objectId: string,
   point: { x: number; y: number },
-  options: { hitTest: boolean; actionName?: string },
+  options: { hitTest: boolean; nativeSelect?: boolean; actionName?: string },
 ): Promise<void> {
-  const { hitTest, actionName = "page.click" } = options;
+  const { hitTest, nativeSelect = false, actionName = "page.click" } = options;
+  // The native select check looks at the element the press really lands on,
+  // which may be a transparent <select> inside the target or, with `force`,
+  // something other than the target.
+  const helpers = nativeSelect
+    ? `${HIT_TARGET_HELPERS}${NATIVE_SELECT_FUNCTIONS}`
+    : hitTest
+      ? HIT_TARGET_HELPERS
+      : ACTION_TARGET_STATE_HELPERS;
   const expression = `function clickTargetActionable(point) {
-    ${hitTest ? HIT_TARGET_HELPERS : ACTION_TARGET_STATE_HELPERS}
+    ${helpers}
     if (!this.isConnected) return { error: "element is not connected" };
     if (isActionTargetDisabled(this)) return { error: "element is disabled" };
-    if (${hitTest ? "true" : "false"}) {
-      const interceptor = interceptingElementAtPoint(this, point);
-      if (interceptor) {
-        return { error: describeHitTarget(interceptor) + " intercepts pointer events" };
-      }
+    ${
+      nativeSelect
+        ? `const nativeSelect = nativeSelectMenuAt(hitElementAtPoint(this, point));
+    if (nativeSelect) return { nativeSelect };`
+        : ""
+    }
+    ${
+      hitTest
+        ? `const interceptor = interceptingElementAtPoint(this, point);
+    if (interceptor) {
+      return { error: describeHitTarget(interceptor) + " intercepts pointer events" };
+    }`
+        : ""
     }
     return { ok: true };
   }`;
@@ -1823,11 +1866,101 @@ async function assertClickTargetActionable(
     sessionId,
   );
   const result = runtimeValue(response, expression);
+  if (result?.nativeSelect) {
+    throw nativeSelectMenuError(actionName, result.nativeSelect);
+  }
   if (typeof result?.error === "string") {
     throw new ElementResolutionError(
       `${actionName} failed: ${result.error}`,
       "transient",
     );
+  }
+}
+
+type NativeSelectInfo = {
+  locator: string | null;
+  options: string[];
+  optionCount: number;
+};
+
+/**
+ * Permanent: retrying cannot help, the caller has to switch to selectOption.
+ * The message names a selector that matches only this select when there is
+ * one, because a bare "select" is often ambiguous on real pages.
+ */
+function nativeSelectMenuError(
+  actionName: string,
+  info: NativeSelectInfo,
+): ElementResolutionError {
+  const target = info.locator ? `<select> ${info.locator}` : "a <select>";
+  const call = info.locator
+    ? `page.selectOption(${JSON.stringify(info.locator)}, { label: "..." })`
+    : `page.selectOption(selector, { label: "..." }) with a selector or snapshot ref that matches only this <select>`;
+  const shown = info.options.map((label) => JSON.stringify(label)).join(", ");
+  const more =
+    info.optionCount > info.options.length
+      ? `, ... (${info.optionCount} in total)`
+      : "";
+  const options = shown ? ` Options: ${shown}${more}.` : "";
+  return new ElementResolutionError(
+    `${actionName} refused to press the left mouse button on ${target}: ` +
+      `that opens the browser's native option menu, which agents cannot ` +
+      `close and which blocks task spaces from closing. Use ${call} ` +
+      `instead.${options}`,
+    "permanent",
+  );
+}
+
+/**
+ * Raw coordinate presses have no target element, so look up what is at the
+ * viewport point, descending through open shadow roots and same-origin
+ * iframes. A cross-origin iframe is a separate target and is not inspected.
+ */
+async function assertNoNativeSelectAtViewportPoint(
+  services: PageActionServices,
+  sessionId: string,
+  point: { x: number; y: number },
+  actionName: string,
+): Promise<void> {
+  const expression = `(() => {
+    ${COMPOSED_PARENT_HELPER}
+    ${NATIVE_SELECT_FUNCTIONS}
+    let doc = document;
+    let x = ${point.x};
+    let y = ${point.y};
+    let hit = null;
+    for (let depth = 0; depth < 10 && doc; depth += 1) {
+      let element = doc.elementFromPoint(x, y);
+      while (element?.shadowRoot) {
+        const inner = element.shadowRoot.elementFromPoint(x, y);
+        if (!inner || inner === element) break;
+        element = inner;
+      }
+      if (!element) break;
+      hit = element;
+      const tag = String(element.tagName || "").toUpperCase();
+      if (tag !== "IFRAME" && tag !== "FRAME") break;
+      let inner = null;
+      try {
+        inner = element.contentDocument;
+      } catch {}
+      if (!inner) break;
+      const rect = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      x -= rect.left + element.clientLeft + (parseFloat(style.paddingLeft) || 0);
+      y -= rect.top + element.clientTop + (parseFloat(style.paddingTop) || 0);
+      doc = inner;
+    }
+    return hit ? nativeSelectMenuAt(hit) : null;
+  })()`;
+  const response = await services.cdp(
+    "Runtime.evaluate",
+    { expression, returnByValue: true, awaitPromise: false },
+    sessionId,
+  );
+  const result = runtimeValue(response, expression);
+  if (result && typeof result === "object" && "optionCount" in result) {
+    throw nativeSelectMenuError(actionName, result as NativeSelectInfo);
   }
 }
 

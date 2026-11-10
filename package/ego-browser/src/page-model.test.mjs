@@ -569,7 +569,9 @@ function createFixture(rootDir) {
           }
           if (
             interceptedClickPointsRemaining > 0 &&
-            params.functionDeclaration.includes("elementFromPoint")
+            params.functionDeclaration.includes(
+              "interceptingElementAtPoint(this, point)",
+            )
           ) {
             interceptedClickPointsRemaining -= 1;
             return {
