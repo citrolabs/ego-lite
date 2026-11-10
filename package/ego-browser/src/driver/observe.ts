@@ -14,6 +14,7 @@ import {
 } from "../browser-runtime.js";
 import { invokeEgo } from "../ego-errors.js";
 import { resolveElementCenter } from "../element-resolver.js";
+import { resolveInPageFrames } from "./element-ops.js";
 import { compactSnapshotResult } from "../snapshot-result.js";
 import {
   browserRefMap,
@@ -80,11 +81,14 @@ export async function snapshotText(options: SnapshotOptions = {}) {
 
 export async function elementCenter(selectorOrRef) {
   await ensureRefMapForRef(selectorOrRef);
-  return resolveElementCenter(
-    { sendRaw: cdp },
-    undefined,
-    browserRefMap,
-    selectorOrRef,
+  return resolveInPageFrames(selectorOrRef, (iframeSessions) =>
+    resolveElementCenter(
+      { sendRaw: cdp },
+      undefined,
+      browserRefMap,
+      selectorOrRef,
+      iframeSessions,
+    ),
   );
 }
 

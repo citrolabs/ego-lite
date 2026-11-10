@@ -1,6 +1,58 @@
 import { cdp } from "../cdp-eval.js";
 import { browserRefMap, ensureRefMapForRef } from "../ref-state.js";
 import { resolveElementObjectId } from "../element-resolver.js";
+import { parseRef } from "../ref-map.js";
+
+/**
+ * Run a v1 resolution in the top document first, then once more across the
+ * Page's same-process iframes when nothing matched there.
+ *
+ * The v1 helpers resolve in the current Page session, where a role locator
+ * reads only the top document's accessibility tree and a CSS locator queries
+ * only the top document. Searching frames only after a miss keeps every
+ * top-document result and ambiguity unchanged. A same-process frame shares
+ * the Page session, so each frame maps to the default session (`undefined`)
+ * and the resolver addresses it by frame id.
+ */
+export async function resolveInPageFrames<T>(
+  selectorOrRef: string,
+  resolve: (iframeSessions: Map<string, string | undefined>) => Promise<T>,
+): Promise<T> {
+  try {
+    return await resolve(new Map());
+  } catch (error) {
+    if (
+      typeof selectorOrRef !== "string" ||
+      parseRef(selectorOrRef) ||
+      !/ matched 0 elements/.test(error?.message || "")
+    ) {
+      throw error;
+    }
+    const iframeSessions = await sameProcessFrames();
+    if (iframeSessions.size === 0) throw error;
+    return resolve(iframeSessions);
+  }
+}
+
+async function sameProcessFrames(): Promise<Map<string, string | undefined>> {
+  const frames = new Map<string, string | undefined>();
+  let tree;
+  try {
+    tree = (await cdp("Page.getFrameTree"))?.frameTree;
+  } catch {
+    return frames;
+  }
+  const visit = (node) => {
+    for (const child of node?.childFrames || []) {
+      if (typeof child?.frame?.id === "string") {
+        frames.set(child.frame.id, undefined);
+      }
+      visit(child);
+    }
+  };
+  visit(tree);
+  return frames;
+}
 
 /**
  * Resolve any selector form to a CDP Runtime objectId handle.
@@ -12,11 +64,14 @@ import { resolveElementObjectId } from "../element-resolver.js";
  */
 export async function resolveHandle(selectorOrRef) {
   await ensureRefMapForRef(selectorOrRef);
-  return resolveElementObjectId(
-    { sendRaw: cdp },
-    undefined,
-    browserRefMap,
-    selectorOrRef,
+  return resolveInPageFrames(selectorOrRef, (iframeSessions) =>
+    resolveElementObjectId(
+      { sendRaw: cdp },
+      undefined,
+      browserRefMap,
+      selectorOrRef,
+      iframeSessions,
+    ),
   );
 }
 
