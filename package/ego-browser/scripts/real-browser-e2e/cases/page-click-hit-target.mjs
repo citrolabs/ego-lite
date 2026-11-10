@@ -157,13 +157,13 @@ export function pageClickHitTargetCase() {
       visibleInput.id = "visible-fillable-duplicate";
       document.body.append(hiddenInput, visibleInput);
     });
-    await page.click(".usable-duplicate");
+    await page.click(".usable-duplicate", { timeout: scrollingActionTimeout });
     assertEqual(
       await page.evaluate("window.__usableDuplicateClicks"),
       1,
       "click uses the sole visible, enabled duplicate"
     );
-    await page.fill(".fillable-duplicate", "filled");
+    await page.fill(".fillable-duplicate", "filled", { timeout: scrollingActionTimeout });
     assertEqual(
       await page.evaluate("document.querySelector('#visible-fillable-duplicate').value"),
       "filled",
