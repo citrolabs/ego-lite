@@ -34,19 +34,36 @@ export async function resolveInPageFrames<T>(
   }
 }
 
+/**
+ * Frames rendered by the Page's own process. An out-of-process iframe is
+ * listed in the frame tree too, but only its own session can address it, so
+ * it and every frame below it are left out. Without the target list there is
+ * no way to tell them apart, and the caller keeps the top-document miss.
+ */
 async function sameProcessFrames(): Promise<Map<string, string | undefined>> {
   const frames = new Map<string, string | undefined>();
   let tree;
+  let targetInfos;
   try {
-    tree = (await cdp("Page.getFrameTree"))?.frameTree;
+    [tree, targetInfos] = await Promise.all([
+      cdp("Page.getFrameTree").then((result) => result?.frameTree),
+      cdp("Target.getTargets").then((result) => result?.targetInfos),
+    ]);
   } catch {
     return frames;
   }
+  if (!Array.isArray(targetInfos)) return frames;
+  // An out-of-process iframe target's id is its frame id.
+  const outOfProcess = new Set(
+    targetInfos
+      .filter((info) => info?.type === "iframe")
+      .map((info) => info.targetId),
+  );
   const visit = (node) => {
     for (const child of node?.childFrames || []) {
-      if (typeof child?.frame?.id === "string") {
-        frames.set(child.frame.id, undefined);
-      }
+      const frameId = child?.frame?.id;
+      if (typeof frameId !== "string" || outOfProcess.has(frameId)) continue;
+      frames.set(frameId, undefined);
       visit(child);
     }
   };
