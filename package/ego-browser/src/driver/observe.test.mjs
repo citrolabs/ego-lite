@@ -10,6 +10,7 @@ import {
 } from "../../dist/src/browser-runtime.js";
 import {
   captureScreenshot,
+  elementCenter,
   snapshot,
   snapshotText,
 } from "../../dist/src/driver/observe.js";
@@ -304,4 +305,112 @@ test("captureScreenshot rejects a relative EGO_BROWSER_OUTPUT_DIR", async () => 
     if (previous === undefined) delete globalThis.EGO_BROWSER_OUTPUT_DIR;
     else globalThis.EGO_BROWSER_OUTPUT_DIR = previous;
   }
+});
+
+test("elementCenter finds a role locator in a same-process iframe after a top-document miss", async () => {
+  const calls = [];
+  const button = {
+    nodeId: "2",
+    ignored: false,
+    role: { value: "button" },
+    name: { value: "Framed" },
+    backendDOMNodeId: 7,
+  };
+  const restore = setOverrides({
+    cdpOverride(method, params, sessionId) {
+      calls.push({ method, params, sessionId });
+      if (method === "Accessibility.getFullAXTree") {
+        return { nodes: params.frameId === "child-frame" ? [button] : [] };
+      }
+      if (method === "Page.getFrameTree") {
+        return {
+          frameTree: {
+            frame: { id: "main-frame" },
+            childFrames: [{ frame: { id: "child-frame" } }],
+          },
+        };
+      }
+      if (method === "Target.getTargets") return { targetInfos: [] };
+      if (method === "DOM.getBoxModel") {
+        assert.equal(params.backendNodeId, 7);
+        return { model: { content: [10, 20, 50, 20, 50, 40, 10, 40] } };
+      }
+      return {};
+    },
+  });
+  try {
+    const point = await elementCenter("loc=role:button[name='Framed']");
+    assert.equal(point.x, 30);
+    assert.equal(point.y, 30);
+  } finally {
+    restore();
+  }
+  assert.deepEqual(
+    calls
+      .filter((call) => call.method === "Accessibility.getFullAXTree")
+      .map((call) => call.params.frameId ?? null),
+    [null, null, "child-frame"],
+  );
+});
+
+test("elementCenter keeps a top-document miss when the Page has no iframes", async () => {
+  const restore = setOverrides({
+    cdpOverride(method) {
+      if (method === "Accessibility.getFullAXTree") return { nodes: [] };
+      if (method === "Page.getFrameTree") {
+        return { frameTree: { frame: { id: "main-frame" } } };
+      }
+      if (method === "Target.getTargets") return { targetInfos: [] };
+      return {};
+    },
+  });
+  try {
+    await assert.rejects(
+      () => elementCenter("loc=role:button[name='Missing']"),
+      /matched 0 elements/,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("elementCenter does not search an out-of-process iframe through the Page session", async () => {
+  const axFrameIds = [];
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Accessibility.getFullAXTree") {
+        axFrameIds.push(params.frameId ?? null);
+        return { nodes: [] };
+      }
+      if (method === "Page.getFrameTree") {
+        return {
+          frameTree: {
+            frame: { id: "main-frame" },
+            childFrames: [
+              {
+                frame: { id: "oopif-frame" },
+                childFrames: [{ frame: { id: "oopif-child" } }],
+              },
+              { frame: { id: "same-process-frame" } },
+            ],
+          },
+        };
+      }
+      if (method === "Target.getTargets") {
+        return {
+          targetInfos: [{ type: "iframe", targetId: "oopif-frame" }],
+        };
+      }
+      return {};
+    },
+  });
+  try {
+    await assert.rejects(
+      () => elementCenter("loc=role:button[name='Missing']"),
+      /matched 0 elements/,
+    );
+  } finally {
+    restore();
+  }
+  assert.deepEqual(axFrameIds, [null, null, "same-process-frame"]);
 });

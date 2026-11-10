@@ -27,8 +27,8 @@ export function pageOopifActionCase() {
     const snapshot = await page.snapshot({ scope: "full_page" });
     assertIncludes(snapshot, "Run iframe action", "snapshot includes cross-site iframe content");
     assertIncludes(snapshot, "Iframe field", "snapshot includes the iframe input");
-    await page.click('loc=role:button[name="Run iframe action"]');
-    await page.fill('loc=css:#iframe-field', "filled through Page");
+    await page.click('loc=role:button[name="Run iframe action"]', { timeout: scrollingActionTimeout });
+    await page.fill('loc=css:#iframe-field', "filled through Page", { timeout: scrollingActionTimeout });
 
     const outerScrollState = await page.evaluate(() => ({
       scrollY,
@@ -77,8 +77,12 @@ export function pageOopifActionCase() {
       covered.addEventListener("click", () => covered.dataset.clicked = "true");
       document.body.append(covered);
     });
-    await sameOrigin.click('text="Run iframe action"');
-    await sameOrigin.fill('loc=css:#iframe-field', "same process");
+    await sameOrigin.click('text="Run iframe action"', {
+      timeout: scrollingActionTimeout,
+    });
+    await sameOrigin.fill('loc=css:#iframe-field', "same process", {
+      timeout: scrollingActionTimeout,
+    });
     const sameOriginState = await sameOrigin.evaluate(() => {
       const frame = document.querySelector("#fixture-frame");
       return {

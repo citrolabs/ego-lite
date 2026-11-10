@@ -1,5 +1,5 @@
 ---
-version: "2.2.0"
+version: "2.2.1"
 date: "2026-10-16"
 ---
 
@@ -21,12 +21,11 @@ Pass the script to `ego-browser nodejs`.
 <!-- mode: ego-run -->
 
 Pass the script to `ego-run --session <id>`, one session id per user goal
-(lowercase letters, digits, dashes, up to 64 characters, such as the task space
-name). The user starts the daemon once with `ego-run daemon start --detach`; on
+(lowercase letters, digits, dashes, up to 64 characters). The user starts the daemon once with `ego-run daemon start --detach`; on
 `EGO_RUN_DAEMON_UNAVAILABLE` ask them to, never start it yourself. Scripts of
 one session share one Node.js context and run one at a time: top-level
 declarations, functions, and Page handles from earlier scripts stay defined, so
-use `task`, `page`, or a popup handle directly instead of `globalThis`.
+use `task` and `page` directly instead of `globalThis`.
 
 <!-- /mode -->
 
@@ -69,16 +68,12 @@ await page.snapshot()
 EOF
 ```
 
-The last expression (or `return` value) prints after the `console.log` output,
-so end each script with the observation the next step needs. A later script
-reuses `page`:
+The last expression prints after the `console.log` output, so end each script
+with the observation the next step needs. A later script reuses `page`:
 
 ```bash
 ego-run --session inspect-example -e 'await page.click("@3"); await page.snapshot()'
 ```
-
-A popup caught in one script (`const preview = await popupPromise`) stays
-`preview` later.
 
 When a sandbox blocks heredoc input, use `-e` or `--file <absolute path>`.
 
@@ -111,9 +106,6 @@ such as Chinese in the file, never in `-e`.
 ego-run --session <id> --file C:/Users/<name>/ego/task.mjs
 ```
 
-`--file` reads UTF-8: put the whole task, non-ASCII text included, in the file,
-never in `-e`.
-
 <!-- /mode -->
 
 Do not pipe the file with `Get-Content`: 5.1 corrupts non-ASCII text and
@@ -133,7 +125,7 @@ ego-browser nodejs < C:\Users\<name>\ego\task.mjs
 
 <!-- mode: ego-run -->
 
-cmd: pass the same `.mjs` file with `--file`:
+cmd: the same file with `--file`:
 
 ```bat
 ego-run --session <id> --file C:\Users\<name>\ego\task.mjs
@@ -153,7 +145,7 @@ steps.
 
 <!-- mode: ego-run -->
 
-The session keeps earlier rounds' variables: each round's new file
+The session keeps earlier rounds' variables: each round's file
 (`round-01.mjs`, `round-02.mjs`, ...) holds only the next steps.
 
 <!-- /mode -->
@@ -206,14 +198,11 @@ and diagnose the CLI or installation only if it fails.
 
 ## Spaces, rounds, and pages
 
-- Use exactly one TaskSpace for the entire user goal. Create it once, print its
-  `spaceId`, and resume that same space in later rounds. Use multiple spaces
-  only when the user explicitly requests them.
-- Task space names are unique. `taskSpace(name)` resumes your own space with
-  that name instead of creating a second one. If the name belongs to a
-  user-owned space, it fails with `EGO_TASK_SPACE_NAME_IN_USE`: ask the user
-  whether to work in that space (then `claimTaskSpace(id)`), or pick another
-  name.
+- One user goal keeps one TaskSpace across your replies while that space
+  exists. Use multiple spaces only when the user explicitly requests them.
+- Start and end each reply's browser work as described in "Starting and
+  ending a reply" below. Task space names are unique; prefer the numeric id
+  once you have it.
 - Never use a new TaskSpace to recover from a stuck, blocked, timed-out, or
 unexpected Page. Recover within the existing space; if it cannot continue,
 stop and ask the user.
@@ -239,19 +228,9 @@ stop and ask the user.
 - Reuse a Page with `goto()` instead of opening a new Page for every URL.
 - All time values are milliseconds.
 
-<!-- mode: direct -->
-
-```js
-// Later round: use the space id and Page label printed earlier.
-const resumed = await taskSpace(7);
-const source = resumed.page("p1");
-await source.goto("https://example.com/releases");
-```
-
-<!-- /mode -->
-
-Do not inspect or select profiles unless the user explicitly asks for one; a
-`profileId` applies only when creating a space (`help("profiles")`).
+Do not inspect or select profiles unless the user explicitly requests a
+particular Ego Lite profile. A `profileId` applies only when creating a space;
+use `help("profiles")` for the exact workflow.
 
 Supported TaskSpace API:
 
@@ -596,7 +575,63 @@ await page.fetch("/image.png", { saveAs: "/absolute/path/image.png" });
 Use standard Node.js `fetch()` for background requests that do not need Page
 browser semantics.
 
-## User control and completion
+## Starting and ending a reply
+
+Begin the first script of each reply by choosing the space. A new goal gets a
+new space. A user message that continues an earlier goal, such as a further
+question, a correction, or a request to continue, continues in that goal's
+space if it still exists, whatever state your last reply left it in:
+
+```js
+const SPACE_ID = 7; // printed by your last reply about this goal; null for a new goal
+const entry =
+  SPACE_ID === null
+    ? undefined
+    : (await listTaskSpaces()).find((s) => s.id === SPACE_ID);
+const task = !entry
+  ? await taskSpace("descriptive goal name") // new goal, or the earlier space was closed
+  : entry.ownership === "user"
+    ? await claimTaskSpace(SPACE_ID) // you finished it with kept Pages
+    : entry.ownership === "agentDelegatedToUser"
+      ? await takeOverTaskSpace(SPACE_ID) // control is with the user
+      : await taskSpace(SPACE_ID); // still in your control
+// After a claim, no tab has a label yet: adopt the tab you kept.
+const page =
+  (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
+console.log({
+  taskSpaceId: task.spaceId,
+  page: page.label,
+  tabs: await task.tabs(),
+});
+```
+
+`finish()` ends all Page labels, kept Pages included. Until you claim a space
+you finished with kept Pages, neither `taskSpace()` nor `takeOverTaskSpace()`
+can resume it. After the claim, adopt each tab you kept and use the label
+`adopt()` returns.
+
+End each reply's browser work with one `finish()` in a separate last script,
+run after earlier output has shown that the request is done, and wait for it
+before you report. A space finished too early must not take more work in this
+reply:
+
+```js
+const task = await taskSpace(7); // the taskSpaceId printed earlier in this reply
+// Default: close the space, including tabs you kept in an earlier reply.
+await task.finish({ keep: [] });
+
+// Exception, instead of the default: keep only the result Page for the user.
+await task.finish({ keep: ["p2"] });
+```
+
+Keeping Pages is a rare exception: retain only necessary Pages when the user
+explicitly asks, or when the result must remain in the browser for the user to
+view or continue working with. Pages merely visited, search results, and
+intermediate steps do not need to remain open.
+
+After `finish()`, do not operate any Page in the same script.
+
+## User control
 
 Stop when the user takes control or the space is inactive or unassigned. Do not
 retry or route around the stop. Permission prompts, device choosers, and
@@ -614,51 +649,25 @@ const userPage = task.userPage();
 ```
 
 Adopt `userPage` if it is unmanaged. Use `waitForControl()` only when the current
-script must wait in place. Claim a user-owned or inactive space only when the
-user explicitly asks; this includes a space you finished with kept Pages, which
-`takeOverTaskSpace()` cannot resume. Find its numeric id first; names may be
-duplicated. `listTaskSpaces()` entries expose that id as `id` (`spaceId` exists
-only on a TaskSpace handle), so pass `entry.id` to `claimTaskSpace()` or
-`taskSpace()`:
+script must wait in place.
 
-```js
-const spaces = await listTaskSpaces();
-console.log(spaces.filter((space) => space.ownership === "user"));
-
-const task = await claimTaskSpace(7);
-const userPage = task.userPage();
-```
-
-When the task succeeds, close the TaskSpace by default with
-`await task.finish({ keep: [] })`. Call `finish()` exactly once and wait for it
-to resolve before reporting completion.
-
-`finish()` ends the task and all of its Page labels, including Pages kept for the
-user. Put it last in the final round only; do not operate any Page after it in
-the same script or in later rounds.
-
-Keeping Pages is a rare exception: retain only necessary Pages when the user
-explicitly asks, or when the result must remain in the browser for the user to
-view or continue working with. Pages merely visited, search results, and
-intermediate steps do not need to remain open.
-
-```js
-await task.finish({ keep: [] }); // Default: keep no Agent-managed Pages.
-await task.finish({ keep: ["p2"] }); // Exception: keep only the result Page for the user.
-```
+Claim any other user-owned or inactive space only when the user explicitly
+asks; the space you finished for the current goal is claimed as in "Starting
+and ending a reply".
 
 <!-- mode: ego-run -->
 
-Final round: `ego-run --session <id> -e 'await task.finish({ keep: [] }); "done"'`.
+Last round: `ego-run --session <id> -e 'await task.finish({ keep: [] })'`.
 
 <!-- /mode -->
 
 User-created and unknown-origin tabs are protected; if any remain, `keep: []`
-does not close the whole space. The blank tab that `page.close()` leaves when it
-closes the last Page is SDK-owned and never blocks closing. Do not close
-unwanted Pages one by one at completion; list the Pages to keep instead.
-Use `page.close()` only while the task is still in progress. Do not call
-`finish()` when the task stops for user control or an error.
+does not close the whole space, and the script output says so. Tabs you kept in
+an earlier reply stay yours after a claim and do not block closing. The blank
+tab that `page.close()` leaves when it closes the last Page is SDK-owned and
+never blocks closing. Do not close unwanted Pages one by one at completion; list
+the Pages to keep instead. Do not call `finish()` when the task stops for user
+control or an error.
 
 If the final output contains `[ego-browser:notice]`, finish the current browser
 task, tell the user an Ego Lite update is available, and run

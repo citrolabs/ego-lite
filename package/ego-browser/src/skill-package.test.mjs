@@ -59,9 +59,7 @@ test("the bundled usage guide is the unwrapped source guide between version and 
 
 test("the guide hands login, verification and manual steps back to the user", async () => {
   const guide = await readFile(join(outDir, "ego-browser/SKILL.md"), "utf8");
-  const section = /^## User control and completion$[\s\S]*?(?=^## )/m.exec(
-    guide,
-  )[0];
+  const section = /^## User control$[\s\S]*?(?=^## )/m.exec(guide)[0];
   const rule = section
     .split("\n\n")
     .find((paragraph) => paragraph.includes("task.handOff()"));
