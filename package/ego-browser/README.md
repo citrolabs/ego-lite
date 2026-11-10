@@ -78,6 +78,7 @@ src/
   http.ts                serverFetch, browserFetch
   cdp-eval.ts            cdp() and js() raw eval
   learning/              site-learnings discovery and manifest validation
+  daemon/                ego-run: persistent REPL sessions (POC, docs/ego-run-daemon.md)
 scripts/
   build.mjs              esbuild bundling
 ```

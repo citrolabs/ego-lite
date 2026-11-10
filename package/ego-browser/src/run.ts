@@ -5,6 +5,8 @@ import {
 } from "node:process";
 import { parse } from "acorn";
 
+import { beginProgram, endProgram } from "./page-model.js";
+
 import { formatCliLogValue } from "./format.js";
 import * as helpers from "./helpers.js";
 import { addPageContextHint } from "./page-context-guard.js";
@@ -87,6 +89,7 @@ export async function runMain(options: RunMainOptions = {}) {
 
 async function execute(code: string, stdout: WritableLike) {
   resetSink();
+  beginProgram();
   const context = await executionContext();
   // Helpers remain globally visible for loaded agent modules, but console is a
   // lexical round parameter so the CLI never replaces Node's process console.
@@ -106,11 +109,13 @@ async function execute(code: string, stdout: WritableLike) {
   try {
     await fn(...values);
   } catch (error) {
+    await endProgram();
     // The thrown Error surfaces the hard-stop message on its own, so flush as a thrown
     // completion (drop the buffer, stay silent) and let it propagate.
     flushSink(stdout, true);
     throw addPageContextHint(error);
   }
+  await endProgram();
   flushSink(stdout, false);
 }
 

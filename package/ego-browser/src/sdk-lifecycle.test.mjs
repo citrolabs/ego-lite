@@ -82,6 +82,63 @@ test("disposeEgoSdk releases native callbacks and rejects pending CDP work", () 
   }
 });
 
+test("the SDK follows a host's program lifecycle events and drains each program's output at its end", () => {
+  const sdkUrl = new URL("../dist/src/index.js", import.meta.url).href;
+  const script = `
+    const chunks = [];
+    let phase = "before";
+    process.stdout.write = (chunk) => { chunks.push([phase, String(chunk)]); return true; };
+    globalThis.ego = { sendCDPMessage() {} };
+    await import(${JSON.stringify(sdkUrl)});
+    // A second copy of the SDK (bundled plus --sdk-path) must not double the listeners.
+    await import(${JSON.stringify(sdkUrl + "?second-copy")});
+    const end = async (id, thrown) => {
+      for (const listener of process.listeners("ego:script-end")) await listener({ id, thrown });
+    };
+    process.emit("ego:script-start", { id: 1 });
+    phase = "in-1";
+    console.log("in program 1");
+    phase = "ending-1";
+    await end(1, false);
+    phase = "between";
+    console.log("stray output between programs");
+    process.emit("ego:script-start", { id: 2 });
+    phase = "in-2";
+    console.log("in program 2");
+    phase = "ending-2";
+    await end(2, true);
+    process.stderr.write(JSON.stringify({
+      chunks,
+      starts: process.listenerCount("ego:script-start"),
+      ends: process.listenerCount("ego:script-end"),
+    }));
+  `;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", script],
+    {
+      encoding: "utf8",
+    },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stderr.trim().split("\n").pop());
+  assert.equal(report.starts, 1, "one start listener for two SDK copies");
+  assert.equal(report.ends, 1, "one end listener for two SDK copies");
+  const text = (phase) =>
+    report.chunks
+      .filter(([p]) => p === phase)
+      .map(([, c]) => c)
+      .join("");
+  assert.equal(
+    text("in-1"),
+    "",
+    "a program's console output is held until its end",
+  );
+  assert.match(text("ending-1"), /in program 1/);
+  assert.doesNotMatch(report.chunks.map(([, c]) => c).join(""), /stray output/);
+  assert.match(text("ending-2"), /in program 2/);
+});
+
 test("the embedded SDK explains that browser globals belong inside Page.evaluate", () => {
   const sdkUrl = new URL("../dist/src/index.js", import.meta.url).href;
   const script = `

@@ -12,7 +12,22 @@ ego-browser Skill directory and follow its link for your operating system.
 
 ## Run browser scripts
 
+<!-- mode: direct -->
+
 Pass the script to `ego-browser nodejs`.
+
+<!-- /mode -->
+
+<!-- mode: ego-run -->
+
+Pass the script to `ego-run --session <id>`, one session id per user goal
+(lowercase letters, digits, dashes, up to 64 characters). The user starts the daemon once with `ego-run daemon start --detach`; on
+`EGO_RUN_DAEMON_UNAVAILABLE` ask them to, never start it yourself. Scripts of
+one session share one Node.js context and run one at a time: top-level
+declarations, functions, and Page handles from earlier scripts stay defined, so
+use `task` and `page` directly instead of `globalThis`.
+
+<!-- /mode -->
 
 <!-- platform: windows -->
 
@@ -21,6 +36,8 @@ Heredoc exists only in Bash/Zsh, so the form depends on your shell.
 ### Bash, Zsh, Git Bash
 
 <!-- /platform -->
+
+<!-- mode: direct -->
 
 ```bash
 ego-browser nodejs <<'EOF'
@@ -37,6 +54,31 @@ When a sandbox blocks heredoc input, use `ego-browser nodejs -e '<code>'`
 instead. Use single quotes around the code and double quotes for JavaScript
 strings; single quotes within the code require shell quoting.
 
+<!-- /mode -->
+
+<!-- mode: ego-run -->
+
+```bash
+ego-run --session inspect-example <<'EOF'
+const task = await taskSpace("inspect-example");
+const page = task.page("p1");
+await page.goto("https://example.com");
+console.log(task.spaceId);
+await page.snapshot()
+EOF
+```
+
+The last expression prints after the `console.log` output, so end each script
+with the observation the next step needs. A later script reuses `page`:
+
+```bash
+ego-run --session inspect-example -e 'await page.click("@3"); await page.snapshot()'
+```
+
+When a sandbox blocks heredoc input, use `-e` or `--file <absolute path>`.
+
+<!-- /mode -->
+
 <!-- platform: windows -->
 
 ### PowerShell
@@ -46,6 +88,8 @@ native-program arguments, which splits the script. Never pass a multi-line or
 double-quoted script to `-e`. Write a UTF-8 `.mjs` file and evaluate this
 one-line entry point:
 
+<!-- mode: direct -->
+
 ```powershell
 ego-browser nodejs -e "await import('file:///C:/Users/<name>/ego/task.mjs')"
 ```
@@ -54,10 +98,24 @@ The module gets the same helpers and `console` as an inline script, so put the
 whole task in the file. Use forward slashes in the URL, and keep non-ASCII text
 such as Chinese in the file, never in `-e`.
 
+<!-- /mode -->
+
+<!-- mode: ego-run -->
+
+```powershell
+ego-run --session <id> --file C:/Users/<name>/ego/task.mjs
+```
+
+`--file` reads UTF-8; keep non-ASCII text in the file, never in `-e`.
+
+<!-- /mode -->
+
 Do not pipe the file with `Get-Content`: 5.1 corrupts non-ASCII text and
 truncates strings. PowerShell has no `<` redirection either.
 
 ### cmd
+
+<!-- mode: direct -->
 
 cmd has no heredoc but supports input redirection:
 
@@ -65,11 +123,36 @@ cmd has no heredoc but supports input redirection:
 ego-browser nodejs < C:\Users\<name>\ego\task.mjs
 ```
 
+<!-- /mode -->
+
+<!-- mode: ego-run -->
+
+cmd: the same file with `--file`:
+
+```bat
+ego-run --session <id> --file C:\Users\<name>\ego\task.mjs
+```
+
+<!-- /mode -->
+
 ### Later rounds with a script file
+
+<!-- mode: direct -->
 
 Each run is a new process, so write a new, complete file per round
 (`round-01.mjs`, `round-02.mjs`, ...); editing the previous one replays old
-steps. Keep one goal's files in a new directory named for the goal and time,
+steps.
+
+<!-- /mode -->
+
+<!-- mode: ego-run -->
+
+The session keeps earlier rounds' variables: each round's file
+(`round-01.mjs`, `round-02.mjs`, ...) holds only the next steps.
+
+<!-- /mode -->
+
+Keep one goal's files in a new directory named for the goal and time,
 such as `C:/Users/<name>/ego/laptop-prices-20260922-1405/`, and only run files
 written in this conversation. Create files with your file tool: PowerShell
 `Set-Content`, `Out-File`, and `>` write ANSI or UTF-16 on 5.1.
@@ -83,33 +166,34 @@ resend the command. Switch to the `.mjs` file form.
 
 <!-- /platform -->
 
-The script always runs in Node.js, not in the web Page. Browser helpers and
-Node.js APIs belong in the script; Page globals such as `window`, `document`,
-`location`, and DOM APIs do not. Put browser-side JavaScript inside
-`page.evaluate()`. Do not import Playwright or launch another browser.
+The script always runs in Node.js, not in the web Page: browser helpers and
+Node.js APIs belong in the script, while `window`, `document`, `location`, and
+DOM APIs belong inside `page.evaluate()`. Do not import Playwright or launch
+another browser.
 
-The Node.js runtime uses ESM. When a script needs local files, load built-ins
-with dynamic imports such as `await import("node:fs/promises")`. The script
-does not run in your shell's working directory, so use absolute paths for every
-file it reads or writes. It also does not inherit your shell's environment
-variables: `process.env` will not contain values you set before running
-`ego-browser`, so write every input directly into the script.
+The Node.js runtime uses ESM: load built-ins with dynamic imports such as
+`await import("node:fs/promises")`. The script does not run in your shell's
+working directory, so use absolute paths for every file, and it does not
+inherit your shell's environment variables (`process.env` lacks values set
+before running `ego-browser`), so write every input directly into the script.
 
 Ego-browser exposes a small custom API. It is not Playwright, even where names
-and options look similar. Use only the TaskSpace, Page, FileChooser, mouse, and
-keyboard APIs listed in this Skill. Do not infer methods such as `locator()`,
+look similar: use only the TaskSpace, Page, FileChooser, mouse, and keyboard
+APIs listed here, never inferred Playwright methods such as `locator()`,
 `getByRole()`, `context()`, `expect()`, or `route()`. When the listed API does
-not cover an operation, use `page.evaluate()` or `page.cdp()` instead of
-guessing another method.
+not cover an operation, use `page.evaluate()` or `page.cdp()`.
 
-Only these pointer actions accept an optional `label` option: `click()`,
+Only these pointer actions accept an optional `label` option, a concise 3-6
+word description shown next to the visible agent cursor: `click()`,
 `dblclick()`, `hover()`, `dragAndDrop()`, `mouse.click()`, `mouse.move()`, and
-`mouse.wheel()`. Pass a concise 3-6 word description to keep the action text
-next to the visible agent cursor in sync with the action. Other methods, such
-as `fill()`, `press()`, `focus()`, `selectOption()`, `waitForSelector()`,
-`keyboard.*()`, `mouse.down()`, and `mouse.up()`, reject a `label` option.
-The `label` in `selectOption(selector, { label })` is different: it selects the
-option whose visible text matches.
+`mouse.wheel()`. Other methods, such as `fill()`, `press()`, `focus()`,
+`selectOption()`, `waitForSelector()`, `keyboard.*()`, `mouse.down()`, and
+`mouse.up()`, reject it. The `label` in `selectOption(selector, { label })` is
+different: it selects the option whose visible text matches.
+
+`click()` and `dblclick()` accept `{ hover: false }` to skip the pointer move
+before the press (useful in a paging loop); keep the default for controls that
+appear or change on hover.
 
 When the user explicitly asks for ego-browser, start with a real browser command
 and diagnose the CLI or installation only if it fails.
@@ -122,10 +206,25 @@ and diagnose the CLI or installation only if it fails.
   ending a reply" below. Task space names are unique; prefer the numeric id
   once you have it.
 - Never use a new TaskSpace to recover from a stuck, blocked, timed-out, or
-  unexpected Page. Recover within the existing space; if it cannot continue,
-  stop and ask the user.
+unexpected Page. Recover within the existing space; if it cannot continue,
+stop and ask the user.
+<!-- mode: direct -->
+
 - Every invocation starts a new Node.js process. Task spaces, tabs, and Page labels
   persist; JavaScript variables do not.
+
+<!-- /mode -->
+
+<!-- mode: ego-run -->
+
+- A script that exceeds its deadline (`--timeout-ms`, default 60000, max 180000)
+  or blocks the event loop rebuilds the session context: `ego-run` prints
+  `[ego-run] session ... was rebuilt`, and the next script reacquires its
+  handles with `taskSpace(name)` and `task.page(label)`. Spaces, tabs, and
+  labels persist. Keep a whole loop (paging, polling) in one script.
+
+<!-- /mode -->
+
 - A new task space starts with Page `p1`; navigate it instead of opening
   another Page.
 - Reuse a Page with `goto()` instead of opening a new Page for every URL.
@@ -143,15 +242,16 @@ Supported TaskSpace API:
 - Control: `waitForControl(options)`, `handOff()`, `finish({ keep })`
 - Advanced: `cdp(method, params, options)`
 
-Pages receive permanent labels such as `p1`, `p2`, and `p3`. Prefer these labels
-to custom `{ as }` values. Reuse or close Pages as the task proceeds; the runtime
-reports the configured Page budget when it is reached.
+Pages receive permanent labels such as `p1`, `p2`, `p3`; prefer them to custom
+`{ as }` values. Reuse or close Pages as the task proceeds; the runtime reports
+the Page budget when it is reached.
 
-`task.page(label)` only refers to a Page that already exists; it never creates
-one, and its handle is always truthy, so `task.page("p2") || await task.newPage()`
-and `if (!page)` do not detect a missing label. Use labels printed by earlier
-output or by `await task.pages()`. When multiple Pages must stay open, call
-`await task.newPage()` for another blank Page and navigate it with `goto()`.
+`task.newPage()` creates another blank Page when several Pages must stay open; navigate it with `page.goto()`.
+
+`task.page(label)` only refers to an existing Page and its handle is always
+truthy, so `task.page("p2") || await task.newPage()` and `if (!page)` do not
+detect a missing label. Use labels printed earlier or by `await task.pages()`,
+and `await task.newPage()` to create one.
 
 `await task.pages()` returns managed Pages. `await task.tabs()` returns every tab in the
 space as `{ label?, page, targetId, title, url, active, openedBy }`. A tab
@@ -188,9 +288,9 @@ Page API:
 - Page code and protocols: `evaluate(fnOrString, argument)`,
   `fetch(url, options)`, `cdp(method, params, options)`, `events()`
 
-`page.evaluate()` callbacks run only inside the Page; they cannot read variables
-or Node.js modules from the surrounding script. Define browser-side helpers
-inside the callback or pass one JSON-serializable value as its second argument.
+`page.evaluate()` callbacks run only inside the Page and cannot read variables
+or Node.js modules from the script: define browser-side helpers inside the
+callback or pass one JSON-serializable value as its second argument.
 
 `goto()` and `reload()` stop a navigation that has not committed by their
 timeout, so the Page stays usable on its previous document; retry with a longer
@@ -206,9 +306,8 @@ Work efficiently:
 - Each time you observe, collect only the cheapest page state sufficient to
   choose the next action. Use a snapshot for semantic or locator ground truth
   and a screenshot for visual confirmation; do not request both by default.
-- If an action does not produce the expected result, inspect the current page
-  before deciding whether to retry. Do not blindly repeat it or immediately
-  fall back to coordinates or raw CDP.
+- If an action does not produce the expected result, inspect the page before
+  retrying; do not blindly repeat it or fall back to coordinates or raw CDP.
 - Once the page clearly shows the requested result, stop; do not confirm the
   same result through multiple surfaces.
 
@@ -218,23 +317,21 @@ Prefer snapshots and semantic selectors for ordinary DOM pages. Use screenshots
 and coordinates only when useful DOM semantics are unavailable.
 
 Before choosing an unfamiliar target, take a snapshot. When the current state
-is sufficient to plan several actions on the same Page, complete them in one
-script invocation, then observe the result once. Observe between actions only when an
+suffices to plan several actions on the same Page, complete them in one script
+invocation, then observe once. Observe between actions only when an
 intermediate result changes what should happen next. Keep the action sequence,
 the wait for its final expected state, and the next snapshot in the same
 script invocation. Print the snapshot last so the next round can act on it directly.
-The final snapshot is the next round's starting view of the changed page;
-without it, that round usually has to spend a separate browser call observing
-before it can choose the next target, which wastes compute.
+The final snapshot is the next round's starting view; without it, that round
+spends a separate browser call observing before it can act.
 
 Wait for the expected result: use `waitForURL()` for navigation,
 `waitForSelector()` for element state, or `waitForFunction()` for application
 state. Avoid fixed delays when an observable condition exists. Actions stop
 waiting for a missing target once the page is idle, so `waitForSelector()`
 first when an element is expected later. A snapshot captures the current
-moment; it does not wait for the page to become stable.
-`page.snapshot()` captures the current viewport. For content outside it, use
-`page.snapshot({ scope: "full_page" })`. When the document scrolls past the
+moment; it does not wait for the page to become stable, and it covers only the
+viewport. For content outside it, use `page.snapshot({ scope: "full_page" })`. When the document scrolls past the
 viewport, the snapshot ends with a `[more content below the viewport: ...]`
 line: nodes are omitted, not absent. If the expected result may land below
 the fold, scroll or use `full_page` before concluding it did not appear.
@@ -247,9 +344,9 @@ line:
 console.log(await page.snapshot({ scope: "subtree", root: "@12" }));
 ```
 
-Use the refs returned by the subtree for actions inside the iframe. A subtree
-snapshot does not scope later locator actions; they still prefer actionable
-matches in the top document before searching frames.
+Use the subtree's refs for actions inside the iframe. A subtree snapshot does
+not scope later locator actions, which still prefer the top document before
+searching frames.
 
 `waitForLoadState()` defaults to `load`. `waitForFunction()` takes Playwright's
 args (`undefined` before options if no arg) but returns `true`, not the
@@ -559,6 +656,12 @@ script must wait in place.
 Claim any other user-owned or inactive space only when the user explicitly
 asks; the space you finished for the current goal is claimed as in "Starting
 and ending a reply".
+
+<!-- mode: ego-run -->
+
+Last round: `ego-run --session <id> -e 'await task.finish({ keep: [] })'`.
+
+<!-- /mode -->
 
 User-created and unknown-origin tabs are protected; if any remain, `keep: []`
 does not close the whole space, and the script output says so. Tabs you kept in
