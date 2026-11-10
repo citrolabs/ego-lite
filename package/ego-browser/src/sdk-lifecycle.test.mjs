@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -110,4 +110,68 @@ test("the embedded SDK explains that browser globals belong inside Page.evaluate
   );
 
   assert.equal(result.status, 0, result.stderr);
+});
+
+test("the embedded SDK removes owned download files when the process exits without disposeEgoSdk", () => {
+  const sdkUrl = new URL("../dist/src/index.js", import.meta.url).href;
+  const downloadsUrl = new URL(
+    "../dist/src/driver/downloads.js",
+    import.meta.url,
+  ).href;
+  const stateDir = mkdtempSync(join(tmpdir(), "ego-sdk-download-state-"));
+  const outputDir = mkdtempSync(join(tmpdir(), "ego-sdk-download-output-"));
+  const outputPath = join(outputDir, "saved.txt");
+  // The host runs the heredoc in a short-lived process and never calls
+  // disposeEgoSdk(); the script simply finishes after saveAs().
+  const script = `
+    const { writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    globalThis.ego = { sendCDPMessage() {} };
+    await import(${JSON.stringify(sdkUrl)});
+    const downloads = await import(${JSON.stringify(downloadsUrl)});
+    let listener;
+    const interception = downloads.preparePageDownload({
+      async cdp() { return {}; },
+      subscribePageEvents(_targetId, next) {
+        listener = next;
+        return () => {};
+      },
+    }, "target-exit", { timeoutMs: 1_000 });
+    await interception.ready("session-exit");
+    listener({
+      method: "Page.downloadWillBegin",
+      params: { guid: "guid-exit", url: "http://127.0.0.1/a.txt", suggestedFilename: "a.txt" },
+    });
+    const download = await interception.event;
+    writeFileSync(join(downloads.downloadDirectory(), "guid-exit"), "contents");
+    listener({
+      method: "Page.downloadProgress",
+      params: { guid: "guid-exit", state: "completed" },
+    });
+    await download.saveAs(${JSON.stringify(outputPath)});
+    process.stderr.write(await download.path());
+  `;
+  try {
+    const result = spawnSync(
+      process.execPath,
+      ["--input-type=module", "--eval", script],
+      {
+        encoding: "utf8",
+        env: { ...process.env, EGO_BROWSER_STATE_DIR: stateDir },
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const temporaryPath = result.stderr.trim();
+    assert.equal(temporaryPath, join(stateDir, "downloads", "guid-exit"));
+    assert.equal(
+      existsSync(temporaryPath),
+      false,
+      "the round-local download copy must not outlive the process",
+    );
+    assert.equal(readFileSync(outputPath, "utf8"), "contents");
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+    rmSync(outputDir, { recursive: true, force: true });
+  }
 });
