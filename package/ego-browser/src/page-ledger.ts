@@ -87,7 +87,10 @@ type LedgerFile = { seq: number; path: string };
 
 /** Stable across Agent rounds and Node-service restarts in one Ego Lite run. */
 export function runtimeInstanceId(parentPid = process.ppid): string {
-  return `browser-host:${parentPid}`;
+  const linuxId = (globalThis.ego as Record<string, unknown>)?.linuxInstanceId;
+  return typeof linuxId === "string"
+    ? `linux-host:${linuxId}`
+    : `browser-host:${parentPid}`;
 }
 
 type AddPageOptions = {

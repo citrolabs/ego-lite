@@ -9,6 +9,7 @@
 <p>
   <a href="https://cdn.ego.app/setup/macos/arm64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/Download-Apple%20Silicon-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Apple Silicon" /></a>
   <a href="https://cdn.ego.app/setup/macos/x64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/Download-Intel-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Intel" /></a>
+  <a href="https://cdn.ego.app/setup/windows/x64/egoliteSetup-Y7MbxKIuhzFB.exe"><img src="https://img.shields.io/badge/Download-Windows-000000?style=for-the-badge&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTAgMGgxMS4zNzd2MTEuMzcySDB6bTEyLjYyMyAwSDI0djExLjM3MkgxMi42MjN6TTAgMTIuNjIzaDExLjM3N1YyNEgwem0xMi42MjMgMEgyNFYyNEgxMi42MjN6Ii8%2BPC9zdmc%2B" alt="Download for Windows" /></a>
   <a href="https://discord.gg/5eGZVvHbTq"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" /></a>
   <a href="https://x.com/ego_agent"><img src="https://img.shields.io/badge/Follow-%40ego__agent-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow @ego_agent on X" /></a>
   <a href="https://lite.ego.app/document/"><img src="https://img.shields.io/badge/Docs-lite.ego.app-1E90FF?style=for-the-badge&logo=gitbook&logoColor=white" alt="Docs" /></a>
@@ -39,16 +40,17 @@ https://github.com/user-attachments/assets/ffe7954b-58ee-411e-b35d-ec30c58a08bc
 
 ## 빠른 시작
 
-ego lite는 현재 macOS를 지원합니다. Windows 버전은 곧 비공개 베타로 공개될 예정이고, Linux는 [로드맵](https://lite.ego.app/roadmap)에 있습니다.
+ego lite는 현재 macOS와 Windows를 지원하며, Linux는 [로드맵](https://lite.ego.app/roadmap)에 있습니다.
 
 ### 1. 설치
 
 자신의 작업 흐름에 맞는 방법을 고르세요.
 
-**1.1 macOS 앱 다운로드**
+**1.1 앱 다운로드**
 
 <a href="https://cdn.ego.app/setup/macos/arm64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/⬇%20Apple%20Silicon-.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download ego lite for Apple Silicon" /></a>
 <a href="https://cdn.ego.app/setup/macos/x64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/⬇%20Intel-.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download ego lite for Intel" /></a>
+<a href="https://cdn.ego.app/setup/windows/x64/egoliteSetup-Y7MbxKIuhzFB.exe"><img src="https://img.shields.io/badge/⬇%20Windows-.exe-000000?style=for-the-badge&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTAgMGgxMS4zNzd2MTEuMzcySDB6bTEyLjYyMyAwSDI0djExLjM3MkgxMi42MjN6TTAgMTIuNjIzaDExLjM3N1YyNEgwem0xMi42MjMgMEgyNFYyNEgxMi42MjN6Ii8%2BPC9zdmc%2B" alt="Download ego lite for Windows" /></a>
 
 클릭해 다운로드한 뒤 열어서 설치하세요. 어느 경로로 설치하든 ego lite는 컴퓨터에 있는 모든 에이전트의 Skill 디렉터리에 `ego-browser` Skill을 추가합니다.
 
@@ -101,31 +103,31 @@ ego-browser로 x.com에서 @ego_agent를 팔로우해 주세요
 
 대부분의 도구는 브라우저를 자동화할 수 있습니다. 진짜 중요한 건 세 가지입니다. 에이전트가 어떤 브라우저를 쓰는지, 그와 동시에 사용자도 계속 작업할 수 있는지, 그리고 그 도구가 이미 쓰고 있는 에이전트를 위한 것인지 자체 내장 에이전트를 위한 것인지.
 
-| 기능 | ego lite | Browser-Use | agent-browser (Vercel) | ChatGPT Atlas | Perplexity Comet |
-|---|:---:|:---:|:---:|:---:|:---:|
-| 병렬 멀티태스킹 | ✓ | — | — | — | — |
-| 재사용 가능한 Skill | ✓ | — | — | — | — |
-| Chrome 데이터를 그대로 사용 | ✓ | — | — | ✓ | ✓ |
-| 같은 브라우저, 분리된 작업 공간 | ✓ | — | — | — | — |
-| 압축된 시맨틱 입력 | ✓ | — | ✓ | — | — |
-| 외부 에이전트가 직접 제어 가능 | ✓ | ✓ | ✓ | — | — |
-| 데이터 로컬 저장 | ✓ | ✓ | ✓ | — | — |
-| 로그인 마찰 없음 | ✓ | — | — | ✓ | ✓ |
-| 매일 쓰는 브라우저 | ✓ | — | — | ✓ | ✓ |
-| 무료 | ✓ | ✓ | ✓ | — | — |
-
-같은 문제를 푸는 다른 두 갈래도 있습니다. Browser-Use와 Vercel의 agent-browser 같은 브라우저 자동화 프레임워크는 에이전트가 호출하는 라이브러리로, 자체 브라우저를 제공하지 않습니다. 그래서 구동할 별도 브라우저가 필요하고 로그인 정보도 제대로 넘어가지 않습니다. ChatGPT Atlas, Perplexity Comet 같은 AI 브라우저는 자체 에이전트를 내장하고 있고, 그 에이전트만이 브라우저를 구동할 수 있습니다. ego lite는 사용자와, 사용자가 골라 붙인 어떤 에이전트든 함께 쓰도록 처음부터 설계된 하나의 브라우저입니다.
-
+| 기능 | ego lite | 브라우저 확장 프로그램<br><sub>Claude/Codex in Chrome</sub> | 내장 브라우저<br><sub>Claude/ChatGPT 내장 브라우저</sub> | 클라우드 브라우저<br><sub>Browserbase/Browser Use</sub> | 브라우저 CLI<br><sub>playwright-cli/Browser Harness</sub> | AI 브라우저<br><sub>Comet/Dia</sub> |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| 모든 AI 에이전트와 호환 | ✓ | — | — | ✓ | ✓ | — |
+| 브라우저 로그인 상태 그대로 사용 | ✓ | ✓ | — | — | — | ✓ |
+| CAPTCHA 발생 감소 | ✓ | ✓ | — | — | — | ✓ |
+| 컴퓨터 전체에서 작업 | ✓ | — | ✓ | — | ✓ | — |
+| 브라우저를 가로채지 않음 | ✓ | — | ✓ | ✓ | — | — |
+| 병렬 멀티태스킹 | ✓ | — | — | ✓ | — | — |
+| 대규모 스크래핑 실행 | ✓ | — | — | ✓ | ✓ | — |
+| 일상 브라우저로 사용 가능 | ✓ | ✓ | — | — | — | ✓ |
+| 무료 | ✓ | — | — | — | ✓ | — |
+| 데이터는 로컬에만 저장 | ✓ | ✓ | ✓ | — | ✓ | — |
+| 재사용 가능한 스킬 (출시 예정) | ✓ | — | — | — | — | — |
 
 ## 벤치마크
 
-복잡한 브라우저 자동화 작업 네 가지에서 ego lite를 Vercel의 agent-browser와 벤치마크로 비교했습니다. ego lite는 각 작업을 최대 2.5배 더 빠르게 끝냈고, 토큰은 훨씬 적게 썼습니다. 작업이 어려울수록 격차는 더 벌어졌습니다. 비교 결과를 확인해 보세요.
+더 빠른 실행, 더 높은 성공률, 더 적은 토큰. ego-browser와 AI 에이전트용 브라우저 도구 네 가지를 Real-World Bench에서 비교했습니다. 실제로 운영 중인 웹사이트에서 수행하는 복잡한 브라우저 자동화 작업 31개입니다. ego-browser는 속도, 성공률, 비용 면에서 모두 앞섰고, 에이전트가 복잡한 웹 작업을 다른 도구보다 47~63% 더 빠르게 마치게 해 줍니다.
 
 <div align="center">
 
-<img src="docs/assets/ego-vs-agent-benchmark.png" alt="ego lite vs agent-browser, speed and cost across four tasks" width="100%" />
+<img src="docs/assets/real-world-bench.jpg" alt="Real-World Bench, 31 tasks: ego-browser vs Browser Harness, playwright-cli, chrome-devtools-cli and agent-browser on turns, rubric average, perfect rate, trajectory efficiency, average duration and average cost" width="100%" />
 
 </div>
+
+모든 도구는 같은 31개 작업을 같은 에이전트(pi)와 같은 모델(gpt-5.6-sol, thinking effort max)로 실행했고, 같은 심사 모델이 작업별 채점 기준(루브릭)에 따라 채점했습니다. 모든 요구 사항을 충족한 작업만 완전 성공으로 인정합니다.
 
 ## 문서
 
