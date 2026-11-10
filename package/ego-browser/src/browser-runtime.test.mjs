@@ -2237,6 +2237,288 @@ test("file chooser interception suppresses the native picker and returns its inp
   }
 });
 
+function oopifUploadRuntime({
+  holdFrameIntercept = false,
+  failFrameTree = false,
+  failPageIntercept = false,
+} = {}) {
+  let failHeldPageIntercept;
+  const runtime = {
+    calls: [],
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      runtime.calls.push(request);
+      if (
+        failPageIntercept &&
+        request.method === "Page.setInterceptFileChooserDialog" &&
+        request.params.enabled
+      ) {
+        // The Page fails only once a frame is armed, which is what leaks.
+        if (request.sessionId === "session:page-main") {
+          failHeldPageIntercept = () => {
+            runtime.onCDPMessage(
+              JSON.stringify({
+                id: request.id,
+                error: { message: "intercept unavailable" },
+              }),
+            );
+          };
+          return;
+        }
+        queueMicrotask(failHeldPageIntercept);
+      }
+      if (
+        holdFrameIntercept &&
+        request.method === "Page.setInterceptFileChooserDialog" &&
+        request.sessionId === "session:frame-child"
+      ) {
+        return;
+      }
+      let result = {};
+      if (request.method === "Target.getTargets") {
+        result = {
+          targetInfos: [
+            { targetId: "page-main", type: "page" },
+            {
+              targetId: "frame-child",
+              type: "iframe",
+              parentFrameId: "page-main",
+            },
+          ],
+        };
+      } else if (request.method === "Page.getFrameTree") {
+        if (failFrameTree) {
+          queueMicrotask(() => {
+            runtime.onCDPMessage(
+              JSON.stringify({
+                id: request.id,
+                error: { message: "frame tree unavailable" },
+              }),
+            );
+          });
+          return;
+        }
+        result = {
+          frameTree: {
+            frame: { id: "page-main" },
+            childFrames: [{ frame: { id: "frame-child" } }],
+          },
+        };
+      } else if (request.method === "Target.attachToTarget") {
+        result = { sessionId: `session:${request.params.targetId}` };
+      }
+      queueMicrotask(() => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      });
+    },
+    emit(event) {
+      runtime.onCDPMessage(JSON.stringify(event));
+    },
+    interceptSessions(enabled) {
+      return runtime.calls
+        .filter(
+          (call) =>
+            call.method === "Page.setInterceptFileChooserDialog" &&
+            call.params.enabled === enabled,
+        )
+        .map((call) => call.sessionId);
+    },
+  };
+  return runtime;
+}
+
+async function withOopifUploadRuntime(options, body) {
+  const previous = globalThis.ego;
+  const runtime = oopifUploadRuntime(options);
+  globalThis.ego = runtime;
+  try {
+    await body(runtime, await ensureSession("page-main"));
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+}
+
+test("a Page file chooser waiter observes a chooser opened in an existing OOPIF", async () => {
+  await withOopifUploadRuntime({}, async (runtime, mainSession) => {
+    const interception = prepareFileChooser(mainSession, {
+      timeoutMs: 1_000,
+      cancel: false,
+    });
+    await interception.ready;
+    assert.deepEqual(runtime.interceptSessions(true), [
+      "session:page-main",
+      "session:frame-child",
+    ]);
+
+    runtime.emit({
+      sessionId: "session:frame-child",
+      method: "Page.fileChooserOpened",
+      params: {
+        backendNodeId: 42,
+        frameId: "frame-child",
+        mode: "selectSingle",
+      },
+    });
+    const opened = await interception.event;
+    assert.equal(opened.backendNodeId, 42);
+    assert.equal(opened.targetId, "frame-child");
+
+    await interception.dispose();
+    assert.deepEqual(runtime.interceptSessions(false), [
+      "session:page-main",
+      "session:frame-child",
+    ]);
+  });
+});
+
+test("the file chooser safety guard cancels an OOPIF chooser on its own session", async () => {
+  await withOopifUploadRuntime({}, async (runtime, mainSession) => {
+    const interception = prepareFileChooser(mainSession, {
+      timeoutMs: 1_000,
+      cancel: true,
+    });
+    await interception.ready;
+
+    runtime.emit({
+      sessionId: "session:frame-child",
+      method: "Page.fileChooserOpened",
+      params: { backendNodeId: 43, frameId: "frame-child" },
+    });
+    assert.equal(interception.peek().backendNodeId, 43);
+    await interception.dispose();
+
+    const cancel = runtime.calls.find(
+      (call) => call.method === "DOM.setFileInputFiles",
+    );
+    assert.equal(cancel.sessionId, "session:frame-child");
+    assert.deepEqual(cancel.params, { files: [], backendNodeId: 43 });
+  });
+});
+
+test("an OOPIF attached during a file chooser wait is intercepted before it resumes", async () => {
+  await withOopifUploadRuntime({}, async (runtime, mainSession) => {
+    const interception = prepareFileChooser(mainSession, {
+      timeoutMs: 1_000,
+      cancel: false,
+    });
+    await interception.ready;
+    runtime.calls.length = 0;
+
+    // Nested under another OOPIF, so routing must walk up to the Page.
+    runtime.emit({
+      sessionId: "session:frame-child",
+      method: "Target.attachedToTarget",
+      params: {
+        sessionId: "session:frame-late",
+        targetInfo: { targetId: "frame-late", type: "iframe" },
+        waitingForDebugger: true,
+      },
+    });
+    const lateMethods = runtime.calls
+      .filter((call) => call.sessionId === "session:frame-late")
+      .map((call) => call.method);
+    const interceptIndex = lateMethods.indexOf(
+      "Page.setInterceptFileChooserDialog",
+    );
+    assert(interceptIndex >= 0, "the late OOPIF enables interception");
+    assert(
+      lateMethods.indexOf("Page.enable") < interceptIndex,
+      "the Page domain that reports the chooser is enabled first",
+    );
+    assert(
+      interceptIndex < lateMethods.indexOf("Runtime.runIfWaitingForDebugger"),
+      "the frame cannot run script before interception is requested",
+    );
+
+    runtime.emit({
+      sessionId: "session:frame-late",
+      method: "Page.fileChooserOpened",
+      params: { backendNodeId: 44, frameId: "frame-late" },
+    });
+    const opened = await interception.event;
+    assert.equal(opened.targetId, "frame-late");
+    await interception.dispose();
+    assert(runtime.interceptSessions(false).includes("session:frame-late"));
+  });
+});
+
+test("a timed out file chooser wait releases interception on every frame session", async () => {
+  await withOopifUploadRuntime({}, async (runtime, mainSession) => {
+    const interception = prepareFileChooser(mainSession, {
+      timeoutMs: 5,
+      cancel: false,
+    });
+    await interception.ready;
+    await assert.rejects(
+      () => interception.event,
+      (error) => error.code === "EGO_FILE_CHOOSER_TIMEOUT",
+    );
+    assert.deepEqual(runtime.interceptSessions(false), [
+      "session:page-main",
+      "session:frame-child",
+    ]);
+  });
+});
+
+test("a failed file chooser setup releases interception on every frame session", async () => {
+  await withOopifUploadRuntime(
+    { failPageIntercept: true },
+    async (runtime, mainSession) => {
+      const interception = prepareFileChooser(mainSession, {
+        timeoutMs: 1_000,
+        cancel: false,
+      });
+      await assert.rejects(() => interception.ready, /intercept unavailable/);
+      await assert.rejects(() => interception.event, /intercept unavailable/);
+      assert.deepEqual(runtime.interceptSessions(true), [
+        "session:page-main",
+        "session:frame-child",
+      ]);
+      // Sent before the rejection is observed, so a retry's enable follows it.
+      assert.deepEqual(runtime.interceptSessions(false), [
+        "session:page-main",
+        "session:frame-child",
+      ]);
+
+      // The wait is over, so a later disposal must not release anything again.
+      runtime.calls.length = 0;
+      await interception.dispose();
+      assert.deepEqual(runtime.interceptSessions(false), []);
+    },
+  );
+});
+
+test("file chooser interception does not depend on OOPIF setup succeeding", async () => {
+  await withOopifUploadRuntime(
+    { failFrameTree: true },
+    async (runtime, mainSession) => {
+      const interception = prepareFileChooser(mainSession, {
+        timeoutMs: 1_000,
+        cancel: false,
+      });
+      await interception.ready;
+      assert.deepEqual(runtime.interceptSessions(true), ["session:page-main"]);
+      await interception.dispose();
+    },
+  );
+  await withOopifUploadRuntime(
+    { holdFrameIntercept: true },
+    async (runtime, mainSession) => {
+      // An unresponsive third-party frame must not stall every Page action,
+      // since the click guard waits for interception to be ready.
+      const interception = prepareFileChooser(mainSession, {
+        timeoutMs: 1_000,
+        cancel: false,
+      });
+      await interception.ready;
+      assert(runtime.interceptSessions(true).includes("session:frame-child"));
+      await interception.dispose();
+    },
+  );
+});
+
 function pageEnableHoldingRuntime(methods) {
   const held = new Map();
   const runtime = {
