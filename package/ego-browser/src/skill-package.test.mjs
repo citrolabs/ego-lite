@@ -117,7 +117,9 @@ test("each platform guide keeps only its own passages", async () => {
     /^### Later rounds with a script file$[\s\S]*?(?=^### )/m.exec(
       guides.windows,
     )?.[0] ?? "";
-  assert.match(rounds, /^ego-browser nodejs < \S*round-01\.mjs$/m);
+  // Quote the path: Bash parses an unquoted `<name>` placeholder as another
+  // redirection, so the copied command would fail.
+  assert.match(rounds, /^ego-browser nodejs < "[^"]*round-01\.mjs"$/m);
   assert.match(rounds, /await import\('file:\/\/\/\S*round-01\.mjs'\)/);
   assert.match(rounds, /`ego-browser nodejs \S*round-01\.mjs`/);
   assert.match(guides.macos, /^ego-browser nodejs <<'EOF'$/m);

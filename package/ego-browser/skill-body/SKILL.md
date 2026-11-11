@@ -74,10 +74,10 @@ such as `C:/Users/<name>/ego/laptop-prices-20260922-1405/`, and only run files
 written in this conversation. Create files with your file tool: PowerShell
 `Set-Content`, `Out-File`, and `>` write ANSI or UTF-16 on 5.1.
 
-Run the file with `<` redirection in Bash, Git Bash, and cmd:
+Run the file with `<` redirection in Bash, Git Bash, and cmd, quoting the path:
 
 ```bash
-ego-browser nodejs < C:/Users/<name>/ego/laptop-prices-20260922-1405/round-01.mjs
+ego-browser nodejs < "C:/Users/<name>/ego/laptop-prices-20260922-1405/round-01.mjs"
 ```
 
 In PowerShell, use
