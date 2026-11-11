@@ -111,10 +111,19 @@ test("each platform guide keeps only its own passages", async () => {
   assert.match(guides.windows, /^### PowerShell$/m);
   assert.match(guides.windows, /^### cmd$/m);
   assert.match(guides.windows, /forward slashes/);
+  // Every shell needs a copyable way to run the per-round script file; a
+  // positional path is evaluated as code, not read as a file.
+  const rounds =
+    /^### Later rounds with a script file$[\s\S]*?(?=^### )/m.exec(
+      guides.windows,
+    )?.[0] ?? "";
+  assert.match(rounds, /^ego-browser nodejs < \S*round-01\.mjs$/m);
+  assert.match(rounds, /await import\('file:\/\/\/\S*round-01\.mjs'\)/);
+  assert.match(rounds, /`ego-browser nodejs \S*round-01\.mjs`/);
   assert.match(guides.macos, /^ego-browser nodejs <<'EOF'$/m);
   assert.doesNotMatch(
     guides.macos,
-    /PowerShell|### cmd|Get-Content|forward slashes/,
+    /PowerShell|### cmd|Get-Content|forward slashes|Later rounds/,
   );
   assert.ok(guides.macos.length < guides.windows.length);
 });

@@ -74,6 +74,17 @@ such as `C:/Users/<name>/ego/laptop-prices-20260922-1405/`, and only run files
 written in this conversation. Create files with your file tool: PowerShell
 `Set-Content`, `Out-File`, and `>` write ANSI or UTF-16 on 5.1.
 
+Run the file with `<` redirection in Bash, Git Bash, and cmd:
+
+```bash
+ego-browser nodejs < C:/Users/<name>/ego/laptop-prices-20260922-1405/round-01.mjs
+```
+
+In PowerShell, use
+`ego-browser nodejs -e "await import('file:///C:/Users/<name>/ego/laptop-prices-20260922-1405/round-01.mjs')"`.
+Never pass the path as an argument: `ego-browser nodejs round-01.mjs` runs the
+text `round-01.mjs` as code and fails.
+
 ### When the script fails to parse
 
 `SyntaxError: await is only valid in async functions and the top level bodies of
