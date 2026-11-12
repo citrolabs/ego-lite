@@ -25,6 +25,11 @@ import {
 export type SnapshotOptions = {
   scope?: "only_within_viewport" | "full_page" | "subtree";
   root?: number;
+  /**
+   * Frame that owns `root`. Backend node ids are only unique per renderer, so
+   * without it native snapshot prefers a main-document node with the same id.
+   */
+  frameId?: string;
   includeActionMarks?: boolean;
   includeStableLocator?: boolean;
 };
