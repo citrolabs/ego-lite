@@ -71,13 +71,14 @@ export const snapshotRaw = snapshot;
 
 /**
  * Return snapshot content with agent-friendly defaults.
- * @param {{scope?: "only_within_viewport"|"full_page"|"subtree", root?: number, includeActionMarks?: boolean, includeStableLocator?: boolean}} [options]
+ * @param {{scope?: "only_within_viewport"|"full_page"|"subtree", root?: number, frameId?: string, includeActionMarks?: boolean, includeStableLocator?: boolean}} [options]
  * @returns {Promise<string>}
  */
 export async function snapshotText(options: SnapshotOptions = {}) {
   const result = await snapshot({
     scope: options.scope ?? "full_page",
     ...(options.root === undefined ? {} : { root: options.root }),
+    ...(options.frameId === undefined ? {} : { frameId: options.frameId }),
     includeActionMarks: options.includeActionMarks ?? true,
     includeStableLocator: options.includeStableLocator ?? true,
   });
