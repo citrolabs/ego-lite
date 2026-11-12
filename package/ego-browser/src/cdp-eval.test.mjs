@@ -86,6 +86,29 @@ test("cdp rejects a sessionId on Target commands that do not define it", async (
   });
 });
 
+test("cdp keeps Page.screencastFrameAck, whose sessionId is the frame number", async () => {
+  await withRecordedCdp(async (calls) => {
+    await cdp("Page.screencastFrameAck", { sessionId: 7 });
+    assert.deepEqual(calls, [
+      {
+        method: "Page.screencastFrameAck",
+        params: { sessionId: 7 },
+        sessionId: undefined,
+      },
+    ]);
+
+    await assert.rejects(
+      () => cdp("Page.stopScreencast", { sessionId: 7 }),
+      /Page\.stopScreencast does not take sessionId/,
+    );
+    assert.equal(
+      calls.length,
+      1,
+      "no other Page command defines sessionId in its params",
+    );
+  });
+});
+
 test("hasReturnStatement ignores returns inside nested functions", () => {
   for (const expression of [
     "[1, 2].map(x => { return x * 2; })",
