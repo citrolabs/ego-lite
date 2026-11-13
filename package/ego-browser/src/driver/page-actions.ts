@@ -231,7 +231,7 @@ type FillOutcome =
   | "exact"
   | "equivalent"
   | "transformed"
-  | "appended"
+  | "inserted"
   | "unchanged";
 
 /** Click an element through one explicit target session and Page ref map. */
@@ -544,9 +544,11 @@ export async function fillInPage(
       result?.kind === "input" ||
       result?.kind === "textarea"
     ) {
-      // Some controls append because their editing state is not installed
-      // until a real pointer activation. Retry only an unchanged or appended
-      // result so application formatting is never typed twice.
+      // Some controls insert next to the old content (appending, or
+      // prepending at offset 0 like code editors) because their editing
+      // state is not installed until a real pointer activation. Retry only an
+      // unchanged or inserted result so application formatting is never
+      // typed twice.
       await clickResolvedElement(
         services,
         resolved.sessionId,
@@ -892,13 +894,38 @@ function classifyFillOutcome(
       beforeDigits.length > 0 &&
       actualDigits === beforeDigits + integerExpected
     ) {
-      return "appended";
+      return "inserted";
     }
   }
-  if (clearFirst && actual === before + expected && before.length > 0) {
-    return "appended";
+  if (clearFirst && insertedIntoBefore(before, expected, actual)) {
+    return "inserted";
   }
   return actual === before ? "unchanged" : "transformed";
+}
+
+/**
+ * Whether `actual` is `before` with `expected` inserted at some offset. An
+ * editor that ignores the DOM selection until a pointer activation inserts
+ * at its own caret (start, end or anywhere), keeping the old content.
+ */
+function insertedIntoBefore(
+  before: string,
+  expected: string,
+  actual: string,
+): boolean {
+  if (before.length === 0 || expected.length === 0) return false;
+  if (actual.length !== before.length + expected.length) return false;
+  let offset = actual.indexOf(expected);
+  while (offset !== -1 && offset <= before.length) {
+    if (
+      actual.slice(0, offset) === before.slice(0, offset) &&
+      actual.slice(offset + expected.length) === before.slice(offset)
+    ) {
+      return true;
+    }
+    offset = actual.indexOf(expected, offset + 1);
+  }
+  return false;
 }
 
 async function clickResolvedElement(
