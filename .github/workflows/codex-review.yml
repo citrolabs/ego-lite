@@ -85,6 +85,40 @@ jobs:
           git tag -f codex-review-base "$BASE_SHA" >/dev/null
           git tag -f codex-review-head "$HEAD_SHA" >/dev/null
 
+      - name: Stage Codex model catalog
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MODEL: ${{ vars.CODEX_REVIEW_MODEL || 'gpt-5.6-sol' }}
+        run: |
+          set -euo pipefail
+
+          # Codex's built-in catalog marks gpt-5.6-sol (and the other 5.6/6.x
+          # models) as `tool_mode: code_mode_only` + `use_responses_lite`. The
+          # shell then reaches the model only as a JavaScript `exec` cell inside
+          # a non-standard `additional_tools` input item. Our gateway passes
+          # that through unreliably: about one review in twelve the model
+          # either sees no shell tool at all or calls it with malformed
+          # arguments (`missing field cell_id`), gives up, and posts "no shell
+          # or file-reading tool is available" as the review.
+          # The catalog below is the built-in entry with `tool_mode: null`,
+          # `use_responses_lite: false`, `prefer_websockets: false` and
+          # `multi_agent_version: null`, which makes Codex send a plain
+          # `tools` array with `exec_command` / `write_stdin` function tools.
+          # Feature flags (`features.code_mode*`) cannot override the catalog.
+          # Take the file from the base commit when it exists there, for the
+          # same reason AGENTS.md is restored above.
+          CATALOG=.github/codex-review/model-catalog.json
+          if git cat-file -e "$BASE_SHA:$CATALOG" 2>/dev/null; then
+            git show "$BASE_SHA:$CATALOG" > "$RUNNER_TEMP/model-catalog.json"
+          else
+            cp "$CATALOG" "$RUNNER_TEMP/model-catalog.json"
+          fi
+
+          if ! jq -e --arg m "$MODEL" '.models[] | select(.slug == $m)' \
+              "$RUNNER_TEMP/model-catalog.json" >/dev/null; then
+            echo "::warning::$CATALOG has no entry for model '$MODEL'; Codex falls back to its built-in catalog (code mode)."
+          fi
+
       - name: Build review prompt
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
@@ -162,6 +196,15 @@ jobs:
           output-file: ${{ runner.temp }}/review.md
           # The review never needs to write files.
           permission-profile: ':read-only'
+          # Pin the CLI: the catalog schema and the tool wire format change
+          # between releases, and an unpinned `@latest` is how the code-mode
+          # tools arrived in the first place. Bump together with the catalog.
+          codex-version: '0.166.0'
+          # Direct function tools via the staged catalog (see the step above).
+          # The hosted web_search tool is also dropped: the review never needs
+          # it and it is one more non-function tool type for the gateway to
+          # mishandle.
+          codex-args: '["-c", "model_catalog_json=\"${{ runner.temp }}/model-catalog.json\"", "-c", "web_search=\"disabled\""]'
 
       - name: Post review comment
         env:

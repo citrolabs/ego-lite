@@ -371,7 +371,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     name: "Page.waitForFunction",
     signature:
       "await page.waitForFunction(fnOrString, argument?, { timeout?, polling? })",
-    summary: "Wait until a Page function or expression returns a truthy value.",
+    summary:
+      "Wait until a Page function or expression returns a truthy value; resolves to true, not that value, and throws on timeout. Read Page state afterwards with page.evaluate().",
     options: {
       timeout,
       polling: option(

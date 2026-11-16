@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { setOverrides } from "../../dist/src/state.js";
+import { CLICK_POINT_HELPERS } from "../../dist/src/driver/action-target.js";
 import { click, scroll } from "../../dist/src/driver/pointer.js";
 
 test("click resolves selector offsets without the public elementEval helper", async () => {
@@ -165,6 +166,283 @@ test("scroll propagates user-control errors from wheel dispatch", async () => {
   }
 });
 
+/**
+ * A one-element page that runs the real page-side expressions. `rect` is where
+ * the element starts; `scrollable: false` models content that cannot move, such
+ * as a fixed element, and otherwise scrollIntoView centers it in the viewport.
+ */
+function fakePage({ rect, scrollable = true }) {
+  const view = { innerWidth: 800, innerHeight: 600 };
+  const current = { ...rect };
+  const scrolls = [];
+  const domRect = () => ({
+    x: current.left,
+    y: current.top,
+    left: current.left,
+    top: current.top,
+    width: current.width,
+    height: current.height,
+    right: current.left + current.width,
+    bottom: current.top + current.height,
+  });
+  const element = {
+    ownerDocument: { defaultView: view },
+    getBoundingClientRect: domRect,
+    getClientRects: () => [domRect()],
+    scrollIntoView(options) {
+      scrolls.push(options);
+      if (!scrollable) return;
+      current.top = (view.innerHeight - current.height) / 2;
+      current.left = (view.innerWidth - current.width) / 2;
+    },
+  };
+  const document = {
+    querySelectorAll: (selector) => (selector === "*" ? [] : [element]),
+    elementFromPoint: () => element,
+    addEventListener() {},
+    removeEventListener() {},
+  };
+  const run = (source, ...args) =>
+    new Function(
+      "document",
+      "window",
+      "innerWidth",
+      "innerHeight",
+      "setTimeout",
+      "clearTimeout",
+      "__args",
+      `return (${source});`,
+    )(
+      document,
+      view,
+      view.innerWidth,
+      view.innerHeight,
+      () => 0,
+      () => {},
+      args,
+    );
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      calls.push({ method, params });
+      if (method === "Runtime.evaluate") {
+        if (params.objectGroup === "ego-browser") {
+          return { result: { objectId: "object-1" } };
+        }
+        return { result: { value: run(params.expression) } };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        const args = params.arguments.map((arg) => arg.value);
+        const value = new Function(
+          "__fn",
+          "__args",
+          "return __fn.apply(this, __args);",
+        ).call(element, run(params.functionDeclaration), args);
+        return { result: { value } };
+      }
+      return {};
+    },
+  });
+  return { calls, restore, scrolls };
+}
+
+function dispatchedPoints(calls) {
+  return calls
+    .filter((call) => call.method === "Input.dispatchMouseEvent")
+    .map((call) => [call.params.x, call.params.y]);
+}
+
+const CENTER_BELOW_FOLD = { left: 100, top: 590, width: 100, height: 40 };
+const FULLY_BELOW_FOLD = { left: 100, top: 2000, width: 100, height: 40 };
+const CENTERED_POINT = [400, 300];
+
+for (const [name, target] of [
+  ["a CSS selector", "#target"],
+  ["a loc=css locator", "loc=css:#target"],
+  ["a selector object", { selector: "#target" }],
+]) {
+  test(`click scrolls ${name} into view when its center is below the fold`, async () => {
+    const { calls, restore, scrolls } = fakePage({ rect: CENTER_BELOW_FOLD });
+    try {
+      await withFakeEgo(() => click(target));
+    } finally {
+      restore();
+    }
+    assert.equal(scrolls.length, 1);
+    assert.deepEqual(dispatchedPoints(calls), [
+      CENTERED_POINT,
+      CENTERED_POINT,
+      CENTERED_POINT,
+    ]);
+  });
+}
+
+test("click on a CSS selector scrolls and probes in its one resolving page call", async () => {
+  const { calls, restore, scrolls } = fakePage({ rect: FULLY_BELOW_FOLD });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+  assert.deepEqual(scrolls, [
+    { block: "center", inline: "center", behavior: "instant" },
+  ]);
+  assert.deepEqual(methodSequence(calls), [
+    "Runtime.evaluate",
+    "Input.dispatchMouseEvent:mouseMoved",
+    "Input.dispatchMouseEvent:mousePressed",
+    "Input.dispatchMouseEvent:mouseReleased",
+  ]);
+});
+
+test("click leaves an element whose center is in the viewport where it is", async () => {
+  const { calls, restore, scrolls } = fakePage({
+    rect: { left: 100, top: 570, width: 100, height: 40 },
+  });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+  assert.deepEqual(scrolls, []);
+  assert.deepEqual(dispatchedPoints(calls)[0], [150, 590]);
+});
+
+test("click uses the visible part of an element that cannot scroll to its center", async () => {
+  for (const target of ["#target", "loc=css:#target"]) {
+    const { calls, restore } = fakePage({
+      rect: CENTER_BELOW_FOLD,
+      scrollable: false,
+    });
+    try {
+      await withFakeEgo(() => click(target));
+    } finally {
+      restore();
+    }
+    assert.deepEqual(dispatchedPoints(calls)[0], [150, 595], String(target));
+  }
+});
+
+test("click reports an element it cannot bring into the viewport instead of succeeding", async () => {
+  for (const target of [
+    "#target",
+    "loc=css:#target",
+    { selector: "#target", x: 4, y: 4 },
+  ]) {
+    const { calls, restore } = fakePage({
+      rect: FULLY_BELOW_FOLD,
+      scrollable: false,
+    });
+    try {
+      await assert.rejects(
+        () => withFakeEgo(() => click(target)),
+        (error) => {
+          assert.equal(error.name, "ElementResolutionError");
+          assert.equal(error.kind, "transient");
+          assert.match(error.message, /not visible in the viewport/);
+          return true;
+        },
+      );
+    } finally {
+      restore();
+    }
+    assert.deepEqual(dispatchedPoints(calls), [], JSON.stringify(target));
+  }
+});
+
+test("click scrolls a selector-relative point back into the viewport", async () => {
+  const { calls, restore, scrolls } = fakePage({ rect: FULLY_BELOW_FOLD });
+  try {
+    await withFakeEgo(() => click({ selector: "#target", x: 4, y: 6 }));
+  } finally {
+    restore();
+  }
+  assert.equal(scrolls.length, 1);
+  // Centered element: left 350, top 280, plus the caller's offset.
+  assert.deepEqual(dispatchedPoints(calls)[0], [354, 286]);
+});
+
+/**
+ * Run the real page-side click point against an element in a same-process
+ * iframe. Input is dispatched in the top viewport, so that is the coordinate
+ * space the result has to be in.
+ */
+function framedClickPoint({ rect, frame, offset = null, afterScroll = rect }) {
+  const top = { innerWidth: 800, innerHeight: 600, frameElement: null };
+  const view = {
+    innerWidth: 300,
+    innerHeight: 200,
+    frameElement: {
+      clientLeft: 2,
+      clientTop: 3,
+      getBoundingClientRect: () => frame,
+    },
+    parent: top,
+  };
+  let current = rect;
+  const domRect = () => ({
+    ...current,
+    x: current.left,
+    y: current.top,
+    right: current.left + current.width,
+    bottom: current.top + current.height,
+  });
+  const element = {
+    ownerDocument: { defaultView: view },
+    getBoundingClientRect: domRect,
+    getClientRects: () => [domRect()],
+    scrollIntoView() {
+      current = afterScroll;
+    },
+  };
+  return new Function(
+    "element",
+    "offset",
+    `${CLICK_POINT_HELPERS}; return clickPointForElement(element, offset);`,
+  )(element, offset);
+}
+
+test("click translates a scrolled same-process iframe point to the top viewport", () => {
+  assert.deepEqual(
+    framedClickPoint({
+      frame: { left: 50, top: 100 },
+      rect: { left: 10, top: 500, width: 100, height: 40 },
+      afterScroll: { left: 10, top: 20, width: 100, height: 40 },
+    }),
+    { x: 112, y: 143 },
+  );
+  assert.deepEqual(
+    framedClickPoint({
+      frame: { left: 50, top: 100 },
+      rect: { left: 10, top: 500, width: 100, height: 40 },
+      afterScroll: { left: 10, top: 20, width: 100, height: 40 },
+      offset: { x: 4, y: 6 },
+    }),
+    { x: 66, y: 129 },
+  );
+});
+
+test("click reports an iframe point that stays outside the top viewport", () => {
+  assert.deepEqual(
+    framedClickPoint({
+      frame: { left: 50, top: 900 },
+      rect: { left: 10, top: 20, width: 100, height: 40 },
+    }),
+    { error: "element is not visible in the viewport" },
+  );
+});
+
+test("click does not second-guess explicit coordinates", async () => {
+  const { calls, restore, scrolls } = fakePage({ rect: CENTER_BELOW_FOLD });
+  try {
+    await withFakeEgo(() => click([30, 900]));
+  } finally {
+    restore();
+  }
+  assert.deepEqual(scrolls, []);
+  assert.deepEqual(dispatchedPoints(calls)[0], [30, 900]);
+});
+
 function withFakeEgo(run) {
   const originalEgo = globalThis.ego;
   globalThis.ego = { sendCDPMessage: () => {} };
@@ -201,7 +479,7 @@ function clickOverride({ inputTimesOut = false, probeResult } = {}) {
           // finishClickProbe
           return { result: { value: probeResult } };
         }
-        // Resolution (buildSelectorCenterJs) plus the probe install
+        // Resolution (clickPointForElement) plus the probe install
         return { result: { value: { x: 100, y: 200 } } };
       }
       if (method === "Input.dispatchMouseEvent" && inputTimesOut) {
@@ -370,6 +648,7 @@ test("click falls back to the shared resolver when the fast path finds no elemen
     "Runtime.evaluate",
     "Runtime.evaluate",
     "Runtime.evaluate",
+    "Runtime.evaluate",
     "Input.dispatchMouseEvent:mouseMoved",
     "Input.dispatchMouseEvent:mousePressed",
     "Input.dispatchMouseEvent:mouseReleased",
@@ -383,10 +662,15 @@ test("click falls back to the shared resolver when the fast path finds no elemen
     false,
     "the shared resolver evaluates the selector without a probe",
   );
-  assert(isProbeExpression(calls[2]), "the probe is installed before input");
-  assert.match(calls[2].params.expression, /\{"x":70,"y":80\}/);
+  assert.match(
+    calls[2].params.expression,
+    /70 >= 0 && 80 >= 0/,
+    "the resolved point is checked against the viewport",
+  );
+  assert(isProbeExpression(calls[3]), "the probe is installed before input");
+  assert.match(calls[3].params.expression, /\{"x":70,"y":80\}/);
   assert.deepEqual(
-    calls.slice(3).map((call) => [call.params.x, call.params.y]),
+    calls.slice(4).map((call) => [call.params.x, call.params.y]),
     [
       [70, 80],
       [70, 80],

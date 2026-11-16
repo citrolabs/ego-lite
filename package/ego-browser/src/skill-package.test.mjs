@@ -50,6 +50,36 @@ test("the bundled usage guide is the unwrapped source guide between version and 
   assert.ok(bundled.length <= 25_000);
 });
 
+test("the guide hands login, verification and manual steps back to the user", async () => {
+  const guide = await readFile(join(outDir, "ego-browser/SKILL.md"), "utf8");
+  const section = /^## User control$[\s\S]*?(?=^## )/m.exec(guide)[0];
+  const rule = section
+    .split("\n\n")
+    .find((paragraph) => paragraph.includes("task.handOff()"));
+  for (const trigger of [
+    /login/i,
+    /CAPTCHA/,
+    /human verification/i,
+    /2FA/,
+    /manual step/i,
+  ]) {
+    assert.match(rule, trigger);
+  }
+  assert.match(rule, /work around it silently/);
+  // Credentials the user supplied for the task stay usable.
+  assert.match(rule, /credentials/i);
+  assert.match(rule, /the user gave/);
+});
+
+test("the clearing-state reference does not clear a sign-in wall away", async () => {
+  const reference = await readFile(
+    join(repoRoot, "skills/ego-browser/references/clearing-state.md"),
+    "utf8",
+  );
+  assert.doesNotMatch(reference, /^Sign-in wall or /m);
+  assert.match(reference, /sign-in wall[^\n]*task\.handOff\(\)/i);
+});
+
 test("each platform guide keeps only its own passages", async () => {
   const source = await readFile(guideSource, "utf8");
   const version = /^version: "([^"]+)"$/m.exec(source)[1];
@@ -87,6 +117,21 @@ test("each platform guide keeps only its own passages", async () => {
     /PowerShell|### cmd|Get-Content|forward slashes/,
   );
   assert.ok(guides.macos.length < guides.windows.length);
+});
+
+test("the visual pages guide says how to recover from a screenshot timeout", async () => {
+  const guide = await readFile(join(outDir, "ego-browser/SKILL.md"), "utf8");
+  const section = /^### Visual pages:[\s\S]*?(?=^### )/m.exec(guide)?.[0] ?? "";
+  assert.match(section, /EGO_PAGE_UNRESPONSIVE/);
+  assert.match(section, /Page\.captureScreenshot/);
+  assert.match(section, /at most once/);
+  assert.match(section, /\.toDataURL\("image\/png"\)/);
+  assert.match(section, /page\.evaluate\(/);
+  assert.match(section, /tainted/);
+  assert.match(section, /WebGL/);
+  // The cause of the hang is not established, so the guide must stay conditional.
+  assert.match(section, /can sometimes/);
+  assert.doesNotMatch(section, /minimi[sz]ed|occluded|background window/i);
 });
 
 test("renderGuide selects platform blocks and strips the markers", () => {

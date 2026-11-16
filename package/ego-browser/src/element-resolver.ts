@@ -1697,7 +1697,7 @@ function resolveAxSession(frameId, sessionId, iframeSessions) {
   return [{ frameId }, sessionId];
 }
 
-function buildFindElementJs(selector) {
+export function buildFindElementJs(selector) {
   if (String(selector).startsWith("xpath=")) {
     return `document.evaluate(${JSON.stringify(String(selector).slice(6))}, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue`;
   }
@@ -2184,7 +2184,7 @@ export function isRawSelector(input: unknown): boolean {
   }
 }
 
-export function buildSelectorCenterJs(selector) {
+function buildSelectorCenterJs(selector) {
   const findExpr = buildFindElementJs(selector);
   return `(() => {
             const el = ${findExpr};

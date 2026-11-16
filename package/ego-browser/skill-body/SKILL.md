@@ -1,5 +1,5 @@
 ---
-version: "2.2.0"
+version: "2.2.1"
 date: "2026-10-16"
 ---
 
@@ -16,8 +16,7 @@ Pass the script to `ego-browser nodejs`.
 
 <!-- platform: windows -->
 
-The form depends on the shell that runs the command: heredoc is Bash/Zsh
-syntax and does not exist in PowerShell or cmd.
+Heredoc exists only in Bash/Zsh, so the form depends on your shell.
 
 ### Bash, Zsh, Git Bash
 
@@ -34,45 +33,33 @@ console.log(await page.snapshot());
 EOF
 ```
 
-When a sandbox blocks heredoc input, use `-e` instead. Use single quotes around
-the code and double quotes for JavaScript strings; single quotes within the code
-require shell quoting.
-
-```bash
-ego-browser nodejs -e '
-const task = await taskSpace("inspect example page");
-await task.page("p1").goto("https://example.com");
-console.log(task.spaceId);
-'
-```
+When a sandbox blocks heredoc input, use `ego-browser nodejs -e '<code>'`
+instead. Use single quotes around the code and double quotes for JavaScript
+strings; single quotes within the code require shell quoting.
 
 <!-- platform: windows -->
 
 ### PowerShell
 
-PowerShell has no heredoc, and Windows PowerShell 5.1 drops the double quotes
-inside an argument when it calls a native program, which splits the script into
-several arguments. Do not pass a script that contains double quotes or spans
-several lines to `-e`. Write it to a UTF-8 `.mjs` file instead and evaluate an
-ASCII-only one-line entry point, which needs no double quotes of its own:
+PowerShell has no heredoc, and Windows PowerShell 5.1 strips double quotes from
+native-program arguments, which splits the script. Never pass a multi-line or
+double-quoted script to `-e`. Write a UTF-8 `.mjs` file and evaluate this
+one-line entry point:
 
 ```powershell
 ego-browser nodejs -e "await import('file:///C:/Users/<name>/ego/task.mjs')"
 ```
 
-The imported module runs with the same helpers and `console` as an inline
-script, so the whole task belongs in the `.mjs` file. Use forward slashes in the
-`file:///` URL. Non-ASCII content such as Chinese text must stay inside the
-file: never put it in a `-e` argument.
+The module gets the same helpers and `console` as an inline script, so put the
+whole task in the file. Use forward slashes in the URL, and keep non-ASCII text
+such as Chinese in the file, never in `-e`.
 
-Do not pipe the file in with `Get-Content`. Windows PowerShell 5.1 reads a UTF-8
-file as ANSI and sends ASCII to native programs, which corrupts non-ASCII text
-and truncates strings. PowerShell has no `<` input redirection either.
+Do not pipe the file with `Get-Content`: 5.1 corrupts non-ASCII text and
+truncates strings. PowerShell has no `<` redirection either.
 
 ### cmd
 
-cmd has no heredoc, but it does support input redirection, so it can run the
-same `.mjs` file directly:
+cmd has no heredoc but supports input redirection:
 
 ```bat
 ego-browser nodejs < C:\Users\<name>\ego\task.mjs
@@ -80,21 +67,19 @@ ego-browser nodejs < C:\Users\<name>\ego\task.mjs
 
 ### Later rounds with a script file
 
-Each run is a new process, and earlier rounds have already run. Write a new,
-complete file for every round (`round-01.mjs`, `round-02.mjs`, ...) instead of
-editing the previous one, which would replay old steps. Keep one goal's files in
-a new directory named for the goal plus the date and time, such as
-`C:/Users/<name>/ego/laptop-prices-20260922-1405/`, and only run files written
-in this conversation. Create files with your file tool, not PowerShell
-`Set-Content`, `Out-File`, or `>`, which write ANSI or UTF-16 on 5.1.
+Each run is a new process, so write a new, complete file per round
+(`round-01.mjs`, `round-02.mjs`, ...); editing the previous one replays old
+steps. Keep one goal's files in a new directory named for the goal and time,
+such as `C:/Users/<name>/ego/laptop-prices-20260922-1405/`, and only run files
+written in this conversation. Create files with your file tool: PowerShell
+`Set-Content`, `Out-File`, and `>` write ANSI or UTF-16 on 5.1.
 
 ### When the script fails to parse
 
 `SyntaxError: await is only valid in async functions and the top level bodies of
-modules` almost always means the shell damaged the script before Node received
-it; top-level `await` itself is supported. Do not wrap the code in an async
-IIFE, open a new task space, or resend the same command. Switch to the `.mjs`
-file form above.
+modules` almost always means the shell damaged the script; top-level `await` is
+supported. Do not wrap the code in an async IIFE, open a new task space, or
+resend the command. Switch to the `.mjs` file form.
 
 <!-- /platform -->
 
@@ -110,12 +95,11 @@ file it reads or writes. It also does not inherit your shell's environment
 variables: `process.env` will not contain values you set before running
 `ego-browser`, so write every input directly into the script.
 
-Ego-browser deliberately exposes a small custom API. It is not Playwright, even
-where method names and options look similar. Use only the TaskSpace, Page,
-FileChooser, mouse, and keyboard APIs explicitly listed in this Skill. Do not
-infer Playwright methods such as `locator()`, `getByRole()`, `context()`,
-`expect()`, or `route()`. When the listed API does not cover an operation, use
-the documented `page.evaluate()` or `page.cdp()` escape hatches instead of
+Ego-browser exposes a small custom API. It is not Playwright, even where names
+and options look similar. Use only the TaskSpace, Page, FileChooser, mouse, and
+keyboard APIs listed in this Skill. Do not infer methods such as `locator()`,
+`getByRole()`, `context()`, `expect()`, or `route()`. When the listed API does
+not cover an operation, use `page.evaluate()` or `page.cdp()` instead of
 guessing another method.
 
 Only these pointer actions accept an optional `label` option: `click()`,
@@ -132,14 +116,11 @@ and diagnose the CLI or installation only if it fails.
 
 ## Spaces, rounds, and pages
 
-- Use exactly one TaskSpace for the entire user goal. Create it once, print its
-  `spaceId`, and resume that same space in later rounds. Use multiple spaces
-  only when the user explicitly requests them.
-- Task space names are unique. `taskSpace(name)` resumes your own space with
-  that name instead of creating a second one. If the name belongs to a
-  user-owned space, it fails with `EGO_TASK_SPACE_NAME_IN_USE`: ask the user
-  whether to work in that space (then `claimTaskSpace(id)`), or pick another
-  name.
+- One user goal keeps one TaskSpace across your replies while that space
+  exists. Use multiple spaces only when the user explicitly requests them.
+- Start and end each reply's browser work as described in "Starting and
+  ending a reply" below. Task space names are unique; prefer the numeric id
+  once you have it.
 - Never use a new TaskSpace to recover from a stuck, blocked, timed-out, or
   unexpected Page. Recover within the existing space; if it cannot continue,
   stop and ask the user.
@@ -149,13 +130,6 @@ and diagnose the CLI or installation only if it fails.
   another Page.
 - Reuse a Page with `goto()` instead of opening a new Page for every URL.
 - All time values are milliseconds.
-
-```js
-// Later round: use the space id and Page label printed earlier.
-const resumed = await taskSpace(7);
-const source = resumed.page("p1");
-await source.goto("https://example.com/releases");
-```
 
 Do not inspect or select profiles unless the user explicitly requests a
 particular Ego Lite profile. A `profileId` applies only when creating a space;
@@ -173,13 +147,11 @@ Pages receive permanent labels such as `p1`, `p2`, and `p3`. Prefer these labels
 to custom `{ as }` values. Reuse or close Pages as the task proceeds; the runtime
 reports the configured Page budget when it is reached.
 
-`task.newPage()` creates another blank Page when multiple Pages must stay open.
-Navigate it separately with `page.goto()`.
-
 `task.page(label)` only refers to a Page that already exists; it never creates
 one, and its handle is always truthy, so `task.page("p2") || await task.newPage()`
 and `if (!page)` do not detect a missing label. Use labels printed by earlier
-output or by `await task.pages()`, and call `await task.newPage()` to create one.
+output or by `await task.pages()`. When multiple Pages must stay open, call
+`await task.newPage()` for another blank Page and navigate it with `goto()`.
 
 `await task.pages()` returns managed Pages. `await task.tabs()` returns every tab in the
 space as `{ label?, page, targetId, title, url, active, openedBy }`. A tab
@@ -199,7 +171,7 @@ as user-owned when deciding whether a Page may be closed.
 
 ## Page operations
 
-ego-browser provides the following Page API:
+Page API:
 
 - State and observation: `label`, `spaceId`, `openedBy`, `targetId`, `url()`,
   `title()`, `info()`, `snapshot()`, `screenshot()`
@@ -214,7 +186,7 @@ ego-browser provides the following Page API:
 - Keyboard: `keyboard.down()`, `up()`, `press()`, `type()`, `insertText()`,
   `paste()`
 - Page code and protocols: `evaluate(fnOrString, argument)`,
-  `fetch(url, options)`, `cdp(method, params, options)`
+  `fetch(url, options)`, `cdp(method, params, options)`, `events()`
 
 `page.evaluate()` callbacks run only inside the Page; they cannot read variables
 or Node.js modules from the surrounding script. Define browser-side helpers
@@ -225,7 +197,9 @@ timeout, so the Page stays usable on its previous document; retry with a longer
 timeout. Any other call on a Page whose navigation is pending (after a link
 click, for example) waits one bounded period, then fails with
 `EGO_PAGE_UNRESPONSIVE` and stops that navigation; the error says which
-document the Page shows now and how to load the pending one.
+document the Page shows now and how to load the pending one. `evaluate()`
+reports the same outcome as `EGO_PAGE_EVALUATION_TIMED_OUT` with `stopped`
+set.
 
 Work efficiently:
 
@@ -277,20 +251,12 @@ Use the refs returned by the subtree for actions inside the iframe. A subtree
 snapshot does not scope later locator actions; they still prefer actionable
 matches in the top document before searching frames.
 
-`waitForLoadState()` defaults to `load`. `waitForFunction()` follows the
-Playwright argument order; pass `undefined` before options when there is no Page
-argument:
+`waitForLoadState()` defaults to `load`. `waitForFunction()` takes Playwright's
+args (`undefined` before options if no arg) but returns `true`, not the
+predicate's value:
 
 ```js
-await page.waitForFunction(() => window.appReady, undefined, {
-  timeout: 10_000,
-});
-```
-
-```js
-// Round 1: inspect and choose targets from this output.
-const page = task.page("p1");
-console.log(await page.snapshot());
+await page.waitForFunction(() => window.ready, undefined, { timeout: 5000 });
 ```
 
 ```js
@@ -363,9 +329,9 @@ into the system temporary directory and use the returned file path.
 
 <!-- platform: windows -->
 
-On Windows, write paths with forward slashes, such as
-`C:/Users/<name>/ego-shots/before.png`, because backslashes are escape
-characters inside JavaScript strings.
+Use forward slashes in Windows paths, such as
+`C:/Users/<name>/ego-shots/before.png`: backslashes are JavaScript string
+escapes.
 
 <!-- /platform -->
 
@@ -381,22 +347,21 @@ then restores the user's clipboard. Pass `{ text, html }` when a rich editor
 needs structured clipboard content; `text` is the plain-text fallback. On other
 platforms, use `keyboard.insertText()` for plain text.
 
-```js
-await page.keyboard.paste({
-  text: "Name\tStatus",
-  html: "<table><tr><td>Name</td><td>Status</td></tr></table>",
-});
-```
-
 For rich-text editors and editable grids, validate a small edit before repeating
 it at scale. Canvas-backed editors may not expose visible content through DOM
 text or selectors; verify those results with a screenshot or an
 application-specific visible state.
 
+`page.screenshot()` can sometimes fail after about 15s with
+`EGO_PAGE_UNRESPONSIVE` on `Page.captureScreenshot`, even if `page.evaluate()`
+still works. Retry at most once. For a canvas, read its pixels through
+`page.evaluate()` with `canvas.toDataURL("image/png")` (tainted canvases throw;
+WebGL may read blank).
+
 ### Page JavaScript and CDP
 
-Use `page.evaluate()` for bulk extraction or complex in-page work. It accepts
-one JSON-serializable argument and returns a JSON-serializable value:
+Use `page.evaluate()` for bulk extraction or complex in-page work. It returns a
+JSON-serializable value:
 
 ```js
 const rows = await page.evaluate(
@@ -416,8 +381,9 @@ whether an unsafe follow-up requires reloading or closing the Page first.
 Use documented Page methods first. If a wrapper is missing or does not work
 reliably on the current page, use `page.cdp()` as a lower-level path for
 diagnosis or control. It accepts Page, Runtime, DOM, Network, Input, and similar
-commands; use `task.cdp()` for Target and Browser commands. Raw CDP invalidates
-refs. Do not persist `page.targetId` across rounds.
+commands; use `task.cdp()` for Target and Browser commands. Both reject a misplaced
+`sessionId` in params. Raw CDP invalidates refs. Do not persist `page.targetId`
+across rounds.
 
 ## Action receipts, popups, and dialogs
 
@@ -434,9 +400,6 @@ High-level actions also report immediately observed popups in `receipt.popups`
 as `{ label, targetId }`. Resolve the Page with
 `task.page(receipt.popups[0].label)` and continue there; wait for its URL when
 the destination matters.
-
-For uncommon protocol-event workflows, `await page.events()` returns and clears
-the buffered event array; it is not an EventEmitter.
 
 Page sessions hide page console messages from CDP so sites cannot detect the
 automation. To read `Runtime.consoleAPICalled` while debugging, first call
@@ -517,15 +480,73 @@ await page.fetch("/image.png", { saveAs: "/absolute/path/image.png" });
 Use standard Node.js `fetch()` for background requests that do not need Page
 browser semantics.
 
-## User control and completion
+## Starting and ending a reply
+
+Begin the first script of each reply by choosing the space. A new goal gets a
+new space. A user message that continues an earlier goal, such as a further
+question, a correction, or a request to continue, continues in that goal's
+space if it still exists, whatever state your last reply left it in:
+
+```js
+const SPACE_ID = 7; // printed by your last reply about this goal; null for a new goal
+const entry =
+  SPACE_ID === null
+    ? undefined
+    : (await listTaskSpaces()).find((s) => s.id === SPACE_ID);
+const task = !entry
+  ? await taskSpace("descriptive goal name") // new goal, or the earlier space was closed
+  : entry.ownership === "user"
+    ? await claimTaskSpace(SPACE_ID) // you finished it with kept Pages
+    : entry.ownership === "agentDelegatedToUser"
+      ? await takeOverTaskSpace(SPACE_ID) // control is with the user
+      : await taskSpace(SPACE_ID); // still in your control
+// After a claim, no tab has a label yet: adopt the tab you kept.
+const page =
+  (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
+console.log({
+  taskSpaceId: task.spaceId,
+  page: page.label,
+  tabs: await task.tabs(),
+});
+```
+
+`finish()` ends all Page labels, kept Pages included. Until you claim a space
+you finished with kept Pages, neither `taskSpace()` nor `takeOverTaskSpace()`
+can resume it. After the claim, adopt each tab you kept and use the label
+`adopt()` returns.
+
+End each reply's browser work with one `finish()` in a separate last script,
+run after earlier output has shown that the request is done, and wait for it
+before you report. A space finished too early must not take more work in this
+reply:
+
+```js
+const task = await taskSpace(7); // the taskSpaceId printed earlier in this reply
+// Default: close the space, including tabs you kept in an earlier reply.
+await task.finish({ keep: [] });
+
+// Exception, instead of the default: keep only the result Page for the user.
+await task.finish({ keep: ["p2"] });
+```
+
+Keeping Pages is a rare exception: retain only necessary Pages when the user
+explicitly asks, or when the result must remain in the browser for the user to
+view or continue working with. Pages merely visited, search results, and
+intermediate steps do not need to remain open.
+
+After `finish()`, do not operate any Page in the same script.
+
+## User control
 
 Stop when the user takes control or the space is inactive or unassigned. Do not
 retry or route around the stop. Permission prompts, device choosers, and
 other browser-owned prompts require the user to handle them.
 
-When the user must act in the browser, call `await task.handOff()`, end the
-round, and explain what they should do. After the user confirms, resume the
-same space:
+When the user must act in the browser (login without credentials the user gave,
+CAPTCHA or human verification, 2FA, or other manual step), call
+`await task.handOff()`, end the round, and explain what they should do. Do not
+guess credentials or work around it silently.
+After the user confirms, resume the same space:
 
 ```js
 const task = await takeOverTaskSpace(7);
@@ -533,45 +554,19 @@ const userPage = task.userPage();
 ```
 
 Adopt `userPage` if it is unmanaged. Use `waitForControl()` only when the current
-script must wait in place. Claim a user-owned or inactive space only when the
-user explicitly asks; this includes a space you finished with kept Pages, which
-`takeOverTaskSpace()` cannot resume. Find its numeric id first; names may be
-duplicated. `listTaskSpaces()` entries expose that id as `id` (`spaceId` exists
-only on a TaskSpace handle), so pass `entry.id` to `claimTaskSpace()` or
-`taskSpace()`:
+script must wait in place.
 
-```js
-const spaces = await listTaskSpaces();
-console.log(spaces.filter((space) => space.ownership === "user"));
-
-const task = await claimTaskSpace(7);
-const userPage = task.userPage();
-```
-
-When the task succeeds, close the TaskSpace by default with
-`await task.finish({ keep: [] })`. Call `finish()` exactly once and wait for it
-to resolve before reporting completion.
-
-`finish()` ends the task and all of its Page labels, including Pages kept for the
-user. Put it last in the final round only; do not operate any Page after it in
-the same script or in later rounds.
-
-Keeping Pages is a rare exception: retain only necessary Pages when the user
-explicitly asks, or when the result must remain in the browser for the user to
-view or continue working with. Pages merely visited, search results, and
-intermediate steps do not need to remain open.
-
-```js
-await task.finish({ keep: [] }); // Default: keep no Agent-managed Pages.
-await task.finish({ keep: ["p2"] }); // Exception: keep only the result Page for the user.
-```
+Claim any other user-owned or inactive space only when the user explicitly
+asks; the space you finished for the current goal is claimed as in "Starting
+and ending a reply".
 
 User-created and unknown-origin tabs are protected; if any remain, `keep: []`
-does not close the whole space. The blank tab that `page.close()` leaves when it
-closes the last Page is SDK-owned and never blocks closing. Do not close
-unwanted Pages one by one at completion; list the Pages to keep instead.
-Use `page.close()` only while the task is still in progress. Do not call
-`finish()` when the task stops for user control or an error.
+does not close the whole space, and the script output says so. Tabs you kept in
+an earlier reply stay yours after a claim and do not block closing. The blank
+tab that `page.close()` leaves when it closes the last Page is SDK-owned and
+never blocks closing. Do not close unwanted Pages one by one at completion; list
+the Pages to keep instead. Do not call `finish()` when the task stops for user
+control or an error.
 
 If the final output contains `[ego-browser:notice]`, finish the current browser
 task, tell the user an Ego Lite update is available, and run

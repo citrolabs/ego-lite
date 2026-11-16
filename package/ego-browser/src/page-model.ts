@@ -8,6 +8,7 @@ import {
   ensureNetworkTracking,
   ensureSession,
   ensureFrameSessions,
+  responseTimeoutMs,
   invalidateSession,
   isCdpRequestTimeoutError,
   isPageUnresponsiveError,
@@ -25,7 +26,7 @@ import {
   type FileChooserInterception,
   type FileChooserOpenedEvent,
 } from "./browser-runtime.js";
-import { runtimeValue } from "./cdp-eval.js";
+import { assertNoSessionIdInParams, runtimeValue } from "./cdp-eval.js";
 import { withTemporaryClipboardText } from "./clipboard.js";
 import {
   captureScreenshotForSession,
@@ -119,6 +120,7 @@ import {
   subscribeUnhandledPageNotices,
   type UnhandledPageNotice,
 } from "./page-discovery.js";
+import { bufferOutput } from "./output-sink.js";
 import {
   publicApiEntry,
   validatePublicApiOptions,
@@ -446,6 +448,7 @@ type OperationGate = {
 type LedgerPort = {
   read(spaceId: number): Promise<PageLedger>;
   discard(spaceId: number): Promise<void>;
+  retainForUser(spaceId: number, targetIds: string[]): Promise<void>;
   initializeCreatedSpace(
     spaceId: number,
     targetId: string,
@@ -582,6 +585,13 @@ export class PageEvaluationTimeoutError extends Error {
   readonly executionStopped: boolean;
   readonly mayHaveLateEffects: boolean;
   readonly pageResponsive: boolean;
+  /**
+   * A main-frame navigation that had not committed kept the Page from
+   * answering; it was stopped once the wait ran out and the Page answers
+   * again, showing `currentUrl`.
+   */
+  stopped = false;
+  currentUrl?: string;
 
   constructor(
     message: string,
@@ -649,8 +659,19 @@ const SNAPSHOT_DOCUMENT_CHANGE_RETRIES = 2;
 const FILE_CHOOSER_OPEN_WAIT_MS = 1_000;
 const FILE_CHOOSER_SETTLE_MS = 50;
 const CONTROL_POLL_INTERVAL_MS = 20_000;
-const PAGE_EVALUATE_EXECUTION_TIMEOUT_MS = 14_000;
-const PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS = 15_000;
+// page.evaluate waits one runtime response timeout for the transport and
+// asks Chromium to stop the script one second earlier, so a long synchronous
+// callback is reported as stopped rather than as an unanswered command.
+const PAGE_EVALUATE_EXECUTION_MARGIN_MS = 1_000;
+function pageEvaluateTransportTimeoutMs(): number {
+  return responseTimeoutMs();
+}
+function pageEvaluateExecutionTimeoutMs(): number {
+  return Math.max(
+    PAGE_EVALUATE_EXECUTION_MARGIN_MS,
+    pageEvaluateTransportTimeoutMs() - PAGE_EVALUATE_EXECUTION_MARGIN_MS,
+  );
+}
 const PAGE_EVALUATE_HEALTH_TIMEOUT_MS = 250;
 const PAGE_EVALUATE_HEALTH_EXECUTION_TIMEOUT_MS = 200;
 const PAGE_EVALUATE_TERMINATE_TIMEOUT_MS = 1_000;
@@ -1277,17 +1298,14 @@ class TaskSpace {
           !managedByTarget.has(tab.targetId) &&
           !agentUnmanagedSet.has(tab.targetId),
       ).length;
-      const hasProtectedTabs = tabs.some((tab) => {
+      const protectedTabCount = tabs.filter((tab) => {
         const managed = managedByTarget.get(tab.targetId);
         if (managed) return managed.openedBy === "unknown";
         return !agentUnmanagedSet.has(tab.targetId);
-      });
+      }).length;
+      const keepsNothing = options.keep !== "all" && options.keep.length === 0;
 
-      if (
-        options.keep !== "all" &&
-        options.keep.length === 0 &&
-        !hasProtectedTabs
-      ) {
+      if (keepsNothing && protectedTabCount === 0) {
         await this.#services.closeTaskSpace();
         await this.#discardTerminalState();
         return {
@@ -1302,9 +1320,30 @@ class TaskSpace {
       for (const label of labelsToClose) {
         await this.page(label).close();
       }
-      await this.#closeAgentUnmanagedTabs(agentUnmanagedTargets);
+      // Tabs an earlier finish() left for the user go only when this finish
+      // keeps nothing; a keep list can only name labels, so it cannot cover them.
+      const retainedEarlier = new Set(
+        keepsNothing ? [] : ledger.retainedTargets,
+      );
+      const anchorsLeftOpen = await this.#closeAgentUnmanagedTabs(
+        agentUnmanagedTargets.filter((id) => !retainedEarlier.has(id)),
+      );
       await this.#services.completeTaskSpace();
-      await this.#discardTerminalState();
+      await this.#discardTerminalState([
+        ...keptManagedLabels
+          .map((label) => ledger.pages[label])
+          .filter((page) => page.openedBy === "agent")
+          .map((page) => page.targetId),
+        ...agentUnmanagedTargets.filter((id) => retainedEarlier.has(id)),
+        ...anchorsLeftOpen,
+      ]);
+      if (keepsNothing) {
+        bufferOutput(
+          `[ego-browser] finish({ keep: [] }) did not close task space ${this.spaceId}: ` +
+            `${protectedTabCount} tab(s) of user or unknown origin stayed open, ` +
+            "and the space now belongs to the user.\n",
+        );
+      }
       return {
         spaceId: this.spaceId,
         closedSpace: false,
@@ -1318,15 +1357,20 @@ class TaskSpace {
   /**
    * Close SDK-opened unmanaged tabs (blank anchors) that the space no longer
    * needs. A tab that is the last one in the space stays: closing it would
-   * destroy the space the caller chose to keep.
+   * destroy the space the caller chose to keep. Returns the tabs left open.
    */
-  async #closeAgentUnmanagedTabs(targetIds: string[]): Promise<void> {
-    if (targetIds.length === 0) return;
+  async #closeAgentUnmanagedTabs(targetIds: string[]): Promise<string[]> {
+    if (targetIds.length === 0) return [];
+    const leftOpen: string[] = [];
     let live = new Set(
       (await this.#services.listTabs()).map((tab) => tab.targetId),
     );
     for (const targetId of targetIds) {
-      if (!live.has(targetId) || live.size <= 1) continue;
+      if (!live.has(targetId)) continue;
+      if (live.size <= 1) {
+        leftOpen.push(targetId);
+        continue;
+      }
       const result = await this.#services.cdp("Target.closeTarget", {
         targetId,
       });
@@ -1349,6 +1393,7 @@ class TaskSpace {
         (await this.#services.listTabs()).map((tab) => tab.targetId),
       );
     }
+    return leftOpen;
   }
 
   async [rollbackCreatedTaskSpaceToken](): Promise<void> {
@@ -1358,9 +1403,13 @@ class TaskSpace {
     });
   }
 
-  async #discardTerminalState(): Promise<void> {
+  async #discardTerminalState(retainedTargets: string[] = []): Promise<void> {
     this.#finished = true;
-    await this.#services.ledger.discard(this.spaceId);
+    if (retainedTargets.length > 0) {
+      await this.#services.ledger.retainForUser(this.spaceId, retainedTargets);
+    } else {
+      await this.#services.ledger.discard(this.spaceId);
+    }
     this.#stopBackgroundPageDiscovery();
     clearSpacePageNotices(this.spaceId);
   }
@@ -1941,7 +1990,7 @@ class Page {
       );
     }
     const page = await this.#resolve();
-    return this.#services.gate.withPage(page, async ({ sessionId }) => {
+    return this.#withPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId);
       let root: number | undefined;
       let rootContext:
@@ -2230,7 +2279,7 @@ class Page {
 
   async info(): Promise<Record<string, unknown>> {
     const page = await this.#resolve();
-    return this.#services.gate.withPage(page, async ({ sessionId }) => {
+    return this.#withPage(page, async ({ sessionId }) => {
       const dialog = this.#services.pendingDialog(sessionId);
       if (dialog) return { dialog };
       return evaluateInSession(
@@ -2263,7 +2312,11 @@ class Page {
     return this.#evaluate(expression, hasArgument, argument, true);
   }
 
-  /** Wait until a Page expression returns a truthy value. */
+  /**
+   * Wait until a Page expression returns a truthy value. Resolves to `true`,
+   * not that value, and throws on timeout; read Page state afterwards with
+   * `page.evaluate()`.
+   */
   async waitForFunction(
     expression: string | ((argument: any) => unknown | Promise<unknown>),
     argument?: unknown,
@@ -2348,6 +2401,7 @@ class Page {
                 sessionId,
                 "page.waitForFunction",
                 timeoutMs,
+                this.label,
               );
             }
             if (!isRetryablePageEvaluationError(error)) {
@@ -2390,7 +2444,7 @@ class Page {
     assertUrl(url);
     const { payload, saveAs } = pageFetchPayload(url, options);
     const page = await this.#resolve();
-    return this.#services.gate.withPage(page, async ({ sessionId }) => {
+    return this.#withPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId);
       const response = await evaluateInSession<PageFetchResult>(
         this.#services,
@@ -2495,7 +2549,7 @@ class Page {
       assertAbsoluteFilePath(path, "page.screenshot path");
     }
     const page = await this.#resolve();
-    return this.#services.gate.withPage(page, async ({ sessionId }) => {
+    return this.#withPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId);
       return this.#services.screenshot(
         path,
@@ -2847,14 +2901,14 @@ class Page {
           expression,
           hasArgument,
           serializedArgument,
-          PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS,
-          PAGE_EVALUATE_EXECUTION_TIMEOUT_MS,
+          pageEvaluateTransportTimeoutMs(),
+          pageEvaluateExecutionTimeoutMs(),
         );
       } catch (error) {
         if (isEvaluationExecutionDeadlineError(error)) {
           throw evaluationExecutionDeadlineError(
             "page.evaluate",
-            PAGE_EVALUATE_EXECUTION_TIMEOUT_MS,
+            pageEvaluateExecutionTimeoutMs(),
           );
         }
         if (isRuntimeEvaluateTransportTimeout(error)) {
@@ -2862,7 +2916,8 @@ class Page {
             this.#services,
             sessionId,
             "page.evaluate",
-            PAGE_EVALUATE_TRANSPORT_TIMEOUT_MS,
+            pageEvaluateTransportTimeoutMs(),
+            this.label,
           );
         }
         if (typeof expression === "function") {
@@ -3132,7 +3187,7 @@ class Page {
     page: PageTarget,
     operation: (sessionId: string) => Promise<T>,
   ): Promise<T> {
-    return this.#services.gate.withPage(page, async ({ sessionId }) => {
+    return this.#withPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId);
       return operation(sessionId);
     });
@@ -3169,7 +3224,7 @@ class Page {
         throw new Error("file chooser waiter belongs to a different Page");
       }
     }
-    return this.#services.gate.withPage(
+    return this.#withPage(
       page,
       async ({ sessionId }) => {
         await this.#activate(page.targetId);
@@ -3397,6 +3452,47 @@ class Page {
    * unresponsive Page is always reported with its label and recovery steps,
    * whichever step of an operation first ran into it.
    */
+  /**
+   * Run one public call on this Page. A renderer-bound command that the Page
+   * never answered is the same condition frame discovery reports as an
+   * unresponsive Page, so it is described the same way: the pending
+   * navigation is stopped and the error names the Page and what it shows.
+   */
+  async #withPage<T>(
+    page: PageTarget,
+    operation: (context: PageExecutionContext) => T | Promise<T>,
+    options: WithPageOptions = {},
+  ): Promise<T> {
+    let activeSessionId: string | undefined;
+    try {
+      return await this.#services.gate.withPage(
+        page,
+        (context) => {
+          activeSessionId = context.sessionId;
+          return operation(context);
+        },
+        options,
+      );
+    } catch (error) {
+      if (
+        !isCdpRequestTimeoutError(error) ||
+        isPageUnresponsiveError(error) ||
+        isBrowserLevelMethod(error.method)
+      ) {
+        throw error;
+      }
+      throw await this.#describeUnresponsivePage(
+        new PageUnresponsiveError(
+          error.method,
+          error.timeoutMs,
+          page.targetId,
+          error.sessionId ?? activeSessionId,
+        ),
+        page,
+      );
+    }
+  }
+
   async #frameSessions(
     page: PageTarget,
     timeoutMs?: number,
@@ -3465,37 +3561,10 @@ class Page {
     return described;
   }
 
-  /**
-   * Stop whatever main-frame navigation keeps this Page from answering and
-   * read its main frame once it does. "hung" means the Page still answers
-   * nothing: a hung renderer, which Page.stopLoading cannot help.
-   */
   async #stopPendingNavigation(
     sessionId: string,
   ): Promise<{ url?: string } | "hung"> {
-    try {
-      await this.#services.cdp(
-        "Page.stopLoading",
-        {},
-        sessionId,
-        PAGE_UNRESPONSIVE_STOP_TIMEOUT_MS,
-      );
-      const response = await this.#services.cdp(
-        "Page.getFrameTree",
-        {},
-        sessionId,
-        PAGE_UNRESPONSIVE_STOP_TIMEOUT_MS,
-      );
-      const frame =
-        response?.result?.frameTree?.frame || response?.frameTree?.frame;
-      return {
-        ...(typeof frame?.url === "string" && frame.url.length > 0
-          ? { url: frame.url }
-          : {}),
-      };
-    } catch {
-      return "hung";
-    }
+    return stopPendingNavigationInSession(this.#services, sessionId);
   }
 
   async #refMapForAction(
@@ -3971,6 +4040,7 @@ async function recoverPageEvaluationTimeout(
   sessionId: string,
   apiName: string,
   timeoutMs: number,
+  label?: string,
 ): Promise<PageEvaluationTimeoutError> {
   if (await pageEvaluationHealthProbe(services, sessionId)) {
     return new PageEvaluationTimeoutError(
@@ -4012,8 +4082,28 @@ async function recoverPageEvaluationTimeout(
     );
   }
 
+  // Nothing from the renderer: the usual cause is a main-frame navigation
+  // that has not committed. The wait that ran out was this call's budget, so
+  // stop that navigation as the other public calls do; the evaluation itself
+  // was never confirmed stopped and may still run on the document in place.
+  const recovered = await stopPendingNavigationInSession(services, sessionId);
+  if (recovered !== "hung") {
+    const error = new PageEvaluationTimeoutError(
+      `${apiName}${label ? ` on Page ${label}` : ""} timed out after ${timeoutMs}ms: a main-frame navigation had started but not committed, so the Page answered nothing. It was stopped once that wait ran out, so the Page answers again${recovered.url ? ` and shows ${recovered.url}` : ""}; the evaluation may still run late on that document. Retry the call to continue on that document; to load the pending one, call page.goto(url, { timeout }) with a longer timeout, or continue on a new Page from task.newPage().`,
+      {
+        timeoutMs,
+        executionStopped: false,
+        mayHaveLateEffects: true,
+        pageResponsive: true,
+      },
+    );
+    error.stopped = true;
+    error.currentUrl = recovered.url;
+    return error;
+  }
+
   return new PageEvaluationTimeoutError(
-    `${apiName} timed out after ${timeoutMs}ms and the Page is still unresponsive. Execution could not be confirmed stopped; reload or close the Page before continuing.`,
+    `${apiName}${label ? ` on Page ${label}` : ""} timed out after ${timeoutMs}ms and the Page is still unresponsive, even after Page.stopLoading, so its renderer is probably hung. Execution could not be confirmed stopped; continue on a new Page from task.newPage(), or close this Page and open it again.`,
     {
       timeoutMs,
       executionStopped: false,
@@ -4021,6 +4111,44 @@ async function recoverPageEvaluationTimeout(
       pageResponsive: false,
     },
   );
+}
+
+/**
+ * Stop whatever main-frame navigation keeps a Page from answering and read
+ * its main frame once it does. "hung" means the Page still answers nothing: a
+ * hung renderer, which Page.stopLoading cannot help.
+ */
+async function stopPendingNavigationInSession(
+  services: PageModelServices,
+  sessionId: string,
+): Promise<{ url?: string } | "hung"> {
+  try {
+    await services.cdp(
+      "Page.stopLoading",
+      {},
+      sessionId,
+      PAGE_UNRESPONSIVE_STOP_TIMEOUT_MS,
+    );
+    const response = await services.cdp(
+      "Page.getFrameTree",
+      {},
+      sessionId,
+      PAGE_UNRESPONSIVE_STOP_TIMEOUT_MS,
+    );
+    const frame =
+      response?.result?.frameTree?.frame || response?.frameTree?.frame;
+    return {
+      ...(typeof frame?.url === "string" && frame.url.length > 0
+        ? { url: frame.url }
+        : {}),
+    };
+  } catch {
+    return "hung";
+  }
+}
+
+function isBrowserLevelMethod(method: string): boolean {
+  return method.startsWith("Target.") || method.startsWith("Browser.");
 }
 
 async function pageEvaluationHealthProbe(
@@ -4300,6 +4428,12 @@ function assertCdpCall(
   if (!params || typeof params !== "object" || Array.isArray(params)) {
     throw new TypeError("cdp params must be an object");
   }
+  assertNoSessionIdInParams(
+    apiName,
+    method,
+    params,
+    `${apiName} selects its own session and cannot route to another one.`,
+  );
   validatePublicApiOptions(apiName, options);
 }
 

@@ -2,8 +2,89 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
 
-import { hasReturnStatement, js } from "../dist/src/cdp-eval.js";
+import { cdp, hasReturnStatement, js } from "../dist/src/cdp-eval.js";
 import { setOverrides } from "../dist/src/state.js";
+
+async function withRecordedCdp(run) {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride: async (method, params, sessionId) => {
+      calls.push({ method, params, sessionId });
+      return {};
+    },
+  });
+  try {
+    await run(calls);
+  } finally {
+    restore();
+  }
+}
+
+test("cdp rejects a sessionId inside params instead of running in the page session", async () => {
+  await withRecordedCdp(async (calls) => {
+    await assert.rejects(
+      () => cdp("Runtime.evaluate", { expression: "1", sessionId: "s1" }),
+      (error) => {
+        assert(error instanceof TypeError);
+        assert.match(error.message, /Runtime\.evaluate/);
+        assert.match(error.message, /cdp\(method, params, sessionId\)/);
+        return true;
+      },
+    );
+    assert.deepEqual(calls, [], "the command must never reach the browser");
+  });
+});
+
+test("cdp routes a sessionId passed as the third argument", async () => {
+  await withRecordedCdp(async (calls) => {
+    await cdp("Runtime.evaluate", { expression: "1" }, "s1");
+    assert.deepEqual(calls, [
+      {
+        method: "Runtime.evaluate",
+        params: { expression: "1" },
+        sessionId: "s1",
+      },
+    ]);
+  });
+});
+
+test("cdp keeps Target commands whose protocol params define sessionId", async () => {
+  await withRecordedCdp(async (calls) => {
+    await cdp("Target.detachFromTarget", { sessionId: "s1" });
+    await cdp("Target.sendMessageToTarget", { sessionId: "s1", message: "{}" });
+    assert.deepEqual(
+      calls.map(({ method, params, sessionId }) => [
+        method,
+        params.sessionId,
+        sessionId,
+      ]),
+      [
+        ["Target.detachFromTarget", "s1", undefined],
+        ["Target.sendMessageToTarget", "s1", undefined],
+      ],
+    );
+  });
+});
+
+test("cdp rejects a sessionId on Target commands that do not define it", async () => {
+  await withRecordedCdp(async (calls) => {
+    for (const [method, params] of [
+      ["Target.getTargets", {}],
+      ["Target.attachToTarget", { targetId: "t1", flatten: true }],
+      ["Target.getTargetInfo", { targetId: "t1" }],
+    ]) {
+      await assert.rejects(
+        () => cdp(method, { ...params, sessionId: "s1" }),
+        (error) => {
+          assert(error instanceof TypeError);
+          assert(error.message.includes(method));
+          return true;
+        },
+      );
+    }
+    assert.deepEqual(calls, [], "the command must never reach the browser");
+  });
+});
 
 test("hasReturnStatement ignores returns inside nested functions", () => {
   for (const expression of [

@@ -18,20 +18,20 @@ From the repository root, build all ten artifacts with one command:
 npm --prefix plugins/ego run package
 ```
 
-The output directory is `dist/plugins/ego-v2.2.0/`:
+The output directory is `dist/plugins/ego-v2.2.1/`:
 
 | Host             | Artifact                          | Contents                                           |
 | ---------------- | --------------------------------- | -------------------------------------------------- |
-| Claude Code      | `ego-claude-code-v2.2.0.zip`      | Claude plugin                                      |
-| Codex            | `ego-codex-v2.2.0.zip`            | Codex plugin at the archive root, plus marketplace |
-| Cursor           | `ego-cursor-v2.2.0.zip`           | Cursor plugin                                      |
-| GitHub Copilot   | `ego-github-copilot-v2.2.0.zip`   | Agent Plugins plugin, plus marketplace             |
-| Grok Build       | `ego-grok-build-v2.2.0.zip`       | Agent Plugins and Claude-compatible manifests      |
-| WorkBuddy        | `ego-workbuddy-v2.2.0.zip`        | Local marketplace and CodeBuddy manifest           |
-| QwenWork Desktop | `ego-qwenwork-v2.2.0.zip`         | Claude-compatible expert kit                       |
-| OpenCode         | `ego-opencode-v2.2.0.tgz`         | `@ego-lite/opencode-plugin` npm package            |
-| DeepSeek Harness | `ego-deepseek-harness-v2.2.0.tgz` | `@ego-lite/dsh-plugin` npm bundle                  |
-| Pi               | `ego-pi-v2.2.0.tgz`               | `@ego-lite/pi-plugin` Pi package                   |
+| Claude Code      | `ego-claude-code-v2.2.1.zip`      | Claude plugin                                      |
+| Codex            | `ego-codex-v2.2.1.zip`            | Codex plugin at the archive root, plus marketplace |
+| Cursor           | `ego-cursor-v2.2.1.zip`           | Cursor plugin                                      |
+| GitHub Copilot   | `ego-github-copilot-v2.2.1.zip`   | Agent Plugins plugin, plus marketplace             |
+| Grok Build       | `ego-grok-build-v2.2.1.zip`       | Agent Plugins and Claude-compatible manifests      |
+| WorkBuddy        | `ego-workbuddy-v2.2.1.zip`        | Local marketplace and CodeBuddy manifest           |
+| QwenWork Desktop | `ego-qwenwork-v2.2.1.zip`         | Claude-compatible expert kit                       |
+| OpenCode         | `ego-opencode-v2.2.1.tgz`         | `@ego-lite/opencode-plugin` npm package            |
+| DeepSeek Harness | `ego-deepseek-harness-v2.2.1.tgz` | `@ego-lite/dsh-plugin` npm bundle                  |
+| Pi               | `ego-pi-v2.2.1.tgz`               | `@ego-lite/pi-plugin` Pi package                   |
 
 Every ZIP includes a host-specific `README.md` at its root; npm archives include
 it under `package/`. The WorkBuddy ZIP contains a marketplace root with the
@@ -258,7 +258,7 @@ keep it in place; OpenCode does not install the `.tgz` itself:
 
 ```bash
 mkdir -p /absolute/path/to/ego-opencode
-tar -xzf /absolute/path/to/ego-opencode-v2.2.0.tgz -C /absolute/path/to/ego-opencode
+tar -xzf /absolute/path/to/ego-opencode-v2.2.1.tgz -C /absolute/path/to/ego-opencode
 opencode plugin /absolute/path/to/ego-opencode/package -g
 ```
 
@@ -289,7 +289,7 @@ Only a package added by name receives update notices. To try a local npm
 archive instead, add its path; DSH copies the archive into the profile:
 
 ```bash
-dsh plugin --profile web add /absolute/path/to/ego-deepseek-harness-v2.2.0.tgz
+dsh plugin --profile web add /absolute/path/to/ego-deepseek-harness-v2.2.1.tgz
 ```
 
 The bundle declares `engines.dsh` as `>=0.2.0`, and DSH refuses it on earlier
@@ -308,7 +308,7 @@ Install the npm package, or a local npm archive:
 
 ```bash
 pi install npm:@ego-lite/pi-plugin
-pi install "npm:@ego-lite/pi-plugin@file:/absolute/path/to/ego-pi-v2.2.0.tgz"
+pi install "npm:@ego-lite/pi-plugin@file:/absolute/path/to/ego-pi-v2.2.1.tgz"
 ```
 
 Pass the archive through the `npm:` source: a bare `.tgz` path installs without

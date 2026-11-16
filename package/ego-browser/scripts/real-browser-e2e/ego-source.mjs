@@ -26,6 +26,14 @@ export function egoSource(body, context) {
     const metadataPath = ${JSON.stringify(metadataPath)};
     const keepTaskSpace = ${JSON.stringify(keepTaskSpace)};
 
+    // Budget for a Page action that has to wheel-scroll its target into view
+    // first. While the browser window is covered (for example by the terminal
+    // running this suite), macOS slows its frames to about one per second,
+    // and Chromium holds the next mouse event's acknowledgement for up to a
+    // second until the wheel gesture ends. Such an action is still correct
+    // but can take more than the 3 s default.
+    const scrollingActionTimeout = 10_000;
+
     // The Ego Lite launcher does not forward arbitrary environment variables
     // to the SDK Node process. Set isolated test configuration before the first
     // taskSpace() call; page-model reads these values lazily.

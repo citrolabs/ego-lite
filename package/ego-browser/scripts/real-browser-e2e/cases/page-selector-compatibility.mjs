@@ -183,7 +183,7 @@ export function pageSelectorCompatibilityCase() {
       ":has-text includes text from the candidate's open shadow root"
     );
 
-    await page.click('button:has-text("Run iframe action")');
+    await page.click('button:has-text("Run iframe action")', { timeout: scrollingActionTimeout });
     assertEqual(
       await page.evaluate(() =>
         document

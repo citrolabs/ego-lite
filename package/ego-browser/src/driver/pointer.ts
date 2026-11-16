@@ -1,6 +1,11 @@
 import { cdp, js } from "../cdp-eval.js";
 import { browserCdp } from "../browser-runtime.js";
-import { buildSelectorCenterJs, isRawSelector } from "../element-resolver.js";
+import {
+  buildFindElementJs,
+  ElementResolutionError,
+  isRawSelector,
+} from "../element-resolver.js";
+import { CLICK_POINT_HELPERS } from "./action-target.js";
 import { elementCenter } from "./observe.js";
 import { resolveAndCall } from "./element-ops.js";
 
@@ -88,7 +93,9 @@ type ClickTarget = Point & { probeId: string | null };
  */
 
 /**
- * Click a mouse target.
+ * Click a mouse target. An element target whose point is outside the viewport
+ * is scrolled into view first, and the click rejects if it still cannot be
+ * reached. Explicit viewport coordinates are dispatched as given.
  * @param {MouseTarget} target CSS selector, @ref, viewport point, or selector-relative point.
  * @param {{button?: "left"|"middle"|"right", clickCount?: number, clicks?: number, label?: string}} [options]
  * @returns {Promise<void>}
@@ -250,8 +257,64 @@ async function resolveClickTarget(target: MouseTarget): Promise<ClickTarget> {
     const point = await resolveRawSelectorClickTarget(target);
     if (point) return point;
   }
-  const point = await resolveMouseTarget(target);
+  const point = await resolveElementClickPoint(target);
   return { ...point, probeId: await installClickProbe(point) };
+}
+
+/**
+ * Resolve a click point on the shared resolver path, bringing an element target
+ * into the viewport when its point falls outside. Explicit coordinates are the
+ * caller's own decision and pass through unchanged.
+ */
+async function resolveElementClickPoint(target: MouseTarget): Promise<Point> {
+  const point = await resolveMouseTarget(target);
+  const selector =
+    typeof target === "string"
+      ? target
+      : target && typeof target === "object" && "selector" in target
+        ? target.selector
+        : "";
+  if (!selector || (await pointInViewport(point))) return point;
+  const offset =
+    typeof target === "object" &&
+    "selector" in target &&
+    (target.x !== undefined || target.y !== undefined)
+      ? { x: numberValue(target.x), y: numberValue(target.y) }
+      : null;
+  const { result, sessionId } = await resolveAndCall(
+    selector,
+    `function(offset){${CLICK_POINT_HELPERS}
+      return clickPointForElement(this, offset);
+    }`,
+    [offset],
+  );
+  const value = result.result?.value;
+  if (value?.error) throw clickPointError(selector, value.error);
+  if (typeof value?.x !== "number" || typeof value?.y !== "number") {
+    throw clickPointError(selector, "element position is unavailable");
+  }
+  return { x: value.x, y: value.y, sessionId };
+}
+
+async function pointInViewport(point: Point): Promise<boolean> {
+  const { x, y } = point;
+  const result = await cdp(
+    "Runtime.evaluate",
+    {
+      expression: `${x} >= 0 && ${y} >= 0 && ${x} < innerWidth && ${y} < innerHeight`,
+      returnByValue: true,
+      awaitPromise: false,
+    },
+    point.sessionId,
+  );
+  return result.result?.value !== false;
+}
+
+function clickPointError(selector: string, reason: string) {
+  return new ElementResolutionError(
+    `click failed: ${reason}: ${selector}`,
+    "transient",
+  );
 }
 
 async function resolveRawSelectorClickTarget(
@@ -260,10 +323,13 @@ async function resolveRawSelectorClickTarget(
   if (!isRawSelector(selector)) return null;
   const id = newProbeId("click");
   const expression = `(() => {
-    const center = ${buildSelectorCenterJs(selector)};
-    if (!center) return null;
-    ${clickProbeInstallJs(id, "center")}
-    return { x: center.x, y: center.y };
+    ${CLICK_POINT_HELPERS}
+    const element = ${buildFindElementJs(selector)};
+    if (!element) return null;
+    const point = clickPointForElement(element, null);
+    if (point.error) return point;
+    ${clickProbeInstallJs(id, "point")}
+    return { x: point.x, y: point.y };
   })()`;
   const result = await cdp("Runtime.evaluate", {
     expression,
@@ -277,6 +343,7 @@ async function resolveRawSelectorClickTarget(
   // installs one after resolving.
   if (result.exceptionDetails) return null;
   const value = result.result?.value;
+  if (value?.error) throw clickPointError(selector, value.error);
   if (typeof value?.x !== "number" || typeof value?.y !== "number") {
     return null;
   }

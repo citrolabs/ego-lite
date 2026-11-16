@@ -245,6 +245,53 @@ export const SCROLL_TARGET_HELPERS = `
 `;
 
 /**
+ * Browser-side point for the v1 `click()` helper. A point already inside the
+ * viewport is kept. Otherwise the element is scrolled to the viewport center;
+ * if it cannot get there (fixed position, end of the scroll range), a click
+ * without a caller-chosen offset settles for its visible part. A point that is
+ * still outside is reported, because input dispatched there hits nothing.
+ *
+ * Input goes to the session's top viewport, so a point in a same-process iframe
+ * is translated out of it and has to be visible in both. `frameElement` is null
+ * across an origin boundary, where a separate session owns the frame's input.
+ */
+export const CLICK_POINT_HELPERS = `
+  ${SCROLL_TARGET_HELPERS}
+  function clickPointForElement(element, offset) {
+    const view = element.ownerDocument.defaultView;
+    const inViewport = (point, owner) =>
+      point.x >= 0 && point.y >= 0 &&
+      point.x < owner.innerWidth && point.y < owner.innerHeight;
+    const inputPoint = (point) => {
+      if (!point || !inViewport(point, view)) return null;
+      let { x, y } = point;
+      let current = view;
+      while (current.frameElement) {
+        const owner = current.frameElement;
+        const rect = owner.getBoundingClientRect();
+        x += rect.left + owner.clientLeft;
+        y += rect.top + owner.clientTop;
+        current = current.parent;
+      }
+      return inViewport({ x, y }, current) ? { x, y } : null;
+    };
+    const elementPoint = () => {
+      const rect = element.getBoundingClientRect();
+      return offset
+        ? { x: rect.x + offset.x, y: rect.y + offset.y }
+        : { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    };
+    const unscrolled = inputPoint(elementPoint());
+    if (unscrolled) return unscrolled;
+    element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+    const point =
+      inputPoint(elementPoint()) ||
+      (offset ? null : inputPoint(actionPointForElement(element)));
+    return point || { error: "element is not visible in the viewport" };
+  }
+`;
+
+/**
  * Scroll targeting plus the enabled check, for a forced click that skips the
  * hit test but still refuses a disabled element.
  */

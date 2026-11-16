@@ -10,6 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { runInNewContext } from "node:vm";
 
 import { NativeOperationGate } from "../dist/src/native-gate.js";
 import {
@@ -17,6 +18,7 @@ import {
   PageUnresponsiveError,
 } from "../dist/src/browser-runtime.js";
 import { PageLedgerStore } from "../dist/src/page-ledger.js";
+import { flushSink, resetSink } from "../dist/src/output-sink.js";
 import {
   captureTaskSpaceUserBoundary,
   createTaskSpaceHandle,
@@ -731,6 +733,7 @@ function createFixture(rootDir) {
         if (activeTarget === params.targetId) activeTarget = null;
         return { success: true };
       }
+      if (method === "Target.detachFromTarget") return {};
       throw new Error(`unexpected CDP method ${method}`);
     },
     async showAgentMousePosition(x, y) {
@@ -1358,6 +1361,45 @@ test("Page.waitForFunction polls one Page with one JSON argument", async () => {
   });
 });
 
+test("Page.waitForFunction resolves to true, not the predicate's value", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    const task = taskForRound(fixture, "round-a", {
+      // Run the real probe, because the shared fixture answers it with a
+      // canned `matched` and would not exercise the coercion.
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (
+          method === "Runtime.evaluate" &&
+          params.expression.includes("__egoWaitForFunction")
+        ) {
+          const value = await runInNewContext(params.expression, {
+            location: { href: "https://example.test/wait" },
+            document: { title: "wait" },
+          });
+          return { result: { type: "object", value } };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/wait");
+
+    for (const predicate of [
+      () => "loaded",
+      () => ({ status: "ok" }),
+      () => 42,
+      async () => "loaded",
+      "'loaded'",
+      "({ status: 'ok' })",
+    ]) {
+      assert.equal(await page.waitForFunction(predicate), true);
+    }
+    await assert.rejects(
+      () => page.waitForFunction(() => 0, undefined, { timeout: 60 }),
+      /page\.waitForFunction timed out after 60ms/,
+    );
+  });
+});
+
 test("Page.waitForFunction validates input and reports its timeout", async () => {
   await withFixture(async (fixture) => {
     const task = taskForRound(fixture, "round-a");
@@ -1659,6 +1701,268 @@ test("TaskSpace finish closes the space when a new Page follows the last close",
       preservedUnmanagedCount: 0,
     });
     assert.deepEqual(lifecycleCalls, ["close"]);
+  });
+});
+
+async function finishKeepingFirstPage(fixture, lifecycleCalls) {
+  const { task } = finishFixtureTask(fixture, lifecycleCalls);
+  const kept = await openTestPage(task, "https://example.test/kept");
+  await task.finish({ keep: [kept.label] });
+  lifecycleCalls.length = 0;
+  return kept.targetId;
+}
+
+function capturedRoundOutput() {
+  let output = "";
+  flushSink(
+    {
+      write(chunk) {
+        output += chunk;
+      },
+    },
+    false,
+  );
+  resetSink();
+  return output;
+}
+
+test("a claimed space closes when the agent closes task.pages() without adopting", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const lifecycleCalls = [];
+    const keptTarget = await finishKeepingFirstPage(fixture, lifecycleCalls);
+
+    const { task: claimed } = finishFixtureTask(fixture, lifecycleCalls);
+    const pages = await claimed.pages();
+    assert.equal(pages.length, 0, "labels ended with the task");
+    for (const page of pages) await page.close();
+    assert.equal(fixture.tabs.has(keptTarget), true, "nothing was closed yet");
+
+    const receipt = await claimed.finish({ keep: [] });
+
+    assert.deepEqual(receipt, {
+      spaceId: 7,
+      closedSpace: true,
+      keptManagedLabels: [],
+      closedManagedLabels: [],
+      preservedUnmanagedCount: 0,
+    });
+    assert.deepEqual(lifecycleCalls, ["close"]);
+    assert.doesNotMatch(capturedRoundOutput(), /did not close/);
+  });
+});
+
+test("a claimed space closes when every adopted Page is closed before finish", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    await finishKeepingFirstPage(fixture, lifecycleCalls);
+
+    const { task: claimed } = finishFixtureTask(fixture, lifecycleCalls);
+    await claimed.adopt((await claimed.tabs())[0].page);
+    for (const page of await claimed.pages()) await page.close();
+    assert.equal((await claimed.pages()).length, 0);
+
+    const receipt = await claimed.finish({ keep: [] });
+
+    assert.equal(receipt.closedSpace, true);
+    assert.deepEqual(lifecycleCalls, ["close"]);
+  });
+});
+
+test("a three-reply conversation closes the space it kept and claimed twice", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const keptTarget = await finishKeepingFirstPage(fixture, lifecycleCalls);
+
+    const { task: followUp } = finishFixtureTask(fixture, lifecycleCalls);
+    const page = await followUp.adopt((await followUp.tabs())[0].page);
+    assert.equal(page.targetId, keptTarget);
+    await page.goto("https://example.test/follow-up");
+    const kept = await followUp.finish({ keep: [page.label] });
+    assert.equal(kept.closedSpace, false);
+    assert.deepEqual(lifecycleCalls, ["finish"]);
+
+    lifecycleCalls.length = 0;
+    const { task: summary } = finishFixtureTask(fixture, lifecycleCalls);
+    assert.equal((await summary.pages()).length, 0);
+    const receipt = await summary.finish({ keep: [] });
+
+    assert.equal(receipt.closedSpace, true);
+    assert.deepEqual(lifecycleCalls, ["close"]);
+  });
+});
+
+test("a claimed space closes with every tab kept by keep all", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const { task } = finishFixtureTask(fixture, lifecycleCalls);
+    await openTestPage(task, "https://example.test/one");
+    await openTestPage(task, "https://example.test/two");
+    await task.finish({ keep: "all" });
+    lifecycleCalls.length = 0;
+
+    const { task: claimed } = finishFixtureTask(fixture, lifecycleCalls);
+    const receipt = await claimed.finish({ keep: [] });
+
+    assert.equal(receipt.closedSpace, true);
+    assert.equal(receipt.preservedUnmanagedCount, 0);
+    assert.deepEqual(lifecycleCalls, ["close"]);
+  });
+});
+
+test("a claim forgets a kept tab the user closed in the meantime", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const { ledger, task } = finishFixtureTask(fixture, lifecycleCalls);
+    const closedByUser = await openTestPage(task, "https://example.test/one");
+    const stillOpen = await openTestPage(task, "https://example.test/two");
+    await task.finish({ keep: "all" });
+    lifecycleCalls.length = 0;
+    fixture.tabs.delete(closedByUser.targetId);
+
+    const { task: claimed } = finishFixtureTask(fixture, lifecycleCalls);
+    assert.equal((await claimed.tabs()).length, 1);
+    assert.deepEqual((await ledger.read(7)).retainedTargets, [
+      stillOpen.targetId,
+    ]);
+
+    const receipt = await claimed.finish({ keep: [] });
+    assert.equal(receipt.closedSpace, true);
+    assert.deepEqual(lifecycleCalls, ["close"]);
+  });
+});
+
+test("a kept tab of unknown origin stays protected after a claim", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const lifecycleCalls = [];
+    const { ledger, task } = finishFixtureTask(fixture, lifecycleCalls);
+    const agentPage = await openTestPage(task, "https://example.test/agent");
+    fixture.addExternalTab("target-user", "https://example.test/user");
+    await ledger.keepUnmanaged(7, "target-user", "unknown");
+    const userTab = (await task.tabs()).find(
+      (tab) => tab.targetId === "target-user",
+    );
+    const adopted = await task.adopt(userTab.page);
+    assert.equal(adopted.openedBy, "unknown");
+    await task.finish({ keep: "all" });
+    lifecycleCalls.length = 0;
+    resetSink();
+
+    const { task: claimed } = finishFixtureTask(fixture, lifecycleCalls);
+    const origins = Object.fromEntries(
+      (await claimed.tabs()).map((tab) => [tab.targetId, tab.openedBy]),
+    );
+    assert.deepEqual(origins, {
+      [agentPage.targetId]: "agent",
+      "target-user": "unknown",
+    });
+
+    const receipt = await claimed.finish({ keep: [] });
+
+    assert.equal(receipt.closedSpace, false);
+    assert.deepEqual(lifecycleCalls, ["finish"]);
+    assert.equal(fixture.tabs.has(agentPage.targetId), false);
+    assert.equal(fixture.tabs.has("target-user"), true);
+    assert.match(capturedRoundOutput(), /did not close task space 7/);
+  });
+});
+
+test("finish reports an unclosed space only when it was asked to keep nothing", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const lifecycleCalls = [];
+    await finishKeepingFirstPage(fixture, lifecycleCalls);
+    fixture.addExternalTab("target-user", "https://example.test/user");
+
+    const { task: claimed } = finishFixtureTask(fixture, lifecycleCalls);
+    const receipt = await claimed.finish({ keep: "all" });
+
+    assert.equal(receipt.closedSpace, false);
+    assert.equal(receipt.preservedUnmanagedCount, 1);
+    assert.doesNotMatch(capturedRoundOutput(), /did not close/);
+  });
+});
+
+test("TaskSpace finish protects a tab opened while the user owned the space", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const lifecycleCalls = [];
+    const keptTarget = await finishKeepingFirstPage(fixture, lifecycleCalls);
+    fixture.addExternalTab("target-user", "https://example.test/user");
+
+    const { task: claimed } = finishFixtureTask(fixture, lifecycleCalls);
+    const origins = Object.fromEntries(
+      (await claimed.tabs()).map((tab) => [tab.targetId, tab.openedBy]),
+    );
+    assert.deepEqual(origins, {
+      [keptTarget]: "agent",
+      "target-user": "unknown",
+    });
+    const receipt = await claimed.finish({ keep: [] });
+
+    assert.equal(receipt.closedSpace, false);
+    assert.equal(receipt.preservedUnmanagedCount, 1);
+    assert.deepEqual(lifecycleCalls, ["finish"]);
+    assert.equal(fixture.tabs.has(keptTarget), false, "the kept tab is closed");
+    assert.equal(fixture.tabs.has("target-user"), true, "the user tab remains");
+    assert.match(
+      capturedRoundOutput(),
+      /did not close task space 7: 1 tab\(s\) of user or unknown origin/,
+    );
+    resetSink();
+  });
+});
+
+test("TaskSpace finish leaves earlier kept tabs open unless it keeps nothing", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const keptTarget = await finishKeepingFirstPage(fixture, lifecycleCalls);
+
+    const { task: second } = finishFixtureTask(fixture, lifecycleCalls);
+    const secondPage = await openTestPage(second, "https://example.test/two");
+    const receipt = await second.finish({ keep: [secondPage.label] });
+    assert.equal(receipt.closedSpace, false);
+    assert.equal(
+      fixture.tabs.has(keptTarget),
+      true,
+      "named keep does not close it",
+    );
+
+    const { task: third } = finishFixtureTask(fixture, lifecycleCalls);
+    const keepAll = await third.finish({ keep: "all" });
+    assert.equal(keepAll.closedSpace, false);
+    assert.equal(
+      fixture.tabs.has(keptTarget),
+      true,
+      "keep all does not close it",
+    );
+
+    lifecycleCalls.length = 0;
+    const { task: last } = finishFixtureTask(fixture, lifecycleCalls);
+    const closing = await last.finish({ keep: [] });
+    assert.equal(closing.closedSpace, true, "origin survives repeated rounds");
+    assert.deepEqual(lifecycleCalls, ["close"]);
+  });
+});
+
+test("a claimed space closes when its kept tab is adopted but not closed before finish", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const lifecycleCalls = [];
+    const keptTarget = await finishKeepingFirstPage(fixture, lifecycleCalls);
+
+    const { task: claimed } = finishFixtureTask(fixture, lifecycleCalls);
+    const [tab] = await claimed.tabs();
+    assert.equal(tab.targetId, keptTarget);
+    const adopted = await claimed.adopt(tab.page);
+    assert.equal(adopted.openedBy, "agent");
+
+    const receipt = await claimed.finish({ keep: [] });
+    assert.equal(receipt.closedSpace, true);
+    assert.deepEqual(receipt.closedManagedLabels, [adopted.label]);
+    assert.deepEqual(lifecycleCalls, ["close"]);
+    assert.doesNotMatch(capturedRoundOutput(), /did not close/);
   });
 });
 
@@ -5301,6 +5605,50 @@ test("Page and TaskSpace CDP commands preserve their intended scope", async () =
   });
 });
 
+test("Page and TaskSpace CDP reject a sessionId they would not honour", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+    fixture.calls.length = 0;
+
+    await assert.rejects(
+      () =>
+        page.cdp("Runtime.evaluate", { expression: "1", sessionId: "other" }),
+      (error) => {
+        assert(error instanceof TypeError);
+        assert.match(error.message, /Page\.cdp/);
+        assert.match(error.message, /Runtime\.evaluate/);
+        return true;
+      },
+    );
+    await assert.rejects(
+      () => task.cdp("Browser.getVersion", { sessionId: "other" }),
+      /TaskSpace\.cdp.*Browser\.getVersion/,
+    );
+    await assert.rejects(
+      () => task.cdp("Target.getTargets", { sessionId: "other" }),
+      /TaskSpace\.cdp.*Target\.getTargets/,
+    );
+    assert.deepEqual(
+      fixture.calls.filter(([kind]) => kind === "cdp"),
+      [],
+      "a rejected command must never reach the browser",
+    );
+
+    await task.cdp("Target.detachFromTarget", { sessionId: "other" });
+    assert(
+      fixture.calls.some(
+        ([kind, method, params, sessionId]) =>
+          kind === "cdp" &&
+          method === "Target.detachFromTarget" &&
+          params.sessionId === "other" &&
+          sessionId === undefined,
+      ),
+      "Target commands that define params.sessionId must still pass through",
+    );
+  });
+});
+
 test("Page waits and events remain isolated to the addressed target", async () => {
   await withFixture(async (fixture) => {
     const task = taskForRound(fixture, "round-a");
@@ -7673,6 +8021,224 @@ test("snapshot names a probably hung renderer when stopping does not help", asyn
           error.message,
           /did not answer Page\.getFrameTree within 15000ms, and still did not answer after Page\.stopLoading, so its renderer is probably hung\./,
         );
+        assert.match(error.message, /task\.newPage\(\)/);
+        return true;
+      },
+    );
+  });
+});
+
+test("screenshot stops a pending navigation when the Page never answers its renderer command", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let held = true;
+    const stops = [];
+    const task = taskForRound(fixture, "round-a", {
+      async screenshot(path, options, sessionId) {
+        if (held) {
+          throw new CdpRequestTimeoutError(
+            "Runtime.evaluate",
+            15_000,
+            sessionId,
+          );
+        }
+        return "/tmp/after-stop.png";
+      },
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.stopLoading") {
+          stops.push({ sessionId, timeoutMs });
+          held = false;
+          return {};
+        }
+        if (method === "Page.getFrameTree" && !held) {
+          return {
+            result: {
+              frameTree: {
+                frame: {
+                  id: "frame-1",
+                  loaderId: "loader-old",
+                  url: "https://example.test/previous",
+                },
+              },
+            },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/previous");
+
+    await assert.rejects(
+      () => page.screenshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_UNRESPONSIVE");
+        assert.equal(error.method, "Runtime.evaluate");
+        assert.equal(error.waitedMs, 15_000);
+        assert.equal(error.stopped, true);
+        assert.equal(error.currentUrl, "https://example.test/previous");
+        assert.match(
+          error.message,
+          /^Page p1 .*did not answer Runtime\.evaluate within 15000ms: a main-frame navigation had started but not committed\. It was stopped once that wait ran out/,
+        );
+        return true;
+      },
+    );
+    assert.equal(stops.length, 1);
+    assert.equal(typeof stops[0].sessionId, "string");
+    assert.equal(await page.screenshot(), "/tmp/after-stop.png");
+  });
+});
+
+test("a screenshot capture timeout reports EGO_PAGE_UNRESPONSIVE naming Page.captureScreenshot", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a", {
+      async screenshot(path, options, sessionId) {
+        throw new CdpRequestTimeoutError(
+          "Page.captureScreenshot",
+          15_000,
+          sessionId,
+        );
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/canvas");
+
+    await assert.rejects(
+      () => page.screenshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_UNRESPONSIVE");
+        assert.equal(error.method, "Page.captureScreenshot");
+        assert.equal(error.waitedMs, 15_000);
+        return true;
+      },
+    );
+  });
+});
+
+test("a browser-level command timeout is not treated as an unresponsive Page", async () => {
+  await withFixture(async (fixture) => {
+    let stops = 0;
+    const task = taskForRound(fixture, "round-a", {
+      async screenshot(path, options, sessionId) {
+        throw new CdpRequestTimeoutError("Target.getTargetInfo", 15_000);
+      },
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.stopLoading") stops += 1;
+        return fixture.services.cdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/browser");
+
+    await assert.rejects(
+      () => page.screenshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_CDP_REQUEST_TIMEOUT");
+        assert.equal(error.method, "Target.getTargetInfo");
+        return true;
+      },
+    );
+    assert.equal(stops, 0);
+  });
+});
+
+test("evaluate stops a pending navigation when the Page never answers", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let held = false;
+    let terminateCalls = 0;
+    const stops = [];
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (
+          method === "Runtime.evaluate" &&
+          params.expression.includes("__egoPageEvaluate") &&
+          params.expression.includes("pendingProbe")
+        ) {
+          held = true;
+        }
+        if (held && method === "Runtime.evaluate") {
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (held && method === "Runtime.terminateExecution") {
+          terminateCalls += 1;
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Page.stopLoading") {
+          stops.push({ sessionId, timeoutMs });
+          held = false;
+          return {};
+        }
+        if (method === "Page.getFrameTree" && stops.length > 0) {
+          return {
+            result: {
+              frameTree: {
+                frame: {
+                  id: "frame-1",
+                  loaderId: "loader-old",
+                  url: "https://example.test/previous",
+                },
+              },
+            },
+          };
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/previous");
+
+    await assert.rejects(
+      () => page.evaluate(() => "pendingProbe"),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_EVALUATION_TIMED_OUT");
+        assert.equal(error.stopped, true);
+        assert.equal(error.currentUrl, "https://example.test/previous");
+        assert.equal(error.pageResponsive, true);
+        assert.equal(error.executionStopped, false);
+        assert.equal(error.mayHaveLateEffects, true);
+        assert.match(
+          error.message,
+          /^page\.evaluate on Page p1 timed out after \d+ms: a main-frame navigation had started but not committed, so the Page answered nothing\. It was stopped once that wait ran out, so the Page answers again and shows https:\/\/example\.test\/previous; the evaluation may still run late/,
+        );
+        assert.match(error.message, /page\.goto\(url, \{ timeout \}\)/);
+        return true;
+      },
+    );
+    assert.equal(terminateCalls, 1, "termination is still attempted first");
+    assert.equal(stops.length, 1);
+  });
+});
+
+test("evaluate names a probably hung renderer when stopping does not help", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let held = false;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (
+          method === "Runtime.evaluate" &&
+          params.expression.includes("hungProbe")
+        ) {
+          held = true;
+        }
+        if (
+          held &&
+          (method === "Runtime.evaluate" ||
+            method === "Runtime.terminateExecution" ||
+            method === "Page.stopLoading")
+        ) {
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/hung");
+
+    await assert.rejects(
+      () => page.evaluate(() => "hungProbe"),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_EVALUATION_TIMED_OUT");
+        assert.equal(error.stopped, false);
+        assert.equal(error.pageResponsive, false);
+        assert.match(error.message, /renderer is probably hung/);
         assert.match(error.message, /task\.newPage\(\)/);
         return true;
       },

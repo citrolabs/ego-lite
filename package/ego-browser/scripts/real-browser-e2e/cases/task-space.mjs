@@ -152,7 +152,12 @@ export function taskSpaceCase() {
       !retainedTabs.some((tab) => tab.url.includes("v2-lifecycle=discard")),
       "task.finish closes unlisted Agent Pages"
     );
-    await completeTaskSpace(finishSpaceId, { keep: false });
+    assert(
+      retainedTabs.some((tab) => tab.url.includes("v2-lifecycle=retain") && tab.openedBy === "agent"),
+      "a claimed space remembers the tab the agent kept"
+    );
+    const reclaimedReceipt = await reclaimedFinishedTask.finish({ keep: [] });
+    assertEqual(reclaimedReceipt.closedSpace, true, "empty keep closes a claimed space holding only kept tabs");
 
     const anchorTask = await taskSpace(taskName + " v2 finish after last close");
     const anchorSpaceId = anchorTask.spaceId;

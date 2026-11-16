@@ -1,18 +1,25 @@
+// Each recovery path below waits out the runtime's response timeout before
+// the harness can react, so this process shortens that timeout (the SDK reads
+// it per call) and scales the page-side delays with it. The default stays
+// 15 s for agents; the unit tests pin that.
 export function pageEvaluateTimeoutCase() {
   return `
+    const transportMs = 4_000;
+    const executionMs = transportMs - 1_000;
+    process.env.EGO_BROWSER_RESPONSE_TIMEOUT_MS = String(transportMs);
     const task = await taskSpace(taskName);
     const page = await newPageAt(task, baseUrl + "/?page-evaluate-timeout=" + Date.now());
 
     const syncStartedAt = Date.now();
     let syncError;
     try {
-      await page.evaluate(() => {
+      await page.evaluate(({ executionMs, transportMs }) => {
         setTimeout(() => {
           window.__scheduledBeforeEvaluateTimeout = "finished";
-        }, 15_500);
-        const deadline = Date.now() + 20_000;
+        }, executionMs + 1_000);
+        const deadline = Date.now() + transportMs + 4_000;
         while (Date.now() < deadline) {}
-      });
+      }, { executionMs, transportMs });
     } catch (error) {
       syncError = error;
     }
@@ -29,8 +36,8 @@ export function pageEvaluateTimeoutCase() {
     );
     assertEqual(syncError?.pageResponsive, true, "the Page recovers from synchronous execution");
     assert(
-      Date.now() - syncStartedAt < 18_000,
-      "the execution safety deadline fires before the callback's own 20 second loop"
+      Date.now() - syncStartedAt < transportMs + 3_000,
+      "the execution safety deadline fires before the callback's own loop ends"
     );
     const quickStartedAt = Date.now();
     assertEqual(await page.evaluate("1 + 1"), 2, "the next evaluation succeeds");
@@ -88,18 +95,18 @@ export function pageEvaluateTimeoutCase() {
     const fallbackStartedAt = Date.now();
     let fallbackError;
     try {
-      await page.evaluate(async () => {
+      await page.evaluate(async ({ executionMs, transportMs }) => {
         setTimeout(() => {
           window.__fallbackBlockStarted = true;
-          const deadline = Date.now() + 5_000;
+          const deadline = Date.now() + transportMs + 2_000;
           while (Date.now() < deadline) {}
           window.__fallbackBlockCompleted = true;
-        }, 13_500);
+        }, executionMs - 500);
         // Keep the evaluated Promise live past the transport timeout. An
         // unreferenced never-settling Promise may be collected by Chromium
         // before the scheduled blocking task starts.
-        await new Promise((resolve) => setTimeout(resolve, 20_000));
-      });
+        await new Promise((resolve) => setTimeout(resolve, transportMs + 6_000));
+      }, { executionMs, transportMs });
     } catch (error) {
       fallbackError = error;
     }
@@ -119,8 +126,8 @@ export function pageEvaluateTimeoutCase() {
       "the fallback health probe confirms that the Page recovered"
     );
     assert(
-      Date.now() - fallbackStartedAt < 18_000,
-      "the fallback interrupts the finite five-second block instead of waiting for it to finish"
+      Date.now() - fallbackStartedAt < transportMs + 3_000,
+      "the fallback interrupts the finite block instead of waiting for it to finish"
     );
     assertEqual(
       await page.evaluate("window.__fallbackBlockStarted"),
@@ -141,10 +148,10 @@ export function pageEvaluateTimeoutCase() {
     await page.evaluate("delete window.__lateEvaluateSideEffect");
     let asyncError;
     try {
-      await page.evaluate(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 16_000));
+      await page.evaluate(async (transportMs) => {
+        await new Promise((resolve) => setTimeout(resolve, transportMs + 1_000));
         window.__lateEvaluateSideEffect = "finished";
-      });
+      }, transportMs);
     } catch (error) {
       asyncError = error;
     }

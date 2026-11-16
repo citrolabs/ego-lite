@@ -3,8 +3,16 @@
 // stops. These cases pin the harness behavior on such a Page: public calls
 // stay inside one bounded wait, then stop the navigation and say which
 // document the Page shows, so the next call answers at once.
+//
+// That bounded wait is the runtime's response timeout. Both processes shorten
+// it (the SDK reads it per call) so the cases prove "one wait, not one per
+// setup command" in seconds instead of waiting out the 15 s default.
+const PENDING_NAVIGATION_RESPONSE_TIMEOUT_MS = 5_000;
+
 export function pagePendingNavigationCase() {
   return `
+    const transportMs = ${PENDING_NAVIGATION_RESPONSE_TIMEOUT_MS};
+    process.env.EGO_BROWSER_RESPONSE_TIMEOUT_MS = String(transportMs);
     const task = await taskSpace(taskName);
     const page = await newPageAt(
       task,
@@ -106,7 +114,7 @@ export function pagePendingNavigationCase() {
       "the error tells the agent how to load the pending document"
     );
     assert(
-      snapshotElapsed < 20_000,
+      snapshotElapsed < transportMs + 3_500,
       "snapshot gives up after one bounded wait, not one per setup command: " +
         snapshotElapsed
     );
@@ -171,8 +179,118 @@ export function pagePendingNavigationCase() {
   `;
 }
 
+// evaluate() and screenshot() reach the renderer through Runtime.evaluate
+// rather than frame discovery; they end in the same bounded wait and stop.
+export function pagePendingNavigationEvaluateScreenshotCase() {
+  return `
+    const transportMs = ${PENDING_NAVIGATION_RESPONSE_TIMEOUT_MS};
+    process.env.EGO_BROWSER_RESPONSE_TIMEOUT_MS = String(transportMs);
+    const task = await taskSpace(taskName);
+    const page = await newPageAt(
+      task,
+      baseUrl + "/nav-target?pending-navigation-eval=" + Date.now()
+    );
+    const heldUrl = baseUrl + "/hold-page?ms=120000";
+    const leavePending = (suffix) =>
+      page
+        .cdp("Page.navigate", { url: heldUrl + suffix }, { timeout: 500 })
+        .catch(() => {});
+
+    await leavePending("&eval=1");
+    const evaluateStartedAt = Date.now();
+    let evaluateError;
+    try {
+      await page.evaluate(() => document.title);
+    } catch (error) {
+      evaluateError = error;
+    }
+    const evaluateElapsed = Date.now() - evaluateStartedAt;
+    assertEqual(
+      evaluateError?.code,
+      "EGO_PAGE_EVALUATION_TIMED_OUT",
+      "evaluate during a pending navigation times out: " + evaluateError?.message
+    );
+    assertEqual(
+      evaluateError?.stopped,
+      true,
+      "evaluate stops the pending navigation once its wait ran out"
+    );
+    assertEqual(evaluateError?.pageResponsive, true, "the Page answers again");
+    assertIncludes(
+      evaluateError?.message,
+      "on Page " + page.label,
+      "the evaluate error names the Page"
+    );
+    assertIncludes(
+      evaluateError?.message,
+      "shows " + baseUrl + "/nav-target",
+      "the evaluate error says which document the Page shows now"
+    );
+    assert(
+      evaluateElapsed < transportMs * 2 + 4_000,
+      "evaluate gives up after one bounded wait: " + evaluateElapsed
+    );
+    const evaluateAgainStartedAt = Date.now();
+    assertEqual(
+      await page.evaluate(() => document.title),
+      "ego-lite nav target",
+      "the next evaluate answers on the previous document"
+    );
+    assert(
+      Date.now() - evaluateAgainStartedAt < 5_000,
+      "the next evaluate does not wait another full period: " +
+        (Date.now() - evaluateAgainStartedAt)
+    );
+
+    await leavePending("&shot=1");
+    const screenshotStartedAt = Date.now();
+    let screenshotError;
+    try {
+      await page.screenshot();
+    } catch (error) {
+      screenshotError = error;
+    }
+    const screenshotElapsed = Date.now() - screenshotStartedAt;
+    assertEqual(
+      screenshotError?.code,
+      "EGO_PAGE_UNRESPONSIVE",
+      "screenshot during a pending navigation reports the unresponsive Page: " +
+        screenshotError?.message
+    );
+    assertEqual(
+      screenshotError?.stopped,
+      true,
+      "screenshot stops the pending navigation once its wait ran out"
+    );
+    assertIncludes(
+      screenshotError?.message,
+      "Page " + page.label,
+      "the screenshot error names the Page"
+    );
+    assertIncludes(
+      screenshotError?.message,
+      "shows " + baseUrl + "/nav-target",
+      "the screenshot error says which document the Page shows now"
+    );
+    assert(
+      screenshotElapsed < transportMs * 2 + 4_000,
+      "screenshot gives up after one bounded wait: " + screenshotElapsed
+    );
+    const screenshotAgainStartedAt = Date.now();
+    await page.screenshot();
+    assert(
+      Date.now() - screenshotAgainStartedAt < 5_000,
+      "the next screenshot does not wait another full period: " +
+        (Date.now() - screenshotAgainStartedAt)
+    );
+    await page.close();
+  `;
+}
+
 export function pagePendingNavigationFreshProcessCase() {
   return `
+    const transportMs = ${PENDING_NAVIGATION_RESPONSE_TIMEOUT_MS};
+    process.env.EGO_BROWSER_RESPONSE_TIMEOUT_MS = String(transportMs);
     const task = await taskSpace(taskName);
     const saved = JSON.parse(
       await readFile(join(tempDir, "pending-navigation-state.json"), "utf8")
@@ -194,7 +312,7 @@ export function pagePendingNavigationFreshProcessCase() {
         error?.message
     );
     assert(
-      elapsed < 20_000,
+      elapsed < transportMs + 3_500,
       "a new process does not wait a full transport timeout per setup command: " +
         elapsed
     );

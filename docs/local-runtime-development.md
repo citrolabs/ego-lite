@@ -71,6 +71,11 @@ task-space selection, takeover, or browser interaction is part of a successful
 run. A fresh agent can use this command without any context from an earlier
 debugging session.
 
+A full pass is remembered: when the build output, the suite and the CLI binary
+are unchanged, the next `npm run e2e` reports that it is skipping and exits 0.
+Set `EGO_BROWSER_REAL_E2E_FORCE=1` to rerun it regardless. The pre-push Git hook
+runs this command for pushes that touch the package or the entry Skill.
+
 ## Keep the Skill aligned
 
 The usage guide describes the APIs implemented by the runtime. `ego-browser skill`

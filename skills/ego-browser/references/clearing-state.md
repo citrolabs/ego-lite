@@ -25,7 +25,7 @@ Do not read a rejection from one entry point as permission to use another. If `t
 
 ## Recipes
 
-Sign-in wall or a session you want anonymous — clear that one site, not the profile:
+A session the user wants anonymous — clear that one site, not the profile. A sign-in wall alone is no reason to clear: call `task.handOff()` and let the user sign in.
 
 ```js
 await page.cdp("Storage.clearDataForOrigin", {

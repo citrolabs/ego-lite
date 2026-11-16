@@ -15,6 +15,7 @@ import {
   prepareFileChooser,
   subscribeBrowserEvents,
   subscribePageEvents,
+  responseTimeoutMs,
 } from "../dist/src/browser-runtime.js";
 
 test("browserCdp exposes a typed transport timeout", async () => {
@@ -2376,5 +2377,27 @@ test("ensureFrameSessions reports an unanswered frame tree as an unresponsive Pa
     invalidateSession();
     if (previous === undefined) delete globalThis.ego;
     else globalThis.ego = previous;
+  }
+});
+
+test("the runtime response timeout defaults to 15 s and honors a test override", () => {
+  const previous = process.env.EGO_BROWSER_RESPONSE_TIMEOUT_MS;
+  try {
+    delete process.env.EGO_BROWSER_RESPONSE_TIMEOUT_MS;
+    assert.equal(responseTimeoutMs(), 15_000);
+    process.env.EGO_BROWSER_RESPONSE_TIMEOUT_MS = "4000";
+    assert.equal(responseTimeoutMs(), 4_000);
+    for (const invalid of ["0", "-1", "abc", "1.5", ""]) {
+      process.env.EGO_BROWSER_RESPONSE_TIMEOUT_MS = invalid;
+      assert.equal(
+        responseTimeoutMs(),
+        15_000,
+        `ignores ${JSON.stringify(invalid)}`,
+      );
+    }
+  } finally {
+    if (previous === undefined)
+      delete process.env.EGO_BROWSER_RESPONSE_TIMEOUT_MS;
+    else process.env.EGO_BROWSER_RESPONSE_TIMEOUT_MS = previous;
   }
 });
