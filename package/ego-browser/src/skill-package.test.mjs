@@ -119,9 +119,10 @@ test("each platform guide keeps only its own passages", async () => {
   assert.ok(guides.macos.length < guides.windows.length);
 });
 
-test("the visual pages guide says how to recover from a screenshot timeout", async () => {
+test("the guide says how to recover from a screenshot timeout", async () => {
   const guide = await readFile(join(outDir, "ego-browser/SKILL.md"), "utf8");
-  const section = /^### Visual pages:[\s\S]*?(?=^### )/m.exec(guide)?.[0] ?? "";
+  const section =
+    /^### Screenshot timeouts$[\s\S]*?(?=^### )/m.exec(guide)?.[0] ?? "";
   assert.match(section, /EGO_PAGE_UNRESPONSIVE/);
   assert.match(section, /Page\.captureScreenshot/);
   assert.match(section, /at most once/);
