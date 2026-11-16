@@ -411,20 +411,24 @@ prints by itself, so do not wrap it in `console.log`.
 
 ### TaskSpace
 
-- State: `spaceId`, `name`, `ownership`, `page(label)`, `userPage()`
-- Pages: `pages()`, `tabs()`, `newPage()`, `adopt(page, { as? })`, `release(label)`
-- Control: `waitForControl(options)`, `handOff()`, `finish({ keep })`
-- Protocol: `cdp(method, params, options)`
+| Category              | API                                                                        |
+| --------------------- | -------------------------------------------------------------------------- |
+| State and Page refs   | `spaceId`, `name`, `ownership`, `page(label)`, `userPage()`                |
+| Pages                 | `pages()`, `tabs()`, `newPage()`, `adopt(page, { as? })`, `release(label)` |
+| Control and finishing | `waitForControl(options)`, `handOff()`, `finish({ keep })`                 |
+| Protocol              | `cdp(method, params, options)`                                             |
 
 ### Page
 
-- State: `label`, `spaceId`, `openedBy`, `targetId`, `url()`, `title()`, `info()`, `snapshot()`, `screenshot()`
-- Navigation, waits: `goto()`, `reload()`, `waitForURL()`, `waitForEvent()`, `waitForSelector()`, `waitForLoadState()`, `waitForFunction()`, `waitForTimeout()`
-- Elements: `click()`, `dblclick()`, `hover()`, `dragAndDrop()`, `fill()`, `selectOption()`, `focus()`, `press()`, `setInputFiles()`, `waitForFileChooser()`, `close()`
-- Dialogs: `acceptDialog(promptText?)`, `dismissDialog()`
-- Mouse: `mouse.click()`, `move()`, `down()`, `up()`, `wheel()`
-- Keyboard: `keyboard.down()`, `up()`, `press()`, `type()`, `insertText()`, `paste()`
-- Code, protocol: `evaluate(fnOrString, argument)`, `fetch(url, options)`, `cdp(method, params, options)`, `events()`
+| Category               | API                                                                                                                                                         |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| State and observation  | `label`, `spaceId`, `openedBy`, `targetId`, `url()`, `title()`, `info()`, `snapshot()`, `screenshot()`                                                      |
+| Navigation and waits   | `goto()`, `reload()`, `waitForURL()`, `waitForEvent()`, `waitForSelector()`, `waitForLoadState()`, `waitForFunction()`, `waitForTimeout()`                  |
+| Elements               | `click()`, `dblclick()`, `hover()`, `dragAndDrop()`, `fill()`, `selectOption()`, `focus()`, `press()`, `setInputFiles()`, `waitForFileChooser()`, `close()` |
+| Dialogs                | `acceptDialog(promptText?)`, `dismissDialog()`                                                                                                              |
+| Mouse                  | `mouse.click()`, `mouse.move()`, `mouse.down()`, `mouse.up()`, `mouse.wheel()`                                                                              |
+| Keyboard               | `keyboard.down()`, `keyboard.up()`, `keyboard.press()`, `keyboard.type()`, `keyboard.insertText()`, `keyboard.paste()`                                      |
+| Page code and protocol | `evaluate(fnOrString, argument)`, `fetch(url, options)`, `cdp(method, params, options)`, `events()`                                                         |
 
 ## Troubleshooting and special cases
 
