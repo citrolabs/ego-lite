@@ -302,6 +302,44 @@ export function pageBasicOperationsCase() {
     const targetList = await task.cdp("Target.getTargets", {}, { timeout: 2_000 });
     assert(Array.isArray(targetList.targetInfos), "task.cdp sends Target commands inside the task space");
 
+    // The protocol names the frame number of a screencast ack sessionId. The
+    // browser stops after two frames without an ack, so later frames prove
+    // that the acks arrived.
+    await first.evaluate(() => {
+      const ticker = document.createElement("p");
+      ticker.id = "screencast-ticker";
+      // Only a repaint inside the viewport makes a frame.
+      ticker.style.cssText = "position:fixed;top:0;left:0;margin:0";
+      document.body.append(ticker);
+      const tick = () => {
+        ticker.textContent = String(performance.now());
+        window.__screencastTicker = requestAnimationFrame(tick);
+      };
+      tick();
+    });
+    await first.cdp("Page.startScreencast", {
+      format: "jpeg",
+      quality: 50,
+      maxWidth: 320,
+      maxHeight: 240,
+    });
+    let ackedFrames = 0;
+    const screencastDeadline = Date.now() + 5_000;
+    while (ackedFrames < 5 && Date.now() < screencastDeadline) {
+      for (const event of await first.events()) {
+        if (event.method !== "Page.screencastFrame") continue;
+        await first.cdp("Page.screencastFrameAck", { sessionId: event.params.sessionId });
+        ackedFrames += 1;
+      }
+      await first.waitForTimeout(10);
+    }
+    await first.cdp("Page.stopScreencast");
+    await first.evaluate(() => {
+      cancelAnimationFrame(window.__screencastTicker);
+      document.querySelector("#screencast-ticker").remove();
+    });
+    assert(ackedFrames >= 5, "page.cdp acks screencast frames, so the browser keeps sending them");
+
     await first.evaluate(() => {
       setTimeout(() => {
         const ready = document.createElement("button");

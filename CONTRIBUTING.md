@@ -1,8 +1,20 @@
 # Contributing to ego-browser
 
-Thanks for contributing! This repository contains the **JavaScript SDK and agent
-Skill** used by ego lite. The browser application and its native bindings are
-provided separately by the installed ego lite app.
+This repository contains the **JavaScript SDK and agent Skill** used by ego lite.
+The browser application and its native bindings are provided separately by the
+installed ego lite app.
+
+> [!IMPORTANT]
+> This repository is **issues-only** for external contributors. We do not
+> accept pull requests from outside the ego lite team. To report a bug, request
+> a feature, or propose a change,
+> [open a GitHub issue](https://github.com/citrolabs/ego-lite/issues/new). For
+> questions and longer discussions, use
+> [GitHub Discussions](https://github.com/citrolabs/ego-lite/discussions).
+
+The rest of this guide describes how to build, run, and verify the SDK locally.
+You are welcome to use it to build on top of the project or to reproduce an
+issue before reporting it. The pull-request workflow is for the internal team.
 
 ![ego lite architecture: AI agents, the Skill, the Node.js runtime, and isolated task spaces](docs/assets/ego-lite-architecture.png)
 
@@ -201,11 +213,15 @@ Keep reusable site behavior in `skills/ego-browser/learnings/<site>/`. Start fro
 an existing pack, declare its tools in `manifest.json`, and use stable URLs and
 selectors. Do not put credentials or one-off task history in learning packs.
 
-## Submit a pull request
+## Submit a pull request (internal team)
 
-Start from the latest branch you intend to target. Current v2 work targets
-`2.0.0-beta-dev`; feature and fix branches should use a descriptive name such as
-`fix/page-ref-lifetime` or `docs/local-sdk-setup`.
+This section applies to ego lite team members only. External contributors
+should [open an issue](https://github.com/citrolabs/ego-lite/issues/new)
+instead; see the note at the top of this guide.
+
+Start from the latest `dev`, which pull requests target. Feature and fix
+branches should use a descriptive name such as `fix/page-ref-lifetime` or
+`docs/local-sdk-setup`.
 
 Use a focused commit message such as `fix(ego-browser): preserve refs across
 input actions`. In the PR, explain the problem, the resulting behavior, and how
@@ -215,10 +231,8 @@ release-note label such as `fix`, `feat`, `docs`, or `ci`.
 The pre-commit hooks select checks based on the staged files: after the
 branch-freshness check and one SDK build, the style check, `npm test`,
 site-skill validation and plugin tests run in parallel against that build. The
-freshness check currently compares against `origin/dev`. For a beta-targeted
-PR, verify that the latest `origin/2.0.0-beta-dev` is an ancestor of your
-branch; if the dev check is inapplicable, exclude only `branch-up-to-date` with
-`LEFTHOOK_EXCLUDE=branch-up-to-date` for that commit. Keep the other checks enabled.
+freshness check requires the latest `origin/dev` to be an ancestor of your
+branch.
 
 The real-browser E2E suite is a pre-push hook rather than a pre-commit one: it
 runs when the commits being pushed touch `package/ego-browser/` or
