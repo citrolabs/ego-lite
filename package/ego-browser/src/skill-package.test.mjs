@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  compactTables,
   guidePlatforms,
   renderGuide,
   selectPlatform,
@@ -37,10 +38,12 @@ test("the bundled usage guide is the unwrapped source guide between version and 
     `[ego-browser:skill] ego-browser usage guide v${version}`,
   );
   assert.equal(lines.at(-1), `[ego-browser:skill] end of guide v${version}`);
-  const body = source
-    .replace(/^---\n[\s\S]*?\n---\n/, "")
-    .replace(platformMarker, "")
-    .trim();
+  const body = compactTables(
+    source
+      .replace(/^---\n[\s\S]*?\n---\n/, "")
+      .replace(platformMarker, "")
+      .trim(),
+  );
   const bundledBody = lines.slice(2, -2).join("\n");
   assert.deepEqual(words(bundledBody), words(body));
   assert.deepEqual(codeFences(bundledBody), codeFences(body));
@@ -100,7 +103,7 @@ test("each platform guide keeps only its own passages", async () => {
     assert.ok(!/<!--/.test(guide));
     assert.ok(guide.length <= 25_000);
     // The platform guide is the source with the other platforms' blocks removed.
-    const expected = selectPlatform(sourceBody, platform).trim();
+    const expected = compactTables(selectPlatform(sourceBody, platform).trim());
     const bundledBody = lines.slice(2, -2).join("\n");
     assert.deepEqual(words(bundledBody), words(expected));
     assert.deepEqual(codeFences(bundledBody), codeFences(expected));
@@ -180,6 +183,32 @@ test("renderGuide selects platform blocks and strips the markers", () => {
   assert.throws(
     () => renderGuide(source, { platform: "linux" }),
     /unknown guide platform/,
+  );
+});
+
+test("compactTables drops column padding outside code fences", () => {
+  const source = [
+    "| Form            | Use        |",
+    "| --------------- | :--------: |",
+    "| `@21`, `ref=21` | Ref \\| id |",
+    "",
+    "```md",
+    "| kept   | as is |",
+    "```",
+    "Not | a table",
+  ].join("\n");
+  assert.equal(
+    compactTables(source),
+    [
+      "| Form | Use |",
+      "| --- | :---: |",
+      "| `@21`, `ref=21` | Ref \\| id |",
+      "",
+      "```md",
+      "| kept   | as is |",
+      "```",
+      "Not | a table",
+    ].join("\n"),
   );
 });
 
