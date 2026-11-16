@@ -734,6 +734,7 @@ function createFixture(rootDir) {
         return { success: true };
       }
       if (method === "Target.detachFromTarget") return {};
+      if (method === "Page.screencastFrameAck") return {};
       throw new Error(`unexpected CDP method ${method}`);
     },
     async showAgentMousePosition(x, y) {
@@ -5645,6 +5646,18 @@ test("Page and TaskSpace CDP reject a sessionId they would not honour", async ()
           sessionId === undefined,
       ),
       "Target commands that define params.sessionId must still pass through",
+    );
+
+    await page.cdp("Page.screencastFrameAck", { sessionId: 7 });
+    assert(
+      fixture.calls.some(
+        ([kind, method, params, sessionId]) =>
+          kind === "cdp" &&
+          method === "Page.screencastFrameAck" &&
+          params.sessionId === 7 &&
+          sessionId === "session:target-1",
+      ),
+      "a screencast ack must reach the Page session with its frame number",
     );
   });
 });

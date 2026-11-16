@@ -8,7 +8,7 @@ let hasWarnedAboutFunctionJs = false;
 /**
  * Send a raw Chrome DevTools Protocol command.
  * @param {string} method CDP method name, for example Runtime.evaluate.
- * @param {object} [params] CDP command parameters. A sessionId here is rejected, except on Target commands that define it.
+ * @param {object} [params] CDP command parameters. A sessionId here is rejected, except on the commands that define it: Target.detachFromTarget, Target.sendMessageToTarget and Page.screencastFrameAck.
  * @param {string} [sessionId] Optional attached target session id. Defaults to the current page session.
  * @returns {Promise<object>} CDP result object.
  */
@@ -34,8 +34,11 @@ export async function cdp(method, params: any = {}, sessionId = undefined) {
   return result;
 }
 
-// The only CDP commands whose protocol parameters include sessionId.
+// The only CDP commands whose protocol parameters include sessionId. On the
+// Target commands it names a session; on Page.screencastFrameAck it is the
+// frame number, and the browser stops sending frames until it arrives.
 const COMMANDS_WITH_SESSION_ID_PARAM = new Set([
+  "Page.screencastFrameAck",
   "Target.detachFromTarget",
   "Target.sendMessageToTarget",
 ]);
