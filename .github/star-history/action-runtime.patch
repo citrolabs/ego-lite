@@ -1,0 +1,9 @@
+diff --git a/action.yml b/action.yml
+--- a/action.yml
++++ b/action.yml
+@@ -77,4 +77,4 @@
+     - name: Set up Node
+-      uses: actions/setup-node@v4
++      uses: actions/setup-node@v7.1.0
+       with:
+         node-version: '24'
