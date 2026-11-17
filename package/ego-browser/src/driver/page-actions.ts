@@ -33,6 +33,12 @@ type PageActionServices = {
 
 export type MouseButton = "left" | "middle" | "right";
 
+/**
+ * Frame id to CDP session id for every frame of the Page. Loaded only when a
+ * coordinate press lands in a frame the current session cannot inspect.
+ */
+export type FrameSessionsLoader = () => Promise<Map<string, string>>;
+
 export type PageClickOptions = {
   button?: MouseButton;
   clickCount?: number;
@@ -1216,6 +1222,7 @@ export async function clickPointInPage(
   options: PageMouseClickOptions = {},
   modifiers = 0,
   baseButtons = 0,
+  frameSessions?: FrameSessionsLoader,
 ): Promise<void> {
   assertPoint(x, y, "page.mouse.click");
   const button = options.button ?? "left";
@@ -1227,6 +1234,7 @@ export async function clickPointInPage(
       sessionId,
       { x, y },
       "page.mouse.click",
+      frameSessions,
     );
   }
   showAgentActionLabel(services, options.label);
@@ -1297,6 +1305,7 @@ export async function mouseButtonInPage(
   buttons: number,
   options: PageMouseButtonOptions = {},
   modifiers = 0,
+  frameSessions?: FrameSessionsLoader,
 ): Promise<MouseButton> {
   assertPoint(x, y, `page.mouse.${type === "mousePressed" ? "down" : "up"}`);
   const button = options.button ?? "left";
@@ -1307,6 +1316,7 @@ export async function mouseButtonInPage(
       sessionId,
       { x, y },
       "page.mouse.down",
+      frameSessions,
     );
   }
   await dispatchMouseEvent(services, sessionId, {
@@ -1902,6 +1912,13 @@ async function assertClickTargetActionable(
       "transient",
     );
   }
+  // The press may only follow a positive answer from the page.
+  if (nativeSelect && result?.ok !== true) {
+    throw nativeSelectUncheckedError(
+      actionName,
+      "the page-side hit test returned no result",
+    );
+  }
 }
 
 type NativeSelectInfo = {
@@ -1939,56 +1956,223 @@ function nativeSelectMenuError(
 }
 
 /**
+ * The guard could not establish what a left press at the point would land on,
+ * so the press is refused instead of risked. Transient: a frame that is still
+ * loading or attaching can usually be inspected a moment later.
+ */
+function nativeSelectUncheckedError(
+  actionName: string,
+  reason: string,
+): ElementResolutionError {
+  return new ElementResolutionError(
+    `${actionName} failed: could not verify that the left press would not ` +
+      `open a native <select> menu (${reason}). Retry, or act on the element ` +
+      `with a selector or snapshot ref instead of coordinates.`,
+    "transient",
+  );
+}
+
+const NATIVE_SELECT_FRAME_DEPTH = 10;
+
+/**
  * Raw coordinate presses have no target element, so look up what is at the
- * viewport point, descending through open shadow roots and same-origin
- * iframes. A cross-origin iframe is a separate target and is not inspected.
+ * viewport point, descending through open shadow roots and iframes. A frame
+ * whose document its embedder cannot read (cross-origin) is inspected where it
+ * lives: in its own session when it is out of process, otherwise in an
+ * isolated world of that frame. The press is allowed only once a document has
+ * positively reported that the hit element is not a drop-down select;
+ * evaluation errors, unreachable frames, and unexpected responses refuse it.
  */
 async function assertNoNativeSelectAtViewportPoint(
   services: PageActionServices,
   sessionId: string,
   point: { x: number; y: number },
   actionName: string,
+  frameSessions?: FrameSessionsLoader,
 ): Promise<void> {
-  const expression = `(() => {
-    ${COMPOSED_PARENT_HELPER}
-    ${NATIVE_SELECT_FUNCTIONS}
-    let doc = document;
-    let x = ${point.x};
-    let y = ${point.y};
-    let hit = null;
-    for (let depth = 0; depth < 10 && doc; depth += 1) {
-      let element = doc.elementFromPoint(x, y);
-      while (element?.shadowRoot) {
-        const inner = element.shadowRoot.elementFromPoint(x, y);
-        if (!inner || inner === element) break;
-        element = inner;
+  let currentSessionId = sessionId;
+  let contextId: number | undefined;
+  let { x, y } = point;
+  for (let depth = 0; depth < NATIVE_SELECT_FRAME_DEPTH; depth += 1) {
+    // Evaluates to the frame element itself when its document is unreadable
+    // and to a JSON verdict otherwise, so the common case is one round trip.
+    const expression = `(() => {
+      ${COMPOSED_PARENT_HELPER}
+      ${NATIVE_SELECT_FUNCTIONS}
+      let doc = document;
+      let x = ${x};
+      let y = ${y};
+      for (let depth = 0; depth < ${NATIVE_SELECT_FRAME_DEPTH}; depth += 1) {
+        let element = doc.elementFromPoint(x, y);
+        while (element?.shadowRoot) {
+          const inner = element.shadowRoot.elementFromPoint(x, y);
+          if (!inner || inner === element) break;
+          element = inner;
+        }
+        if (!element) return JSON.stringify({ nativeSelect: null });
+        const tag = String(element.tagName || "").toUpperCase();
+        if (tag !== "IFRAME" && tag !== "FRAME") {
+          return JSON.stringify({ nativeSelect: nativeSelectMenuAt(element) });
+        }
+        let inner = null;
+        try {
+          inner = element.contentDocument;
+        } catch {}
+        if (!inner) return element;
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        x -= rect.left + element.clientLeft + (parseFloat(style.paddingLeft) || 0);
+        y -= rect.top + element.clientTop + (parseFloat(style.paddingTop) || 0);
+        doc = inner;
       }
-      if (!element) break;
-      hit = element;
-      const tag = String(element.tagName || "").toUpperCase();
-      if (tag !== "IFRAME" && tag !== "FRAME") break;
-      let inner = null;
-      try {
-        inner = element.contentDocument;
-      } catch {}
-      if (!inner) break;
-      const rect = element.getBoundingClientRect();
-      const style = getComputedStyle(element);
-      x -= rect.left + element.clientLeft + (parseFloat(style.paddingLeft) || 0);
-      y -= rect.top + element.clientTop + (parseFloat(style.paddingTop) || 0);
-      doc = inner;
+      return JSON.stringify({ unchecked: "iframes are nested too deeply" });
+    })()`;
+    let response: any;
+    try {
+      response = await services.cdp(
+        "Runtime.evaluate",
+        {
+          expression,
+          returnByValue: false,
+          awaitPromise: false,
+          objectGroup: "ego-browser",
+          ...(contextId === undefined ? {} : { contextId }),
+        },
+        currentSessionId,
+      );
+    } catch (error) {
+      throw nativeSelectUncheckedError(actionName, errorText(error));
     }
-    return hit ? nativeSelectMenuAt(hit) : null;
-  })()`;
-  const response = await services.cdp(
-    "Runtime.evaluate",
-    { expression, returnByValue: true, awaitPromise: false },
-    sessionId,
-  );
-  const result = runtimeValue(response, expression);
-  if (result && typeof result === "object" && "optionCount" in result) {
-    throw nativeSelectMenuError(actionName, result as NativeSelectInfo);
+    const result = response?.result;
+    if (response?.exceptionDetails || result?.subtype === "error") {
+      throw nativeSelectUncheckedError(
+        actionName,
+        "the page-side hit test threw",
+      );
+    }
+    if (typeof result?.objectId === "string") {
+      const frame = await uninspectedFrameAtPoint(
+        services,
+        currentSessionId,
+        result.objectId,
+        actionName,
+        frameSessions,
+      );
+      // An <iframe> without a content frame has no document to press on.
+      if (!frame) return;
+      currentSessionId = frame.sessionId;
+      contextId = frame.contextId;
+      x -= frame.origin.x;
+      y -= frame.origin.y;
+      continue;
+    }
+    let verdict: any = null;
+    if (typeof result?.value === "string") {
+      try {
+        verdict = JSON.parse(result.value);
+      } catch {
+        // Not a verdict; refused below.
+      }
+    }
+    if (!verdict || typeof verdict !== "object") {
+      throw nativeSelectUncheckedError(
+        actionName,
+        "the page-side hit test returned no result",
+      );
+    }
+    if (typeof verdict.unchecked === "string") {
+      throw nativeSelectUncheckedError(actionName, verdict.unchecked);
+    }
+    if (verdict.nativeSelect === null) return;
+    if (
+      typeof verdict.nativeSelect === "object" &&
+      Array.isArray(verdict.nativeSelect.options) &&
+      typeof verdict.nativeSelect.optionCount === "number"
+    ) {
+      throw nativeSelectMenuError(
+        actionName,
+        verdict.nativeSelect as NativeSelectInfo,
+      );
+    }
+    throw nativeSelectUncheckedError(
+      actionName,
+      "the page-side hit test returned an unexpected result",
+    );
   }
+  throw nativeSelectUncheckedError(actionName, "iframes are nested too deeply");
+}
+
+/**
+ * Where to continue the hit test for a frame element whose document its
+ * embedder cannot read: the session and execution context that own the frame's
+ * document, and the frame's content origin in the embedding session's
+ * viewport. Null when the element has no content frame. Throws when the frame
+ * cannot be reached, so the caller never presses into an uninspected document.
+ */
+async function uninspectedFrameAtPoint(
+  services: PageActionServices,
+  sessionId: string,
+  objectId: string,
+  actionName: string,
+  frameSessions: FrameSessionsLoader | undefined,
+): Promise<{
+  sessionId: string;
+  contextId?: number;
+  origin: { x: number; y: number };
+} | null> {
+  try {
+    let frameId: unknown;
+    let content: unknown;
+    try {
+      const described = await services.cdp(
+        "DOM.describeNode",
+        { objectId },
+        sessionId,
+      );
+      frameId = described?.node?.frameId;
+      if (typeof frameId !== "string" || frameId.length === 0) return null;
+      const box = await services.cdp(
+        "DOM.getBoxModel",
+        { objectId },
+        sessionId,
+      );
+      content = box?.model?.content;
+    } finally {
+      await releaseObject(services, sessionId, objectId);
+    }
+    if (
+      !Array.isArray(content) ||
+      !Number.isFinite(content[0]) ||
+      !Number.isFinite(content[1])
+    ) {
+      throw new Error("the iframe has no box");
+    }
+    const origin = { x: content[0] as number, y: content[1] as number };
+    const frameSessionId = (await frameSessions?.())?.get(frameId);
+    if (frameSessionId && frameSessionId !== sessionId) {
+      return { sessionId: frameSessionId, origin };
+    }
+    // Same process, but a document the embedder may not read (for example a
+    // sandboxed or data: frame): evaluate inside the frame itself.
+    const world = await services.cdp(
+      "Page.createIsolatedWorld",
+      { frameId, worldName: "ego-browser-locator" },
+      sessionId,
+    );
+    if (!Number.isInteger(world?.executionContextId)) {
+      throw new Error("the iframe has no execution context");
+    }
+    return { sessionId, contextId: world.executionContextId, origin };
+  } catch (error) {
+    throw nativeSelectUncheckedError(
+      actionName,
+      `the point is inside an iframe that could not be inspected: ${errorText(error)}`,
+    );
+  }
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function assertElementReceivesPointerEvents(

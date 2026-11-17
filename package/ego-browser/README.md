@@ -110,7 +110,8 @@ existing scripts.
   that press opens a browser-drawn menu that CDP input cannot dismiss, and
   ego lite defers closing every task space while it is open. List boxes
   (`multiple` or `size > 1`), disabled selects, and right or middle presses are
-  not affected. `mouse.*` inspects same-origin iframes only.
+  not affected. `mouse.*` follows the point into iframes, cross-origin ones
+  included, and fails without pressing when it cannot inspect what is there.
 - Network-idle waits use continuous per-Page and OOPIF request state; they do
   not consume the CDP events returned by `page.events()` or include other Pages.
 - `fill()` verifies that editing took effect, not that application formatting

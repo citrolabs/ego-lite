@@ -230,6 +230,9 @@ test("Page click translates same-process iframe coordinates to the Page viewport
         if (params.functionDeclaration.includes("actionable: false")) {
           return { result: { value: { actionable: true } } };
         }
+        if (params.functionDeclaration.includes("clickTargetActionable")) {
+          return { result: { value: { ok: true } } };
+        }
         return params.functionDeclaration.includes("getBoundingClientRect")
           ? { result: { value: { x: 10, y: 20 } } }
           : { result: { value: { ok: true } } };
@@ -357,6 +360,9 @@ test("Page click keeps raw-selector OOPIF input local but renders its cursor in 
         if (params.functionDeclaration.includes("actionable: false")) {
           return { result: { value: { actionable: true } } };
         }
+        if (params.functionDeclaration.includes("clickTargetActionable")) {
+          return { result: { value: { ok: true } } };
+        }
         return params.functionDeclaration.includes("getBoundingClientRect")
           ? { result: { value: { x: 10, y: 20 } } }
           : { result: { value: { ok: true } } };
@@ -453,6 +459,9 @@ test("Page click renders an OOPIF cursor when FrameTree omits its ancestor ifram
       if (method === "Runtime.callFunctionOn") {
         if (params.functionDeclaration.includes("actionable: false")) {
           return { result: { value: { actionable: true } } };
+        }
+        if (params.functionDeclaration.includes("clickTargetActionable")) {
+          return { result: { value: { ok: true } } };
         }
         return params.functionDeclaration.includes("getBoundingClientRect")
           ? { result: { value: { x: 10, y: 20 } } }
@@ -599,13 +608,25 @@ test("Page right click and middle click skip the native select check", async () 
   }
 });
 
-function pointServices(value) {
+/** The page-side hit test answers with a JSON verdict string. */
+function selectVerdict(nativeSelect) {
+  return { result: { value: JSON.stringify({ nativeSelect }) } };
+}
+
+/**
+ * Services for coordinate presses. `nativeSelect` is what the hit test finds
+ * at the point (null: not a drop-down select); `respond` may answer any CDP
+ * call first and returns undefined to fall through.
+ */
+function pointServices(nativeSelect, respond = () => undefined) {
   const calls = [];
   return {
     calls,
     async cdp(method, params = {}, sessionId) {
       calls.push([method, params, sessionId]);
-      if (method === "Runtime.evaluate") return { result: { value } };
+      const response = respond(method, params, sessionId);
+      if (response !== undefined) return response;
+      if (method === "Runtime.evaluate") return selectVerdict(nativeSelect);
       return {};
     },
     async showAgentMousePosition() {},
@@ -668,4 +689,315 @@ test("Page mouse down checks only left presses for a native select", async () =>
     false,
     "releasing never opens a menu",
   );
+});
+
+/**
+ * A page whose point (140, 250) is inside an iframe the page cannot read. The
+ * iframe's content box starts at (100, 200); `inFrame` answers the hit test
+ * that runs inside the frame.
+ */
+function crossOriginFrameServices(inFrame, respond = () => undefined) {
+  return pointServices(null, (method, params, sessionId) => {
+    const response = respond(method, params, sessionId);
+    if (response !== undefined) return response;
+    if (method === "Runtime.evaluate") {
+      const inPageDocument =
+        sessionId === "session:page" && params.contextId === undefined;
+      return inPageDocument
+        ? { result: { type: "object", objectId: "iframe-1" } }
+        : inFrame;
+    }
+    if (method === "DOM.describeNode") {
+      return { node: { nodeName: "IFRAME", frameId: "frame-1" } };
+    }
+    if (method === "DOM.getBoxModel") {
+      return { model: { content: [100, 200, 400, 200, 400, 500, 100, 500] } };
+    }
+    if (method === "Page.createIsolatedWorld") {
+      return { executionContextId: 7 };
+    }
+    return undefined;
+  });
+}
+
+/** A `respond` hook that answers one CDP method and leaves the rest alone. */
+function answer(target, response) {
+  return (method) => (method === target ? response : undefined);
+}
+
+function assertUncheckedRefusal(actionName, reason) {
+  return (error) => {
+    assert.equal(error.name, "ElementResolutionError");
+    assert.equal(error.kind, "transient");
+    assert(
+      error.message.startsWith(
+        `${actionName} failed: could not verify that the left press would not open a native <select> menu`,
+      ),
+      error.message,
+    );
+    if (reason) assert(error.message.includes(reason), error.message);
+    return true;
+  };
+}
+
+function frameEvaluations(calls) {
+  return calls.filter(
+    ([method, params, sessionId]) =>
+      method === "Runtime.evaluate" &&
+      (sessionId !== "session:page" || params.contextId !== undefined),
+  );
+}
+
+test("Page mouse click checks a native select inside an out-of-process iframe in that frame's session", async () => {
+  const frameSessions = async () => new Map([["frame-1", "session:frame"]]);
+  const blocked = crossOriginFrameServices(selectVerdict(DROPDOWN));
+
+  await assert.rejects(
+    () =>
+      clickPointInPage(
+        blocked,
+        "session:page",
+        140,
+        250,
+        {},
+        0,
+        0,
+        frameSessions,
+      ),
+    assertNativeSelectRefusal("page.mouse.click", "select#dropdown"),
+  );
+  assert.equal(
+    blocked.calls.some(([method]) => method === "Input.dispatchMouseEvent"),
+    false,
+    "no pointer input reaches the page",
+  );
+  const [[, params, sessionId]] = frameEvaluations(blocked.calls);
+  assert.equal(sessionId, "session:frame");
+  assert.equal(params.contextId, undefined);
+  assert.match(
+    params.expression,
+    /let x = 40;\s+let y = 50;/,
+    "the point is translated into the frame's viewport",
+  );
+  assert(
+    blocked.calls.some(
+      ([method, releaseParams]) =>
+        method === "Runtime.releaseObject" &&
+        releaseParams.objectId === "iframe-1",
+    ),
+    "the iframe handle is released",
+  );
+
+  const down = crossOriginFrameServices(selectVerdict(DROPDOWN));
+  await assert.rejects(
+    () =>
+      mouseButtonInPage(
+        down,
+        "session:page",
+        "mousePressed",
+        140,
+        250,
+        1,
+        {},
+        0,
+        frameSessions,
+      ),
+    assertNativeSelectRefusal("page.mouse.down", "select#dropdown"),
+  );
+  assert.equal(pressCount(down.calls), 0);
+
+  const clear = crossOriginFrameServices(selectVerdict(null));
+  await clickPointInPage(
+    clear,
+    "session:page",
+    140,
+    250,
+    {},
+    0,
+    0,
+    frameSessions,
+  );
+  const press = clear.calls.find(
+    ([method, pressParams]) =>
+      method === "Input.dispatchMouseEvent" &&
+      pressParams.type === "mousePressed",
+  );
+  assert.deepEqual(
+    [press[1].x, press[1].y, press[2]],
+    [140, 250, "session:page"],
+    "a cleared press is dispatched at the original Page coordinates",
+  );
+});
+
+test("Page mouse click checks a same-process iframe with an unreadable document in that frame's context", async () => {
+  const frameSessions = async () => new Map([["frame-1", "session:page"]]);
+  const services = crossOriginFrameServices(selectVerdict(DROPDOWN));
+
+  await assert.rejects(
+    () =>
+      clickPointInPage(
+        services,
+        "session:page",
+        140,
+        250,
+        {},
+        0,
+        0,
+        frameSessions,
+      ),
+    assertNativeSelectRefusal("page.mouse.click", "select#dropdown"),
+  );
+  assert.equal(pressCount(services.calls), 0);
+  const world = services.calls.find(
+    ([method]) => method === "Page.createIsolatedWorld",
+  );
+  assert.equal(world[1].frameId, "frame-1");
+  assert.equal(world[2], "session:page");
+  const [[, params, sessionId]] = frameEvaluations(services.calls);
+  assert.equal(sessionId, "session:page");
+  assert.equal(params.contextId, 7);
+  assert.match(params.expression, /let x = 40;\s+let y = 50;/);
+});
+
+test("Page mouse click fails closed when the frame under the point cannot be inspected", async () => {
+  const cases = [
+    [
+      "no session and no execution context for the frame",
+      crossOriginFrameServices(selectVerdict(null), (method) => {
+        if (method === "Page.createIsolatedWorld") {
+          throw new Error("No frame for given id found");
+        }
+      }),
+      undefined,
+      "the point is inside an iframe that could not be inspected: No frame for given id found",
+    ],
+    [
+      "frame sessions cannot be listed",
+      crossOriginFrameServices(selectVerdict(null)),
+      async () => {
+        throw new Error("Page did not answer");
+      },
+      "could not be inspected: Page did not answer",
+    ],
+    [
+      "the iframe has no box",
+      crossOriginFrameServices(
+        selectVerdict(null),
+        answer("DOM.getBoxModel", {}),
+      ),
+      async () => new Map([["frame-1", "session:frame"]]),
+      "the iframe has no box",
+    ],
+    [
+      "the frame's hit test returns nothing",
+      crossOriginFrameServices({ result: { type: "undefined" } }),
+      async () => new Map([["frame-1", "session:frame"]]),
+      "the page-side hit test returned no result",
+    ],
+  ];
+  for (const [name, services, frameSessions, reason] of cases) {
+    await assert.rejects(
+      () =>
+        clickPointInPage(
+          services,
+          "session:page",
+          140,
+          250,
+          {},
+          0,
+          0,
+          frameSessions,
+        ),
+      assertUncheckedRefusal("page.mouse.click", reason),
+      name,
+    );
+    assert.equal(
+      services.calls.some(([method]) => method === "Input.dispatchMouseEvent"),
+      false,
+      `${name}: no pointer input reaches the page`,
+    );
+  }
+});
+
+test("Page mouse click presses on an iframe element that has no content frame", async () => {
+  const services = crossOriginFrameServices(
+    selectVerdict(DROPDOWN),
+    answer("DOM.describeNode", { node: { nodeName: "IFRAME" } }),
+  );
+  await clickPointInPage(services, "session:page", 140, 250);
+  assert.equal(pressCount(services.calls), 1);
+  assert.equal(frameEvaluations(services.calls).length, 0);
+});
+
+test("Page mouse presses fail closed when the hit test gives no positive answer", async () => {
+  const responses = [
+    ["an exception", { exceptionDetails: { text: "Uncaught" }, result: {} }],
+    ["an error object", { result: { type: "object", subtype: "error" } }],
+    ["an undefined value", { result: { type: "undefined" } }],
+    ["no result", {}],
+    ["no response", null],
+    ["a non-JSON string", { result: { value: "nope" } }],
+    ["a JSON non-object", { result: { value: "null" } }],
+    ["an object without a verdict", { result: { value: "{}" } }],
+    [
+      "a malformed select description",
+      { result: { value: JSON.stringify({ nativeSelect: { locator: 1 } }) } },
+    ],
+    [
+      "frames nested too deeply",
+      { result: { value: '{"unchecked":"too deep"}' } },
+    ],
+  ];
+  for (const [name, response] of responses) {
+    const respond = answer("Runtime.evaluate", response);
+    const click = pointServices(null, respond);
+    await assert.rejects(
+      () => clickPointInPage(click, "session:page", 40, 50),
+      assertUncheckedRefusal("page.mouse.click"),
+      name,
+    );
+    assert.equal(
+      click.calls.some(([method]) => method === "Input.dispatchMouseEvent"),
+      false,
+      `${name}: no pointer input reaches the page`,
+    );
+
+    const down = pointServices(null, respond);
+    await assert.rejects(
+      () => mouseButtonInPage(down, "session:page", "mousePressed", 40, 50, 1),
+      assertUncheckedRefusal("page.mouse.down"),
+      name,
+    );
+    assert.equal(pressCount(down.calls), 0, name);
+  }
+
+  const rejected = pointServices(null, (method) => {
+    if (method === "Runtime.evaluate") throw new Error("Session closed");
+  });
+  await assert.rejects(
+    () => clickPointInPage(rejected, "session:page", 40, 50),
+    assertUncheckedRefusal("page.mouse.click", "Session closed"),
+  );
+  assert.equal(pressCount(rejected.calls), 0);
+});
+
+test("Page click fails closed when the native select check returns no result", async () => {
+  for (const value of [undefined, null, {}, "ok"]) {
+    const services = topLevelClickServices({ respond: () => value });
+    await assert.rejects(
+      () => clickInPage(services, "session:page", new RefMap(), "#button"),
+      assertUncheckedRefusal(
+        "page.click",
+        "the page-side hit test returned no result",
+      ),
+    );
+    assert.equal(pressCount(services.calls), 0);
+  }
+
+  // A right press opens no select menu, so it keeps the previous behavior.
+  const right = topLevelClickServices({ respond: () => undefined });
+  await clickInPage(right, "session:page", new RefMap(), "#button", {
+    button: "right",
+  });
+  assert.equal(pressCount(right.calls), 1);
 });

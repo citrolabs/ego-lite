@@ -188,6 +188,15 @@ function createFixture(rootDir) {
             },
           };
         }
+        if (params.expression.includes("nativeSelectMenuAt(element)")) {
+          // The coordinate-press guard: nothing at the point is a select.
+          return {
+            result: {
+              type: "string",
+              value: JSON.stringify({ nativeSelect: null }),
+            },
+          };
+        }
         if (loseFrameOnNextResolution) {
           const failure = loseFrameOnNextResolution;
           loseFrameOnNextResolution = null;
@@ -542,6 +551,28 @@ function createFixture(rootDir) {
               },
             },
           };
+        }
+        if (
+          params.functionDeclaration.includes("function clickTargetActionable")
+        ) {
+          // The pre-press recheck: a left press needs a positive answer.
+          if (
+            interceptedClickPointsRemaining > 0 &&
+            params.functionDeclaration.includes(
+              "interceptingElementAtPoint(this, point)",
+            )
+          ) {
+            interceptedClickPointsRemaining -= 1;
+            return {
+              result: {
+                type: "object",
+                value: {
+                  error: '<button id="overlay"> intercepts pointer events',
+                },
+              },
+            };
+          }
+          return { result: { type: "object", value: { ok: true } } };
         }
         if (params.functionDeclaration.includes("getBoundingClientRect")) {
           if (trapClickPoints) {
