@@ -154,6 +154,10 @@ if (isDirectCli()) {
   }
 } else {
   installEgoSdk();
+  // The host runs each heredoc in a short-lived process and does not have to
+  // call disposeEgoSdk(), so process exit is the only reliable end of the SDK
+  // round. Cleanup is synchronous and idempotent, which `exit` requires.
+  process.once("exit", disposeDownloadArtifacts);
 }
 
 function createCliLog() {
