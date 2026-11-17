@@ -125,6 +125,51 @@ export function pageClickHitTargetCase() {
     );
 
     await page.evaluate(() => {
+      document.querySelector("#ancestor-hit-target").remove();
+      const button = document.createElement("button");
+      button.id = "layered-button";
+      button.style.cssText =
+        "position:fixed;left:100px;top:500px;padding:10px 24px;z-index:10";
+      button.innerHTML =
+        '<span id="layered-label">Save draft</span>' +
+        '<div id="layered-feedback" style="position:absolute;inset:0"></div>';
+      window.__layeredClicks = [];
+      button.addEventListener("click", (event) =>
+        window.__layeredClicks.push(event.target.id)
+      );
+      document.body.append(button);
+    });
+    await page.click('text="Save draft"', { timeout: 1000 });
+    await page.click("#layered-label", { timeout: 1000 });
+    assertEqual(
+      JSON.stringify(await page.evaluate("window.__layeredClicks")),
+      JSON.stringify(["layered-feedback", "layered-feedback"]),
+      "a layer inside the same button does not intercept a click on its label"
+    );
+
+    await page.evaluate(() => {
+      const overlay = document.createElement("div");
+      overlay.id = "layered-outside-overlay";
+      overlay.style.cssText =
+        "position:fixed;left:80px;top:480px;width:400px;height:120px;z-index:20";
+      document.body.append(overlay);
+    });
+    await assertRejects(
+      () => page.click('text="Save draft"', { timeout: 500 }),
+      "intercepts pointer events",
+      "an overlay outside the button still intercepts a click on its label"
+    );
+    assertEqual(
+      (await page.evaluate("window.__layeredClicks")).length,
+      2,
+      "an intercepted click on button content dispatches nothing"
+    );
+    await page.evaluate(() => {
+      document.querySelector("#layered-outside-overlay").remove();
+      document.querySelector("#layered-button").remove();
+    });
+
+    await page.evaluate(() => {
       for (const text of ["First duplicate", "Second duplicate"]) {
         const button = document.createElement("button");
         button.className = "strict-duplicate";

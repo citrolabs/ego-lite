@@ -416,11 +416,34 @@ export const HIT_TARGET_HELPERS = `
     }
     return hitElement;
   }
+  // A click on button or link content is a click on that button or link: the
+  // browser may deliver it to any part of the control, such as a sibling
+  // feedback layer stretched over the label. Form fields keep their own box.
+  function pointerHitOwner(target) {
+    const tag = String(target?.tagName || "").toUpperCase();
+    if (
+      ["INPUT", "TEXTAREA", "SELECT"].includes(tag) ||
+      target?.isContentEditable
+    ) return target;
+    let current = target;
+    while (current) {
+      const currentTag = String(current.tagName || "").toUpperCase();
+      const role = String(current.getAttribute?.("role") || "")
+        .trim().toLowerCase();
+      if (
+        currentTag === "BUTTON" || currentTag === "A" ||
+        role === "button" || role === "link"
+      ) return current;
+      current = composedParent(current);
+    }
+    return target;
+  }
   function interceptingElementAtPoint(target, point) {
     const hitElement = hitElementAtPoint(target, point);
+    const owner = pointerHitOwner(target);
     let current = hitElement;
-    while (current && current !== target) current = composedParent(current);
-    if (current === target) return null;
+    while (current && current !== owner) current = composedParent(current);
+    if (current === owner) return null;
 
     current = target;
     while (current && current !== hitElement) current = composedParent(current);
