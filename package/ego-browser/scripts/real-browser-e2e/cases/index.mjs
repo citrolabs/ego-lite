@@ -68,6 +68,7 @@ import {
 } from "./page-workers.mjs";
 import { pageApiAlignmentCase } from "./page-api-alignment.mjs";
 import { pageActionabilityCase } from "./page-actionability.mjs";
+import { pageFillCodeEditorCase } from "./page-fill-code-editor.mjs";
 import { pageEvaluateTimeoutCase } from "./page-evaluate-timeout.mjs";
 import {
   pagePendingNavigationCase,
@@ -230,6 +231,7 @@ export const e2eCases = [
   { name: "Page Service Worker startup", body: pageServiceWorkerCase },
   { name: "Page API alignment", body: pageApiAlignmentCase },
   { name: "Page actionability", body: pageActionabilityCase },
+  { name: "Page fill into a code editor", body: pageFillCodeEditorCase },
   {
     name: "Page evaluate timeout recovery",
     body: pageEvaluateTimeoutCase,
