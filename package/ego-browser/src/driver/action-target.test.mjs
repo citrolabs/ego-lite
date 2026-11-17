@@ -221,6 +221,18 @@ test("hit target accepts any part of the button or link that owns the target", (
     "an overlay outside the button still intercepts",
   );
 
+  const nestedLink = node("A", button);
+  nestedLink.hasAttribute = (name) => name === "href";
+  const nestedLinkLayer = node("DIV", nestedLink);
+  for (const hit of [nestedLink, nestedLinkLayer]) {
+    topmost = hit;
+    assert.equal(
+      interceptingElementAtPoint(label, point),
+      hit,
+      "a separate control nested in the button intercepts its label",
+    );
+  }
+
   const plainParent = node("DIV", body);
   const plainLabel = node("SPAN", plainParent);
   topmost = node("DIV", plainParent);

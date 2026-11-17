@@ -441,9 +441,25 @@ export const HIT_TARGET_HELPERS = `
   function interceptingElementAtPoint(target, point) {
     const hitElement = hitElementAtPoint(target, point);
     const owner = pointerHitOwner(target);
+    const targetAncestors = new Set();
+    for (let node = target; node; node = composedParent(node)) {
+      targetAncestors.add(node);
+    }
+    // Walk up from the hit to the first node that also contains the target.
+    // A separate control on the way, such as a link nested in the button,
+    // would receive the click itself, so it intercepts.
     let current = hitElement;
-    while (current && current !== owner) current = composedParent(current);
-    if (current === owner) return null;
+    let crossesControl = false;
+    while (current && !targetAncestors.has(current)) {
+      if (isInteractiveElement(current)) crossesControl = true;
+      current = composedParent(current);
+    }
+    if (current === target) return null;
+    if (current && !crossesControl) {
+      let node = current;
+      while (node && node !== owner) node = composedParent(node);
+      if (node === owner) return null;
+    }
 
     current = target;
     while (current && current !== hitElement) current = composedParent(current);
