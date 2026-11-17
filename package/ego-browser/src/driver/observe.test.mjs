@@ -138,7 +138,7 @@ test("snapshotText forwards a subtree root to the native snapshot", async () => 
   }
 });
 
-test("snapshotText forwards the frame that owns a subtree root", async () => {
+test("snapshotText keeps the internal frameId option off the v1 surface", async () => {
   const previous = globalThis.ego;
   const calls = [];
   globalThis.ego = {
@@ -154,7 +154,6 @@ test("snapshotText forwards the frame that owns a subtree root", async () => {
       {
         scope: "subtree",
         root: 8,
-        frameId: "frame-child",
         includeActionMarks: true,
         includeStableLocator: true,
       },
