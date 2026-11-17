@@ -80,6 +80,65 @@ const CLICK_PROBE_TTL_MS = 5_000;
 type ClickTarget = Point & { probeId: string | null };
 
 /**
+ * Page-side helpers for the synthetic input fallbacks. They send the pointer
+ * events a real mouse produces together with the compatibility mouse events,
+ * in Chrome's order, because pointer-driven widgets (Radix, Floating UI, and
+ * other popovers) open on `pointerdown` and never see a bare `mousedown`.
+ * As in Chrome, a canceled `pointerdown` suppresses the compatibility
+ * mousedown, mousemove, and mouseup until the button is released; `click`
+ * still fires.
+ */
+const SYNTHETIC_POINTER_JS = `
+  let syntheticMouseSuppressed = false;
+  const syntheticEvent = (Ctor, type, init, extra) => {
+    const bubbles = type !== "pointerenter" && type !== "mouseenter";
+    return new Ctor(type, {
+      ...init,
+      bubbles,
+      cancelable: bubbles,
+      composed: true,
+      view: window,
+      ...extra,
+    });
+  };
+  const firePointer = (target, type, init) => {
+    const Pointer = typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
+    return target.dispatchEvent(syntheticEvent(Pointer, type, init, {
+      // Pointer events without a button change report button -1.
+      button: type === "pointerdown" || type === "pointerup" ? init.button : -1,
+      detail: 0,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+      width: 1,
+      height: 1,
+      pressure: init.buttons ? 0.5 : 0,
+    }));
+  };
+  const fireMouse = (target, type, init, detail = 0) =>
+    target.dispatchEvent(syntheticEvent(MouseEvent, type, init, { detail }));
+  const syntheticPointerEnter = (target, init) => {
+    firePointer(target, "pointerover", init);
+    firePointer(target, "pointerenter", init);
+    fireMouse(target, "mouseover", init);
+    fireMouse(target, "mouseenter", init);
+  };
+  const syntheticPointerMove = (target, init) => {
+    firePointer(target, "pointermove", init);
+    if (!syntheticMouseSuppressed) fireMouse(target, "mousemove", init);
+  };
+  const syntheticPointerDown = (target, init, detail) => {
+    if (!firePointer(target, "pointerdown", init)) syntheticMouseSuppressed = true;
+    if (!syntheticMouseSuppressed) fireMouse(target, "mousedown", init, detail);
+  };
+  const syntheticPointerUp = (target, init, detail) => {
+    firePointer(target, "pointerup", init);
+    if (!syntheticMouseSuppressed) fireMouse(target, "mouseup", init, detail);
+    syntheticMouseSuppressed = false;
+  };
+`;
+
+/**
  * Mouse target accepted by mouse helpers.
  *
  * Forms:
@@ -430,21 +489,21 @@ async function finishClickProbe(
         delete probes[${JSON.stringify(id)}];
         if (probe.seen || !probe.target) return { seen: probe.seen, fallback: false };
         const target = probe.target;
+        ${SYNTHETIC_POINTER_JS}
+        const clickCount = ${JSON.stringify(clickCount)};
         const init = {
-          bubbles: true,
-          cancelable: true,
-          view: window,
           clientX: ${JSON.stringify(point.x)},
           clientY: ${JSON.stringify(point.y)},
           button: 0,
+          buttons: 0,
         };
-        target.dispatchEvent(new MouseEvent("mousemove", { ...init, buttons: 0, detail: 0 }));
-        target.dispatchEvent(new MouseEvent("mousedown", { ...init, buttons: 1, detail: ${JSON.stringify(clickCount)} }));
-        target.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0, detail: ${JSON.stringify(clickCount)} }));
-        target.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0, detail: ${JSON.stringify(clickCount)} }));
-        if (${JSON.stringify(clickCount)} > 1) {
-          target.dispatchEvent(new MouseEvent("dblclick", { ...init, buttons: 0, detail: 2 }));
-        }
+        const pressed = { ...init, buttons: 1 };
+        syntheticPointerEnter(target, init);
+        syntheticPointerMove(target, init);
+        syntheticPointerDown(target, pressed, clickCount);
+        syntheticPointerUp(target, init, clickCount);
+        fireMouse(target, "click", init, clickCount);
+        if (clickCount > 1) fireMouse(target, "dblclick", init, 2);
         return { seen: false, fallback: true };
       })()`,
         returnByValue: true,
@@ -542,17 +601,15 @@ async function finishHoverProbe(
         delete probes[${JSON.stringify(id)}];
         if (probe.seen || !probe.target) return { seen: probe.seen, fallback: false };
         const target = probe.target;
+        ${SYNTHETIC_POINTER_JS}
         const init = {
-          bubbles: true,
-          cancelable: true,
-          view: window,
           clientX: ${JSON.stringify(point.x)},
           clientY: ${JSON.stringify(point.y)},
           button: 0,
           buttons: 0,
         };
-        target.dispatchEvent(new MouseEvent("mousemove", init));
-        target.dispatchEvent(new MouseEvent("mouseover", init));
+        syntheticPointerEnter(target, init);
+        syntheticPointerMove(target, init);
         return { seen: false, fallback: true };
       })()`,
         returnByValue: true,
@@ -588,24 +645,25 @@ async function finishDragProbe(
         document.removeEventListener("mouseup", probe.handler, true);
         delete probes[${JSON.stringify(id)}];
         if (probe.seen) return { seen: true, fallback: false };
+        ${SYNTHETIC_POINTER_JS}
         const mouseButton = ${JSON.stringify(button === "left" ? 0 : button === "middle" ? 1 : 2)};
-        const eventFor = (type, point, buttons) => {
-          const target = document.elementFromPoint(point.x, point.y) || document.body;
-          target.dispatchEvent(new MouseEvent(type, {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-            clientX: point.x,
-            clientY: point.y,
-            button: mouseButton,
-            buttons,
-            detail: type === "mousemove" ? 0 : 1,
-          }));
-        };
+        const pressedButtons = ${JSON.stringify(pressedButtons(button))};
+        const targetAt = (point) => document.elementFromPoint(point.x, point.y) || document.body;
+        const initAt = (point, buttons) => ({
+          clientX: point.x,
+          clientY: point.y,
+          button: mouseButton,
+          buttons,
+        });
         const points = ${JSON.stringify(points.map(({ x, y }) => ({ x, y })))};
-        eventFor("mousedown", points[0], 1);
-        for (const point of points.slice(1)) eventFor("mousemove", point, 1);
-        eventFor("mouseup", points.at(-1), 0);
+        const first = points[0];
+        const last = points.at(-1);
+        syntheticPointerEnter(targetAt(first), initAt(first, 0));
+        syntheticPointerDown(targetAt(first), initAt(first, pressedButtons), 1);
+        for (const point of points.slice(1)) {
+          syntheticPointerMove(targetAt(point), initAt(point, pressedButtons));
+        }
+        syntheticPointerUp(targetAt(last), initAt(last, 0), 1);
         return { seen: false, fallback: true };
       })()`,
         returnByValue: true,

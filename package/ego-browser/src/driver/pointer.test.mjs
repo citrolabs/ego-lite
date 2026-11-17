@@ -1,9 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import vm from "node:vm";
 
 import { setOverrides } from "../../dist/src/state.js";
 import { CLICK_POINT_HELPERS } from "../../dist/src/driver/action-target.js";
-import { click, scroll } from "../../dist/src/driver/pointer.js";
+import {
+  click,
+  dragMouse,
+  hover,
+  scroll,
+} from "../../dist/src/driver/pointer.js";
 
 test("click resolves selector offsets without the public elementEval helper", async () => {
   const calls = [];
@@ -573,7 +579,276 @@ test("click reads the probe and falls back to synthetic events only after a disp
   const finish = calls[2].params.expression;
   assert.match(finish, /probe\.dispose\(\)/);
   assert.match(finish, /if \(probe\.seen \|\| !probe\.target\) return/);
-  assert.match(finish, /dispatchEvent\(new MouseEvent\("click"/);
+  assert.match(finish, /fireMouse\(target, "click"/);
+});
+
+/**
+ * Runs a fallback expression against a minimal page whose only element
+ * records every event it receives. The probe store answers any id with an
+ * unseen probe for that element. `cancel` lists event types whose listener
+ * calls preventDefault, as a pointer-driven widget does on pointerdown.
+ */
+function runFallbackInFakePage(expression, { cancel = [] } = {}) {
+  const events = [];
+  class FakeMouseEvent extends Event {
+    constructor(type, init = {}) {
+      super(type, init);
+      Object.assign(this, {
+        clientX: init.clientX,
+        clientY: init.clientY,
+        button: init.button ?? 0,
+        buttons: init.buttons ?? 0,
+        detail: init.detail ?? 0,
+      });
+    }
+  }
+  class FakePointerEvent extends FakeMouseEvent {
+    constructor(type, init = {}) {
+      super(type, init);
+      Object.assign(this, {
+        pointerId: init.pointerId,
+        pointerType: init.pointerType,
+        isPrimary: init.isPrimary,
+      });
+    }
+  }
+  const target = new EventTarget();
+  target.contains = (node) => node === target;
+  const record = (event) => {
+    events.push({
+      type: event.type,
+      kind: event instanceof FakePointerEvent ? "pointer" : "mouse",
+      bubbles: event.bubbles,
+      button: event.button,
+      buttons: event.buttons,
+      detail: event.detail,
+      pointerType: event.pointerType,
+      isPrimary: event.isPrimary,
+      x: event.clientX,
+      y: event.clientY,
+    });
+    if (cancel.includes(event.type)) event.preventDefault();
+  };
+  for (const type of [
+    "pointerover",
+    "pointerenter",
+    "pointermove",
+    "pointerdown",
+    "pointerup",
+    "mouseover",
+    "mouseenter",
+    "mousemove",
+    "mousedown",
+    "mouseup",
+    "click",
+    "dblclick",
+  ]) {
+    target.addEventListener(type, record);
+  }
+  const probe = { seen: false, target, dispose() {} };
+  const window = {
+    __egoBrowserInputProbes: new Proxy(
+      {},
+      { get: () => probe, deleteProperty: () => true },
+    ),
+  };
+  const value = vm.runInNewContext(expression, {
+    window,
+    document: {
+      elementFromPoint: () => target,
+      body: target,
+      removeEventListener() {},
+    },
+    MouseEvent: FakeMouseEvent,
+    PointerEvent: FakePointerEvent,
+  });
+  // The value comes from another realm; copy it so deepEqual compares data.
+  return { value: { ...value }, events };
+}
+
+/** Click override whose probe read-back runs in the fake page above. */
+function clickFallbackInFakePage(options) {
+  let page = null;
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Runtime.evaluate") {
+        if (params.expression.includes("probe.dispose();\n        delete")) {
+          page = runFallbackInFakePage(params.expression, options);
+          return { result: { value: page.value } };
+        }
+        return { result: { value: { x: 100, y: 200 } } };
+      }
+      if (method === "Input.dispatchMouseEvent") {
+        throw new Error("CDP request timed out: Input.dispatchMouseEvent");
+      }
+      return {};
+    },
+  });
+  return { restore, page: () => page };
+}
+
+test("click fallback sends the pointer events a real mouse click produces", async () => {
+  const { restore, page } = clickFallbackInFakePage();
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  const { value, events } = page();
+  assert.deepEqual(value, { seen: false, fallback: true });
+  assert.deepEqual(
+    events.map((event) => event.type),
+    [
+      "pointerover",
+      "pointerenter",
+      "mouseover",
+      "mouseenter",
+      "pointermove",
+      "mousemove",
+      "pointerdown",
+      "mousedown",
+      "pointerup",
+      "mouseup",
+      "click",
+    ],
+  );
+  for (const event of events) {
+    assert.deepEqual([event.x, event.y], [100, 200], event.type);
+    if (event.kind === "pointer") {
+      assert.equal(event.pointerType, "mouse", event.type);
+      assert.equal(event.isPrimary, true, event.type);
+    }
+  }
+  const byType = Object.fromEntries(events.map((event) => [event.type, event]));
+  assert.equal(byType.pointerenter.bubbles, false);
+  assert.equal(byType.pointerover.bubbles, true);
+  assert.equal(byType.pointermove.button, -1);
+  const { pointerdown, pointerup } = byType;
+  assert.deepEqual(
+    [pointerdown.kind, pointerdown.button, pointerdown.buttons],
+    ["pointer", 0, 1],
+  );
+  assert.deepEqual([pointerup.button, pointerup.buttons], [0, 0]);
+  assert.deepEqual(
+    [byType.click.kind, byType.click.detail, byType.click.buttons],
+    ["mouse", 1, 0],
+  );
+});
+
+test("click fallback suppresses compatibility mouse events after a canceled pointerdown", async () => {
+  // Radix-style triggers open on pointerdown and call preventDefault; Chrome
+  // then skips mousedown and mouseup but still fires click.
+  const { restore, page } = clickFallbackInFakePage({
+    cancel: ["pointerdown"],
+  });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(
+    page().events.map((event) => event.type),
+    [
+      "pointerover",
+      "pointerenter",
+      "mouseover",
+      "mouseenter",
+      "pointermove",
+      "mousemove",
+      "pointerdown",
+      "pointerup",
+      "click",
+    ],
+  );
+});
+
+test("hover fallback sends pointer enter and move events", async () => {
+  let page = null;
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Runtime.evaluate") {
+        if (params.expression.includes('removeEventListener("mousemove"')) {
+          page = runFallbackInFakePage(params.expression);
+          return { result: { value: page.value } };
+        }
+        if (isProbeExpression({ params })) return { result: { value: true } };
+        return { result: { value: { x: 10, y: 20 } } };
+      }
+      if (method === "Input.dispatchMouseEvent") {
+        throw new Error("CDP request timed out: Input.dispatchMouseEvent");
+      }
+      return {};
+    },
+  });
+  try {
+    await withFakeEgo(() => hover([10, 20]));
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(page.value, { seen: false, fallback: true });
+  assert.deepEqual(
+    page.events.map((event) => event.type),
+    [
+      "pointerover",
+      "pointerenter",
+      "mouseover",
+      "mouseenter",
+      "pointermove",
+      "mousemove",
+    ],
+  );
+});
+
+test("drag fallback sends pointer events alongside the mouse events", async () => {
+  let page = null;
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Runtime.evaluate") {
+        if (params.expression.includes('removeEventListener("mouseup"')) {
+          page = runFallbackInFakePage(params.expression);
+          return { result: { value: page.value } };
+        }
+        return { result: { value: true } };
+      }
+      if (method === "Input.dispatchMouseEvent") {
+        throw new Error("CDP request timed out: Input.dispatchMouseEvent");
+      }
+      return {};
+    },
+  });
+  try {
+    await withFakeEgo(() =>
+      dragMouse([
+        [10, 20],
+        [30, 40],
+        [50, 60],
+      ]),
+    );
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(page.value, { seen: false, fallback: true });
+  assert.deepEqual(
+    page.events.map((event) => [event.type, event.x, event.y, event.buttons]),
+    [
+      ["pointerover", 10, 20, 0],
+      ["pointerenter", 10, 20, 0],
+      ["mouseover", 10, 20, 0],
+      ["mouseenter", 10, 20, 0],
+      ["pointerdown", 10, 20, 1],
+      ["mousedown", 10, 20, 1],
+      ["pointermove", 30, 40, 1],
+      ["mousemove", 30, 40, 1],
+      ["pointermove", 50, 60, 1],
+      ["mousemove", 50, 60, 1],
+      ["pointerup", 50, 60, 0],
+      ["mouseup", 50, 60, 0],
+    ],
+  );
 });
 
 test("click treats a trusted click that landed before the dispatch timeout as delivered", async () => {
