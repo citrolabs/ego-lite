@@ -8,7 +8,9 @@ import {
 } from "../dist/src/driver/page-actions.js";
 import { RefMap } from "../dist/src/ref-map.js";
 import {
+  CdpRequestTimeoutError,
   PageDialogOpenedError,
+  isCdpRequestTimeoutError,
   isPageDialogOpenedError,
 } from "../dist/src/browser-runtime.js";
 import { ElementResolutionError } from "../dist/src/element-resolver.js";
@@ -1452,6 +1454,61 @@ test("Page mouse presses keep a dialog that interrupts the native select check t
         async () => new Map([["frame-1", "session:frame"]]),
       ),
     assertDialog,
+  );
+  assert.equal(pressCount(frame.calls), 0);
+});
+
+test("Page mouse presses keep a transport timeout during the native select check typed", async () => {
+  // The Page boundary recognizes the timeout to stop a stalled navigation
+  // and report EGO_PAGE_UNRESPONSIVE, so the check must not wrap it.
+  const timeout = (method, sessionId) =>
+    new CdpRequestTimeoutError(method, 5000, sessionId);
+  const assertTimeout = (method) => (error) => {
+    assert.equal(isCdpRequestTimeoutError(error), true);
+    assert.equal(error instanceof ElementResolutionError, false);
+    assert.equal(error.method, method);
+    return true;
+  };
+
+  // The top-level hit test times out.
+  const click = pointServices(null, (method, _params, sessionId) => {
+    if (method === "Runtime.evaluate") throw timeout(method, sessionId);
+  });
+  await assert.rejects(
+    () => clickPointInPage(click, "session:page", 40, 50),
+    assertTimeout("Runtime.evaluate"),
+  );
+  assert.equal(pressCount(click.calls), 0);
+
+  const down = pointServices(null, (method, _params, sessionId) => {
+    if (method === "Runtime.evaluate") throw timeout(method, sessionId);
+  });
+  await assert.rejects(
+    () => mouseButtonInPage(down, "session:page", "mousePressed", 40, 50, 1),
+    assertTimeout("Runtime.evaluate"),
+  );
+  assert.equal(pressCount(down.calls), 0);
+
+  // Inspecting an iframe under the point times out.
+  const frame = crossOriginFrameServices(
+    selectVerdict(null),
+    (method, _params, sessionId) => {
+      if (method === "DOM.getBoxModel") throw timeout(method, sessionId);
+    },
+  );
+  await assert.rejects(
+    () =>
+      clickPointInPage(
+        frame,
+        "session:page",
+        140,
+        250,
+        {},
+        0,
+        0,
+        async () => new Map([["frame-1", "session:frame"]]),
+      ),
+    assertTimeout("DOM.getBoxModel"),
   );
   assert.equal(pressCount(frame.calls), 0);
 });
