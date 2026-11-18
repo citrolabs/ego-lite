@@ -1,3 +1,4 @@
+import { isPageDialogOpenedError } from "../browser-runtime.js";
 import { runtimeValue } from "../cdp-eval.js";
 import {
   ElementResolutionError,
@@ -2110,6 +2111,9 @@ async function assertNoNativeSelectAtViewportPoint(
         currentSessionId,
       );
     } catch (error) {
+      // A dialog that opened meanwhile is reported by the Page action
+      // boundary as `receipt.dialog`, so it must keep its type.
+      if (isPageDialogOpenedError(error)) throw error;
       throw nativeSelectUncheckedError(actionName, errorText(error));
     }
     const result = response?.result;
@@ -2229,6 +2233,7 @@ async function uninspectedFrameAtPoint(
     }
     return { sessionId, contextId: world.executionContextId, toFrame };
   } catch (error) {
+    if (isPageDialogOpenedError(error)) throw error;
     throw nativeSelectUncheckedError(
       actionName,
       `the point is inside an iframe that could not be inspected: ${errorText(error)}`,

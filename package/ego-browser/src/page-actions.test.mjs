@@ -7,6 +7,11 @@ import {
   mouseButtonInPage,
 } from "../dist/src/driver/page-actions.js";
 import { RefMap } from "../dist/src/ref-map.js";
+import {
+  PageDialogOpenedError,
+  isPageDialogOpenedError,
+} from "../dist/src/browser-runtime.js";
+import { ElementResolutionError } from "../dist/src/element-resolver.js";
 
 /**
  * Services for a top-level raw-selector click: the strict resolver counts and
@@ -1338,6 +1343,57 @@ test("Page mouse presses fail closed when the hit test gives no positive answer"
     assertUncheckedRefusal("page.mouse.click", "Session closed"),
   );
   assert.equal(pressCount(rejected.calls), 0);
+});
+
+test("Page mouse presses keep a dialog that interrupts the native select check typed", async () => {
+  const dialog = { type: "alert", message: "Saved" };
+  const dialogError = (method) =>
+    new PageDialogOpenedError(method, "session:page", dialog);
+  const assertDialog = (error) => {
+    assert.equal(isPageDialogOpenedError(error), true);
+    assert.equal(error instanceof ElementResolutionError, false);
+    assert.deepEqual(error.dialog, dialog);
+    return true;
+  };
+
+  // The dialog opens while the top-level hit test is evaluated.
+  const click = pointServices(null, (method) => {
+    if (method === "Runtime.evaluate") throw dialogError(method);
+  });
+  await assert.rejects(
+    () => clickPointInPage(click, "session:page", 40, 50),
+    assertDialog,
+  );
+  assert.equal(pressCount(click.calls), 0);
+
+  const down = pointServices(null, (method) => {
+    if (method === "Runtime.evaluate") throw dialogError(method);
+  });
+  await assert.rejects(
+    () => mouseButtonInPage(down, "session:page", "mousePressed", 40, 50, 1),
+    assertDialog,
+  );
+  assert.equal(pressCount(down.calls), 0);
+
+  // The dialog opens while an iframe under the point is being inspected.
+  const frame = crossOriginFrameServices(selectVerdict(null), (method) => {
+    if (method === "DOM.getBoxModel") throw dialogError(method);
+  });
+  await assert.rejects(
+    () =>
+      clickPointInPage(
+        frame,
+        "session:page",
+        140,
+        250,
+        {},
+        0,
+        0,
+        async () => new Map([["frame-1", "session:frame"]]),
+      ),
+    assertDialog,
+  );
+  assert.equal(pressCount(frame.calls), 0);
 });
 
 test("Page click fails closed when the native select check returns no result", async () => {
