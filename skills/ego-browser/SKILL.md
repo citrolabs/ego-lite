@@ -9,10 +9,7 @@ metadata:
 
 # ego-browser
 
-ego lite is a Chromium browser shared by people and AI Agents. The user browses
-as usual; Agents write and run JavaScript through the `ego-browser`
-command-line tool, work in a space the browser prepares for them, and hand
-control back to the user when needed.
+ego lite is a Chromium browser shared by people and AI Agents. The user browses as usual; Agents write and run JavaScript through the `ego-browser` command-line tool, work in a space the browser prepares for them, and hand control back to the user when needed.
 
 ## Getting started
 
@@ -22,22 +19,15 @@ Before any browser task, run:
 ego-browser skill
 ```
 
-Read the whole guide it prints and follow it before operating the browser. The
-guide matches the installed version; run the command again after
-`ego-browser upgrade`, or when any output says to.
+Read the whole guide it prints and follow it before operating the browser. The guide matches the installed version; run the command again after `ego-browser upgrade`, or when any output says to.
 
 ## Installation and connection problems
 
-If `ego-browser` is not found, `skill` is an unknown command, or the browser
-cannot be reached, read [Install or upgrade ego lite](references/install.md)
-and follow the steps for your operating system:
-[macOS](references/install-macos.md) or
-[Windows](references/install-windows.md).
+If `ego-browser` is not found, `skill` is an unknown command, or the browser cannot be reached, read [Install or upgrade ego lite](references/install.md) and follow the steps for your operating system: [macOS](references/install-macos.md) or [Windows](references/install-windows.md).
 
 ## When the guide output is truncated
 
-The output should end with a line starting `[ego-browser:skill] end of guide`.
-If that line is missing, save the output to a file and read it in parts:
+The output should end with a line starting `[ego-browser:skill] end of guide`. If that line is missing, save the output to a file and read it in parts:
 
 ```bash
 ego-browser skill > "$TMPDIR/ego-browser-skill.md"
@@ -51,5 +41,4 @@ ego-browser skill > "$env:TEMP\ego-browser-skill.md"
 
 ## Before clearing browser data
 
-Read [Clearing cookies, cache, and storage](references/clearing-state.md)
-first; some clears reach the whole browser profile.
+Read [Clearing cookies, cache, and storage](references/clearing-state.md) first; some clears reach the whole browser profile.
