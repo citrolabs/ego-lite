@@ -210,6 +210,29 @@ test("JSON Schema subset validates, fills defaults and describes shapes", () => 
   );
 });
 
+test("anyOf keeps sibling keywords and required defaults only count when applied", () => {
+  const anyOfSchema = { type: "string", anyOf: [{ enum: [1, "a"] }] };
+  assert.equal(validateJsonSchema(anyOfSchema, "a").issues.length, 0);
+  assert.match(
+    formatSchemaIssues(validateJsonSchema(anyOfSchema, 1).issues),
+    /expected string/,
+  );
+
+  const withDefault = {
+    type: "object",
+    required: ["mode"],
+    properties: { mode: { type: "string", default: "ok" } },
+  };
+  assert.deepEqual(
+    validateJsonSchema(withDefault, {}, { applyDefaults: true }),
+    { value: { mode: "ok" }, issues: [] },
+  );
+  assert.match(
+    formatSchemaIssues(validateJsonSchema(withDefault, {}).issues),
+    /\.mode: is required/,
+  );
+});
+
 test("official plugins install silently on first use and run with the caller's Page", async (t) => {
   const box = sandbox(t);
   box.publish("bundled", { id: "demo", version: "1.0.0" });
@@ -310,6 +333,16 @@ test("a plugin that exceeds its timeout fails with TIMEOUT", async (t) => {
   await assert.rejects(
     runPluginCommand(page, task, "slow/read", {}, { timeout: 50 }),
     { code: "TIMEOUT" },
+  );
+  box.publish("bundled", {
+    id: "stuck",
+    version: "1.0.0",
+    body: `await new Promise(() => {});\nexport default () => ({});\n`,
+  });
+  await assert.rejects(
+    runPluginCommand(page, task, "stuck/read", {}, { timeout: 50 }),
+    { code: "TIMEOUT" },
+    "loading the entry counts toward the timeout",
   );
   await assert.rejects(
     runPluginCommand(page, task, "slow/read", {}, { wait: 1 }),
@@ -520,6 +553,29 @@ test("local plugins load from the local directory first and reload after edits",
   );
   assert.deepEqual(await plugins("other.org"), []);
   assert.equal((await plugins({ query: "read things" })).length, 1);
+
+  box.revoke("bundled", [
+    {
+      integrity: bundleIntegrity(bundleFromDirectory(local)),
+      reason: "malicious copy",
+    },
+  ]);
+  await assert.rejects(runPluginCommand(page, task, "demo/read"), {
+    code: "PLUGIN_REVOKED",
+    message: /malicious copy/,
+  });
+});
+
+test("removePlugin rejects ids that are not a single plugin directory", async (t) => {
+  const box = sandbox(t);
+  box.publish("bundled", { id: "demo", version: "1.0.0" });
+  await runPluginCommand(page, task, "demo/read");
+  for (const id of ["", "..", "../installed", "a/b", "."]) {
+    await assert.rejects(removePlugin(id), /expects a plugin id/);
+  }
+  assert.deepEqual(readdirSync(join(box.home, "installed")), ["demo"]);
+  assert.equal(await removePlugin("demo"), true);
+  assert.deepEqual(readdirSync(join(box.home, "installed")), []);
 });
 
 test("hints name the call once per task space and skip plugins already used", async (t) => {
@@ -585,6 +641,19 @@ test("round finalizers append after the output and are dropped on a hard stop", 
   const stopped = [];
   flushSink({ write: (chunk) => stopped.push(chunk) }, false);
   assert.equal(stopped.join(""), "stop here\n");
+
+  // An ego call inside a finalizer can hit a space the round just finished
+  // or handed off; that must not discard the round's output.
+  resetSink();
+  bufferOutput("result\n");
+  registerRoundFinalizer(async () => {
+    markHardStop("space inactive");
+    throw new Error("space inactive");
+  });
+  await runRoundFinalizers();
+  const kept = [];
+  flushSink({ write: (chunk) => kept.push(chunk) }, false);
+  assert.equal(kept.join(""), "result\n");
   resetSink();
 });
 

@@ -82,6 +82,9 @@ export function runRoundFinalizers(): Promise<void> {
   finalizersRun = (async () => {
     if (hardStopMessage !== null) return;
     for (const finalizer of pending) {
+      // A finalizer only decorates a finished round. An ego call it makes can
+      // hit a space the round just finished or handed off; that must not mark
+      // the round as hard-stopped and discard its output.
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const text = await Promise.race([
@@ -95,6 +98,7 @@ export function runRoundFinalizers(): Promise<void> {
         // Finalizers add hints; their failures must not change the round.
       } finally {
         clearTimeout(timer);
+        hardStopMessage = null;
       }
     }
   })();

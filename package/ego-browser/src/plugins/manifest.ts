@@ -189,6 +189,15 @@ export function urlHostname(url: string | undefined): string | undefined {
 }
 
 /** Split `"x/timeline"` into plugin id and command name. */
+/** Throw unless `id` is a valid plugin id (also safe as a single path segment). */
+export function assertPluginId(id: unknown, api: string): asserts id is string {
+  if (typeof id !== "string" || !ID_PATTERN.test(id)) {
+    throw new TypeError(
+      `${api} expects a plugin id such as "x" or "example.blog", got ${JSON.stringify(id)}`,
+    );
+  }
+}
+
 export function parseCommandRef(ref: unknown): { id: string; command: string } {
   if (typeof ref !== "string") {
     throw new TypeError(

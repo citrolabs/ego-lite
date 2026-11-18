@@ -18,6 +18,7 @@ import { promisify } from "node:util";
 import { bundledPluginIndexPath, pluginHomeDir } from "../env.js";
 import { PluginError } from "./errors.js";
 import {
+  assertPluginId,
   MANIFEST_FILE,
   bundleIntegrity,
   compareVersions,
@@ -440,11 +441,17 @@ function pruneVersions(id: string, keep: Array<string | undefined>): void {
 }
 
 export function removeInstalled(id: string): boolean {
+  assertPluginId(id, "removePlugin");
+  const root = resolve(pluginPaths().installed);
+  const dir = resolve(root, id);
+  if (dirname(dir) !== root) {
+    throw new TypeError(`removePlugin refuses to delete ${dir}`);
+  }
   const lock = readLock();
   const existed = Boolean(lock.plugins[id]);
   delete lock.plugins[id];
   writeLock(lock);
-  rmSync(join(pluginPaths().installed, id), { recursive: true, force: true });
+  rmSync(dir, { recursive: true, force: true });
   return existed;
 }
 

@@ -19,6 +19,7 @@ import {
 } from "./manifest.js";
 import { notePluginUsed } from "./hints.js";
 import {
+  bundleFromDirectory,
   downloadOfficialBundle,
   installBundle,
   installFailure,
@@ -103,7 +104,16 @@ export async function resolveForRun(id: string): Promise<ResolvedPlugin> {
   if (officialIndexIsStale()) await refreshOfficialIndex(AUTO_INDEX_REFRESH_MS);
   const catalog = loadOfficialCatalog();
   if (local) {
-    assertNotRevoked(catalog, local.manifest.id, local.manifest.version);
+    // Hash local files only when some revocation targets an integrity hash.
+    const integrity = catalog.revoked.some((entry) => entry.integrity)
+      ? bundleIntegrity(bundleFromDirectory(local.dir))
+      : undefined;
+    assertNotRevoked(
+      catalog,
+      local.manifest.id,
+      local.manifest.version,
+      integrity,
+    );
     return local;
   }
 
@@ -293,7 +303,6 @@ async function executeCommand(
     );
   }
 
-  const run = await loadEntry(plugin, commandName);
   const roundConsole = createRoundConsole();
   const context = {
     ...helperContextFactory(),
@@ -317,7 +326,9 @@ async function executeCommand(
   let result: unknown;
   try {
     result = await Promise.race([
-      Promise.resolve().then(() => run(args, context)),
+      // Loading counts toward the timeout: a stalled top-level await in the
+      // entry or its imports must not hang the round.
+      loadEntry(plugin, commandName).then((run) => run(args, context)),
       new Promise((_, reject) => {
         timer = setTimeout(
           () =>

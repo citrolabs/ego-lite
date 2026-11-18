@@ -74,13 +74,22 @@ function visit(
   applyDefaults: boolean,
 ): unknown {
   if (schema.anyOf) {
-    for (const option of schema.anyOf) {
+    const { anyOf, ...siblings } = schema;
+    let matched: { result: unknown } | undefined;
+    for (const option of anyOf) {
       const nested: SchemaIssue[] = [];
       const result = visit(option, value, path, nested, applyDefaults);
-      if (nested.length === 0) return result;
+      if (nested.length === 0) {
+        matched = { result };
+        break;
+      }
     }
-    issues.push({ path, message: "does not match any allowed shape" });
-    return value;
+    if (!matched) {
+      issues.push({ path, message: "does not match any allowed shape" });
+      return value;
+    }
+    // Sibling keywords still apply, to the value with the branch's defaults.
+    return visit(siblings, matched.result, path, issues, applyDefaults);
   }
   if (schema.type !== undefined) {
     const types = Array.isArray(schema.type) ? schema.type : [schema.type];
@@ -156,7 +165,7 @@ function visit(
     for (const name of schema.required || []) {
       if (
         value[name] === undefined &&
-        properties[name]?.default === undefined
+        !(applyDefaults && properties[name]?.default !== undefined)
       ) {
         issues.push({ path: `${path}.${name}`, message: "is required" });
       }
