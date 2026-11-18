@@ -598,7 +598,11 @@ test("click reads the probe and falls back to synthetic events only after a disp
  * because its buttons were never pressed natively.
  */
 function runFallbackInFakePage(expression, options) {
-  return createFakePage(options).run(expression, undefined, options?.probeState);
+  return createFakePage(options).run(
+    expression,
+    undefined,
+    options?.probeState,
+  );
 }
 
 /**
@@ -1123,7 +1127,13 @@ test("a trusted pointerover leaves the elements only the synthetic hover entered
   );
 
   assert.deepEqual(
-    handOver.map((event) => [event.type, event.on, event.related, event.x, event.y]),
+    handOver.map((event) => [
+      event.type,
+      event.on,
+      event.related,
+      event.x,
+      event.y,
+    ]),
     [
       ["pointerout", "trigger", "body", 5, 6],
       ["pointerleave", "trigger", "body", 5, 6],
@@ -1172,7 +1182,10 @@ test("click fallback sends click to the common ancestor when press and release t
   // hit-tests to the trigger. Chrome clicks their nearest common ancestor.
   const { restore, page } = clickFallbackInFakePage({
     build: triggerAndOtherPage,
-    probeState: (elements) => ({ pressTarget: elements.other, mouseDown: true }),
+    probeState: (elements) => ({
+      pressTarget: elements.other,
+      mouseDown: true,
+    }),
   });
   try {
     await withFakeEgo(() => click("#target"));
@@ -1209,9 +1222,7 @@ test("click fallback ignores a capture request made while no button is pressed",
   }
 
   const routed = page()
-    .events.filter((event) =>
-      /down|up|click|capture/.test(event.type),
-    )
+    .events.filter((event) => /down|up|click|capture/.test(event.type))
     .map((event) => [event.type, event.on]);
   assert.deepEqual(routed, [
     ["pointerdown", "trigger"],
@@ -1227,7 +1238,10 @@ test("click fallback resumes after a delivered native press without pressing aga
   // up the click past the dispatch timeout. A second pointerdown would toggle
   // the menu closed; only the release and the click are missing.
   const { restore, page } = clickFallbackInFakePage({
-    probeState: (elements) => ({ pressTarget: elements.target, mouseDown: true }),
+    probeState: (elements) => ({
+      pressTarget: elements.target,
+      mouseDown: true,
+    }),
   });
   try {
     await withFakeEgo(() => click("#target"));
@@ -1251,7 +1265,10 @@ test("click fallback keeps mouseup out after a canceled native pointerdown", asy
   // The native pointerdown was canceled, so Chrome skipped mousedown and will
   // skip the compatibility mouseup as well; click still fires.
   const { restore, page } = clickFallbackInFakePage({
-    probeState: (elements) => ({ pressTarget: elements.target, mouseDown: false }),
+    probeState: (elements) => ({
+      pressTarget: elements.target,
+      mouseDown: false,
+    }),
   });
   try {
     await withFakeEgo(() => click("#target"));
@@ -1306,9 +1323,15 @@ test("the click probe records the native press so the fallback can resume it", a
   }
   assert.ok(expression, "the click installs a probe");
 
-  const outer = { name: "outer", contains: (node) => node === outer || node === inner };
+  const outer = {
+    name: "outer",
+    contains: (node) => node === outer || node === inner,
+  };
   const inner = { name: "inner", contains: (node) => node === inner };
-  const elsewhere = { name: "elsewhere", contains: (node) => node === elsewhere };
+  const elsewhere = {
+    name: "elsewhere",
+    contains: (node) => node === elsewhere,
+  };
   const listeners = {};
   const document = {
     elementFromPoint: () => outer,
@@ -1316,7 +1339,9 @@ test("the click probe records the native press so the fallback can resume it", a
       (listeners[type] ||= []).push(listener);
     },
     removeEventListener(type, listener) {
-      listeners[type] = (listeners[type] || []).filter((entry) => entry !== listener);
+      listeners[type] = (listeners[type] || []).filter(
+        (entry) => entry !== listener,
+      );
     },
   };
   const window = {};
@@ -1328,14 +1353,23 @@ test("the click probe records the native press so the fallback can resume it", a
   });
   const [probe] = Object.values(window.__egoBrowserInputProbes);
   const deliver = (type, target, isTrusted = true) => {
-    for (const listener of listeners[type] || []) listener({ type, target, isTrusted });
+    for (const listener of listeners[type] || [])
+      listener({ type, target, isTrusted });
   };
 
   deliver("pointerdown", elsewhere);
   deliver("pointerdown", inner, false);
   deliver("pointerup", inner);
-  assert.equal(probe.pressTarget, null, "untrusted or off-target presses do not count");
-  assert.equal(probe.released, false, "a release without a press does not count");
+  assert.equal(
+    probe.pressTarget,
+    null,
+    "untrusted or off-target presses do not count",
+  );
+  assert.equal(
+    probe.released,
+    false,
+    "a release without a press does not count",
+  );
 
   deliver("pointerdown", inner);
   assert.equal(probe.pressTarget, inner);
