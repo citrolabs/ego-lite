@@ -88,11 +88,11 @@ jobs:
       - name: Stage Codex model catalog
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          MODEL: ${{ vars.CODEX_REVIEW_MODEL || 'gpt-5.6-sol' }}
+          MODEL: ${{ vars.CODEX_REVIEW_MODEL || 'openai/gpt-6.1-sol' }}
         run: |
           set -euo pipefail
 
-          # Codex's built-in catalog marks gpt-5.6-sol (and the other 5.6/6.x
+          # Codex's built-in catalog marks gpt-6.1-sol (and the other 5.6/6.x
           # models) as `tool_mode: code_mode_only` + `use_responses_lite`. The
           # shell then reaches the model only as a JavaScript `exec` cell inside
           # a non-standard `additional_tools` input item. Our gateway passes
@@ -104,6 +104,11 @@ jobs:
           # `use_responses_lite: false`, `prefer_websockets: false` and
           # `multi_agent_version: null`, which makes Codex send a plain
           # `tools` array with `exec_command` / `write_stdin` function tools.
+          # It also empties `experimental_supported_tools`, which would
+          # otherwise add a `namespace`-typed `clock` tool. The slug carries
+          # the `openai/` prefix because that is the name the gateway serves.
+          # The catalog holds only this model: pointing CODEX_REVIEW_MODEL at
+          # another one needs a new entry here.
           # Feature flags (`features.code_mode*`) cannot override the catalog.
           # Take the file from the base commit when it exists there, for the
           # same reason AGENTS.md is restored above.
@@ -190,7 +195,7 @@ jobs:
           # Custom gateway: responses-api-endpoint is the full Responses API URL for this action.
           openai-api-key: ${{ secrets.CODEX_OPENAI_API_KEY }}
           responses-api-endpoint: ${{ vars.CODEX_RESPONSES_ENDPOINT || 'https://newapi.citrolabs.dev/v1/responses' }}
-          model: ${{ vars.CODEX_REVIEW_MODEL || 'gpt-5.6-sol' }}
+          model: ${{ vars.CODEX_REVIEW_MODEL || 'openai/gpt-6.1-sol' }}
           effort: medium
           prompt-file: ${{ runner.temp }}/review-prompt.md
           output-file: ${{ runner.temp }}/review.md

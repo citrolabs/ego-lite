@@ -3381,6 +3381,64 @@ test("a subtree snapshot inherits the root ref frame provenance", async () => {
   });
 });
 
+test("a subtree snapshot rooted in an iframe passes the root frameId to native snapshot", async () => {
+  await withFixture(async (fixture) => {
+    const nativeOptions = [];
+    const task = taskForRound(fixture, "round-a", {
+      async ensureFrameSessions() {
+        return new Map([["frame-child", "session:target-1"]]);
+      },
+      async snapshot(options) {
+        nativeOptions.push({ ...options });
+        if (options.scope === "full_page") {
+          return {
+            content: [
+              "root",
+              '  text "browsing context" [ref=8]',
+              '  iframe "Example" [ref=11]',
+              "    root",
+              '      button "Frame root" [ref=21]',
+            ].join("\n"),
+            refs: [
+              // backendNodeId is only unique per renderer, so the main
+              // document and the cross-origin frame can share one.
+              { refId: 8, backendNodeId: 8, role: "text" },
+              { refId: 11, backendNodeId: 11, role: "iframe" },
+              {
+                refId: 21,
+                backendNodeId: 8,
+                frameId: "frame-child",
+                role: "button",
+                name: "Frame root",
+              },
+            ],
+          };
+        }
+        return { content: "subtree", refs: [] };
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/frame");
+    await page.snapshot({ scope: "full_page" });
+
+    await page.snapshot({ scope: "subtree", root: "@21" });
+    assert.deepEqual(nativeOptions.at(-1), {
+      scope: "subtree",
+      root: 8,
+      frameId: "frame-child",
+      includeActionMarks: true,
+      includeStableLocator: true,
+    });
+
+    await page.snapshot({ scope: "subtree", root: "@8" });
+    assert.deepEqual(nativeOptions.at(-1), {
+      scope: "subtree",
+      root: 8,
+      includeActionMarks: true,
+      includeStableLocator: true,
+    });
+  });
+});
+
 for (const expression of ["document.title", () => document.title]) {
   test(`Page evaluate preserves snapshot refs for a read-only ${typeof expression}`, async () => {
     await withFixture(async (fixture) => {
@@ -4393,6 +4451,59 @@ test("Page fill retries an appended value and accepts the transformed retry", as
         ([kind, method]) => kind === "cdp" && method === "Input.insertText",
       ).length,
       2,
+    );
+  });
+});
+
+test("Page fill retries a contenteditable that prepended instead of replacing", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/editor");
+    // A code editor that ignores the DOM Range selection until a real
+    // pointer activation inserts at offset 0 on the first attempt.
+    fixture.configureFill({
+      kind: "contenteditable",
+      initialText: "const old = 1;",
+      transform: (text, current, attempt) =>
+        attempt === 1 ? text + current : text,
+    });
+    fixture.calls.length = 0;
+
+    assert.deepEqual(
+      await page.fill("[contenteditable]", "const next = 2;"),
+      {},
+    );
+    assert.equal(fixture.fillText(), "const next = 2;");
+    const cdpMethods = fixture.calls
+      .filter(([kind]) => kind === "cdp")
+      .map(([, method]) => method);
+    assert.equal(
+      cdpMethods.filter((method) => method === "Input.insertText").length,
+      2,
+    );
+    assert.ok(
+      cdpMethods.includes("Input.dispatchMouseEvent"),
+      "a prepended fill must retry after a real pointer activation",
+    );
+  });
+});
+
+test("Page fill rejects a contenteditable that keeps inserting into the old text", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/editor");
+    fixture.configureFill({
+      kind: "contenteditable",
+      initialText: "old text",
+      transform: (text, current, attempt) =>
+        attempt === 1
+          ? text + current
+          : current.slice(0, 3) + text + current.slice(3),
+    });
+
+    await assert.rejects(
+      () => page.fill("[contenteditable]", "new"),
+      /did not accept the text.*click the editor and use page\.keyboard/i,
     );
   });
 });

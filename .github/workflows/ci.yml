@@ -30,7 +30,10 @@ jobs:
           cache-dependency-path: package/ego-browser/package-lock.json
       - run: npm ci
       - run: npm run style:check
-      - run: npm audit --registry=https://registry.npmjs.org --audit-level=moderate
+      # Audit runtime dependencies only. The dev dependencies are build
+      # tooling that never ships, and an advisory with no patched release
+      # there (picomatch, GHSA-fc5q-39xc-vjpf) would block every PR.
+      - run: npm audit --omit=dev --registry=https://registry.npmjs.org --audit-level=moderate
       - run: npm test
       - name: Check plugin style
         working-directory: .
