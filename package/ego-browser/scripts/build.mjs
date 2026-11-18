@@ -19,6 +19,7 @@ import resolve from "@rollup/plugin-node-resolve";
 import typescript from "@rollup/plugin-typescript";
 
 import { guidePlatforms, renderGuide } from "./render-guide.mjs";
+import { buildPluginIndex } from "../../../ego-plugins/scripts/build-index.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = dirname(dirname(root));
@@ -41,6 +42,10 @@ const entrySkillEntries = [
   "assets",
   "learnings",
 ];
+// Official site plugins ship with the SDK as the offline baseline index; the
+// network index (citrolabs/ego-plugins) can only add newer versions.
+const officialPluginsSourceDir = join(repoRoot, "ego-plugins");
+const bundledPluginsDir = join(outDir, "official-plugins");
 const buildLock = join(root, ".build.lock");
 
 // The pre-commit hooks build once and then run several checks that each start
@@ -129,6 +134,11 @@ try {
       { recursive: true },
     );
   }
+  buildPluginIndex({
+    sourceDir: join(officialPluginsSourceDir, "plugins"),
+    outDir: bundledPluginsDir,
+    revokedPath: join(officialPluginsSourceDir, "revoked.json"),
+  });
   await chmod(bundledCli, 0o755);
 } finally {
   await lock.close();

@@ -22,6 +22,7 @@ import {
   initializeTaskSpaceHandle,
   rollbackCreatedTaskSpace,
 } from "./page-model.js";
+import { installPluginRuntime, pluginHelpers } from "./plugins/api.js";
 import {
   loadBrowserToolSource,
   loadLearnedContext,
@@ -76,6 +77,15 @@ export {
 } from "./driver/waits.js";
 export { uploadFile } from "./driver/files.js";
 export { browserFetch, serverFetch } from "./http.js";
+export {
+  plugins,
+  installPlugin,
+  updatePlugin,
+  pinPlugin,
+  unpinPlugin,
+  removePlugin,
+  rollbackPlugin,
+} from "./plugins/api.js";
 
 /**
  * List Agent-owned and user-owned spaces exposed by Ego Lite.
@@ -731,6 +741,7 @@ export function helperContext(
     handOffTaskSpace,
     takeOverTaskSpace,
     waitForAgentControl,
+    ...pluginHelpers,
     ...extra,
   };
   return {
@@ -768,5 +779,8 @@ export async function loadAgentHelpers() {
   }
   return out;
 }
+
+// Plugins receive the same helper set as an Agent script.
+installPluginRuntime(() => helperContext());
 
 export const __testing = { setOverrides, decodeUnserializableJsValue };

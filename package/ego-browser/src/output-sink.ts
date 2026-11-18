@@ -25,6 +25,17 @@ let buffer: string[] = [];
 let hardStopMessage: string | null = null;
 let flushed = false;
 let lifecycleHooked = false;
+let finalizers: RoundFinalizer[] = [];
+let finalizersRun: Promise<void> | null = null;
+let trailer: string[] = [];
+
+/**
+ * Async work that runs once after the script settled and before output is
+ * flushed, such as site plugin hints. It may return text to append after the
+ * round's own output. A hard stop or a thrown script skips it.
+ */
+export type RoundFinalizer = () => Promise<string | undefined>;
+const FINALIZER_TIMEOUT_MS = 5_000;
 
 /** Buffer one already-formatted cliLog chunk (the trailing newline is included). */
 export function bufferOutput(chunk: string): void {
@@ -58,6 +69,38 @@ export function markHardStop(message: string): void {
   }
 }
 
+/** Register a finalizer for the current round; see RoundFinalizer. */
+export function registerRoundFinalizer(finalizer: RoundFinalizer): void {
+  finalizers.push(finalizer);
+}
+
+/** Run registered finalizers once, each bounded by a short timeout. */
+export function runRoundFinalizers(): Promise<void> {
+  if (finalizersRun) return finalizersRun;
+  const pending = finalizers;
+  finalizers = [];
+  finalizersRun = (async () => {
+    if (hardStopMessage !== null) return;
+    for (const finalizer of pending) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const text = await Promise.race([
+          finalizer(),
+          new Promise<undefined>((resolve) => {
+            timer = setTimeout(resolve, FINALIZER_TIMEOUT_MS, undefined);
+          }),
+        ]);
+        if (text) trailer.push(text.endsWith("\n") ? text : `${text}\n`);
+      } catch {
+        // Finalizers add hints; their failures must not change the round.
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  })();
+  return finalizersRun;
+}
+
 /**
  * Emit the run's output exactly once.
  *
@@ -86,8 +129,10 @@ export function flushSink(stream: WritableLike, thrown: boolean): void {
     if (pageNotices.length > 0) {
       stream.write(formatPageNotices(pageNotices));
     }
+    if (!thrown) for (const chunk of trailer) stream.write(chunk);
   }
   buffer = [];
+  trailer = [];
 }
 
 /** Clear sink state. Real runs get a fresh process; this is only for in-process tests. */
@@ -95,6 +140,9 @@ export function resetSink(): void {
   buffer = [];
   hardStopMessage = null;
   flushed = false;
+  finalizers = [];
+  finalizersRun = null;
+  trailer = [];
   resetPageNotices();
 }
 
@@ -135,6 +183,14 @@ export function installLifecycleFlush(
         },
       }
     : stream;
-  lifecycle.on("beforeExit", () => flushSink(writer, false));
+  lifecycle.on("beforeExit", () => {
+    // Finalizers schedule async work; when it settles the event loop drains
+    // again and Node emits beforeExit a second time, which flushes.
+    if (!finalizersRun && finalizers.length > 0 && hardStopMessage === null) {
+      void runRoundFinalizers();
+      return;
+    }
+    flushSink(writer, false);
+  });
   lifecycle.on("exit", () => flushSink(writer, true));
 }

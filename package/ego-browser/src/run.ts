@@ -13,6 +13,7 @@ import {
   createRoundConsole,
   flushSink,
   resetSink,
+  runRoundFinalizers,
 } from "./output-sink.js";
 
 type WritableLike = {
@@ -111,6 +112,7 @@ async function execute(code: string, stdout: WritableLike) {
     flushSink(stdout, true);
     throw addPageContextHint(error);
   }
+  await runRoundFinalizers();
   flushSink(stdout, false);
 }
 

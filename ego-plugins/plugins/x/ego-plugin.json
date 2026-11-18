@@ -1,0 +1,644 @@
+{
+  "id": "x",
+  "name": "X",
+  "version": "1.0.0",
+  "description": "Read posts, searches, threads and profiles on x.com using the signed-in browser session.",
+  "homepage": "https://github.com/citrolabs/ego-plugins/tree/main/plugins/x",
+  "engines": {
+    "egoPluginApi": 1
+  },
+  "domains": ["x.com", "twitter.com"],
+  "commands": {
+    "timeline": {
+      "entry": "timeline.mjs",
+      "readOnly": true,
+      "description": "Recent posts from a profile, or the home timeline when user is omitted.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "user": {
+            "type": "string",
+            "description": "Handle (nasa, @nasa) or profile URL; omit for the home timeline."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 20,
+            "description": "Maximum number of posts."
+          },
+          "includeReposts": {
+            "type": "boolean",
+            "default": false,
+            "description": "Keep reposts of other accounts in a profile feed."
+          }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["source", "posts"],
+        "properties": {
+          "source": {
+            "enum": ["profile", "home"]
+          },
+          "user": {
+            "type": ["string", "null"]
+          },
+          "posts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "url",
+                "author",
+                "text",
+                "createdAt",
+                "metrics"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^\\d+$"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "author": {
+                  "type": "object",
+                  "required": ["handle"],
+                  "properties": {
+                    "name": {
+                      "type": ["string", "null"]
+                    },
+                    "handle": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "text": {
+                  "type": "string"
+                },
+                "lang": {
+                  "type": ["string", "null"]
+                },
+                "createdAt": {
+                  "type": ["string", "null"]
+                },
+                "context": {
+                  "type": ["string", "null"],
+                  "description": "Pinned / reposted-by line shown above the post, in the page language."
+                },
+                "metrics": {
+                  "type": "object",
+                  "required": ["replies", "reposts", "likes"],
+                  "properties": {
+                    "replies": {
+                      "type": "integer"
+                    },
+                    "reposts": {
+                      "type": "integer"
+                    },
+                    "likes": {
+                      "type": "integer"
+                    },
+                    "views": {
+                      "type": ["integer", "null"]
+                    }
+                  }
+                },
+                "media": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "enum": ["photo", "video"]
+                      },
+                      "url": {
+                        "type": ["string", "null"]
+                      }
+                    }
+                  }
+                },
+                "links": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "quote": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "required": ["author", "text"],
+                      "properties": {
+                        "author": {
+                          "type": "object",
+                          "required": ["handle"],
+                          "properties": {
+                            "name": {
+                              "type": ["string", "null"]
+                            },
+                            "handle": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          }
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "createdAt": {
+                          "type": ["string", "null"]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "search": {
+      "entry": "search.mjs",
+      "readOnly": true,
+      "description": "Posts matching a search query (X search operators work).",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["query"],
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Search text, e.g. \"from:nasa artemis\"."
+          },
+          "tab": {
+            "enum": ["top", "latest"],
+            "default": "top",
+            "description": "Top or Latest results."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 20,
+            "description": "Maximum number of posts."
+          }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["query", "posts"],
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "tab": {
+            "type": "string"
+          },
+          "posts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "url",
+                "author",
+                "text",
+                "createdAt",
+                "metrics"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^\\d+$"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "author": {
+                  "type": "object",
+                  "required": ["handle"],
+                  "properties": {
+                    "name": {
+                      "type": ["string", "null"]
+                    },
+                    "handle": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "text": {
+                  "type": "string"
+                },
+                "lang": {
+                  "type": ["string", "null"]
+                },
+                "createdAt": {
+                  "type": ["string", "null"]
+                },
+                "context": {
+                  "type": ["string", "null"],
+                  "description": "Pinned / reposted-by line shown above the post, in the page language."
+                },
+                "metrics": {
+                  "type": "object",
+                  "required": ["replies", "reposts", "likes"],
+                  "properties": {
+                    "replies": {
+                      "type": "integer"
+                    },
+                    "reposts": {
+                      "type": "integer"
+                    },
+                    "likes": {
+                      "type": "integer"
+                    },
+                    "views": {
+                      "type": ["integer", "null"]
+                    }
+                  }
+                },
+                "media": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "enum": ["photo", "video"]
+                      },
+                      "url": {
+                        "type": ["string", "null"]
+                      }
+                    }
+                  }
+                },
+                "links": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "quote": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "required": ["author", "text"],
+                      "properties": {
+                        "author": {
+                          "type": "object",
+                          "required": ["handle"],
+                          "properties": {
+                            "name": {
+                              "type": ["string", "null"]
+                            },
+                            "handle": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          }
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "createdAt": {
+                          "type": ["string", "null"]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "post": {
+      "entry": "post.mjs",
+      "readOnly": true,
+      "description": "One post by URL or id, with its first replies.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "description": "Post URL, e.g. https://x.com/nasa/status/123."
+          },
+          "id": {
+            "type": "string",
+            "pattern": "^\\d+$",
+            "description": "Numeric post id (instead of url)."
+          },
+          "replies": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 200,
+            "default": 20,
+            "description": "Number of replies to collect; 0 for none."
+          }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["post", "replies"],
+        "properties": {
+          "post": {
+            "type": "object",
+            "required": ["id", "url", "author", "text", "createdAt", "metrics"],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^\\d+$"
+              },
+              "url": {
+                "type": "string"
+              },
+              "author": {
+                "type": "object",
+                "required": ["handle"],
+                "properties": {
+                  "name": {
+                    "type": ["string", "null"]
+                  },
+                  "handle": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "text": {
+                "type": "string"
+              },
+              "lang": {
+                "type": ["string", "null"]
+              },
+              "createdAt": {
+                "type": ["string", "null"]
+              },
+              "context": {
+                "type": ["string", "null"],
+                "description": "Pinned / reposted-by line shown above the post, in the page language."
+              },
+              "metrics": {
+                "type": "object",
+                "required": ["replies", "reposts", "likes"],
+                "properties": {
+                  "replies": {
+                    "type": "integer"
+                  },
+                  "reposts": {
+                    "type": "integer"
+                  },
+                  "likes": {
+                    "type": "integer"
+                  },
+                  "views": {
+                    "type": ["integer", "null"]
+                  }
+                }
+              },
+              "media": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "enum": ["photo", "video"]
+                    },
+                    "url": {
+                      "type": ["string", "null"]
+                    }
+                  }
+                }
+              },
+              "links": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "quote": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "required": ["author", "text"],
+                    "properties": {
+                      "author": {
+                        "type": "object",
+                        "required": ["handle"],
+                        "properties": {
+                          "name": {
+                            "type": ["string", "null"]
+                          },
+                          "handle": {
+                            "type": "string",
+                            "minLength": 1
+                          }
+                        }
+                      },
+                      "text": {
+                        "type": "string"
+                      },
+                      "createdAt": {
+                        "type": ["string", "null"]
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          },
+          "replies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "url",
+                "author",
+                "text",
+                "createdAt",
+                "metrics"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^\\d+$"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "author": {
+                  "type": "object",
+                  "required": ["handle"],
+                  "properties": {
+                    "name": {
+                      "type": ["string", "null"]
+                    },
+                    "handle": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "text": {
+                  "type": "string"
+                },
+                "lang": {
+                  "type": ["string", "null"]
+                },
+                "createdAt": {
+                  "type": ["string", "null"]
+                },
+                "context": {
+                  "type": ["string", "null"],
+                  "description": "Pinned / reposted-by line shown above the post, in the page language."
+                },
+                "metrics": {
+                  "type": "object",
+                  "required": ["replies", "reposts", "likes"],
+                  "properties": {
+                    "replies": {
+                      "type": "integer"
+                    },
+                    "reposts": {
+                      "type": "integer"
+                    },
+                    "likes": {
+                      "type": "integer"
+                    },
+                    "views": {
+                      "type": ["integer", "null"]
+                    }
+                  }
+                },
+                "media": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "enum": ["photo", "video"]
+                      },
+                      "url": {
+                        "type": ["string", "null"]
+                      }
+                    }
+                  }
+                },
+                "links": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "quote": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "object",
+                      "required": ["author", "text"],
+                      "properties": {
+                        "author": {
+                          "type": "object",
+                          "required": ["handle"],
+                          "properties": {
+                            "name": {
+                              "type": ["string", "null"]
+                            },
+                            "handle": {
+                              "type": "string",
+                              "minLength": 1
+                            }
+                          }
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "createdAt": {
+                          "type": ["string", "null"]
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "profile": {
+      "entry": "profile.mjs",
+      "readOnly": true,
+      "description": "Profile fields of an account: name, bio, follower counts, join date.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["user"],
+        "properties": {
+          "user": {
+            "type": "string",
+            "description": "Handle or profile URL."
+          }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["handle", "name", "bio"],
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "name": {
+            "type": ["string", "null"]
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "bio": {
+            "type": "string"
+          },
+          "location": {
+            "type": ["string", "null"]
+          },
+          "website": {
+            "type": ["string", "null"]
+          },
+          "joined": {
+            "type": ["string", "null"]
+          },
+          "following": {
+            "type": ["integer", "null"]
+          },
+          "followers": {
+            "type": ["integer", "null"]
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}
