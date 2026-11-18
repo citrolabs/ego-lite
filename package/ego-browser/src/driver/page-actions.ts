@@ -355,14 +355,29 @@ export async function clickInPage(
         buttons: 0,
         modifiers,
       });
+      // The final move can run hover handlers of its own, or scroll the
+      // embedding document, and put a drop-down select under the press point.
+      // Check the Page viewport exactly where the first press lands. This is
+      // a Page-session evaluation rather than a call into the target, and no
+      // input event separates the final move from the press.
+      if (nativeSelect) {
+        await assertNoNativeSelectAtViewportPoint(
+          services,
+          sessionId,
+          { x: point.x, y: point.y },
+          "page.click",
+          frameSessions,
+        );
+      }
     }
     for (let count = 1; count <= clickCount; count += 1) {
       // Moving the pointer or completing an earlier click can change layout.
       // Recheck the enabled state and the hit target in one page call before
       // every press so hover-created overlays fail closed. A same-process
-      // iframe must keep its native move/press sequence contiguous; its state
-      // was checked immediately before that gesture's final move, and later
-      // presses in any iframe only recheck the enabled state. An out-of-process
+      // iframe must keep its native move/press sequence contiguous; its target
+      // state was checked immediately before that gesture's final move and its
+      // press point for a native select right after it, and later presses in
+      // any iframe only recheck the enabled state. An out-of-process
       // iframe had no check since its point was resolved, so its first left
       // press still checks for a native select.
       if (!target.frameId || count > 1 || (nativeSelect && !sameProcessFrame)) {

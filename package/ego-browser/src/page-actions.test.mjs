@@ -356,26 +356,87 @@ test("Page click translates same-process iframe coordinates to the Page viewport
     "same-process iframe input keeps mouseMoved and mousePressed contiguous",
   );
   assert.deepEqual(states, ["Clicking element"]);
-  const viewportCheck = calls.findLastIndex(
-    ([method, params, sessionId]) =>
-      method === "Runtime.evaluate" &&
-      sessionId === "session:page" &&
-      params.expression?.includes("contentDocument"),
-  );
+  const viewportChecks = calls
+    .map((call, index) => [call, index])
+    .filter(
+      ([[method, params, sessionId]]) =>
+        method === "Runtime.evaluate" &&
+        sessionId === "session:page" &&
+        params.expression?.includes("contentDocument"),
+    )
+    .map(([, index]) => index);
+  assert.equal(viewportChecks.length, 2);
+  const [beforeFinalMove, afterFinalMove] = viewportChecks;
   assert(
-    viewportCheck > initialMoveIndex && viewportCheck < moveIndex,
+    beforeFinalMove > initialMoveIndex && beforeFinalMove < moveIndex,
     "the press point is checked from the Page viewport before the final move",
   );
+  assert(
+    afterFinalMove > moveIndex && afterFinalMove < pressIndex,
+    "the press point is checked again after the final move, before the press",
+  );
   assert.equal(
-    calls[viewportCheck][1].contextId,
-    undefined,
-    "the viewport check starts in the Page's top document",
+    calls
+      .slice(moveIndex + 1, pressIndex)
+      .filter(([method]) => method !== "Runtime.evaluate").length,
+    0,
+    "only the Page-session viewport check sits between the final move and the press",
   );
-  assert.match(
-    calls[viewportCheck][1].expression,
-    /let x = 110;\s+let y = 239;/,
-    "the viewport check uses the post-hover Page coordinates of the press",
+  for (const index of viewportChecks) {
+    assert.equal(
+      calls[index][1].contextId,
+      undefined,
+      "the viewport check starts in the Page's top document",
+    );
+    assert.match(
+      calls[index][1].expression,
+      /let x = 110;\s+let y = 239;/,
+      "the viewport check uses the post-hover Page coordinates of the press",
+    );
+  }
+});
+
+test("Page click refuses a same-process iframe press when the final move reveals a select", async () => {
+  const services = sameProcessIframeClickServices();
+  const cdp = services.cdp;
+  services.cdp = async (method, params = {}, sessionId) => {
+    if (
+      method === "Runtime.evaluate" &&
+      params.expression?.includes("contentDocument")
+    ) {
+      services.calls.push([method, params, sessionId]);
+      const moves = services.calls.filter(
+        ([calledMethod, calledParams]) =>
+          calledMethod === "Input.dispatchMouseEvent" &&
+          calledParams.type === "mouseMoved",
+      ).length;
+      // A hover handler of the embedding document drops a select over the
+      // iframe in response to the final move.
+      return selectVerdict(moves >= 2 ? DROPDOWN : null);
+    }
+    return cdp(method, params, sessionId);
+  };
+
+  await assert.rejects(
+    () => clickSameProcessIframeButton(services),
+    assertNativeSelectRefusal("page.click", "select#dropdown"),
   );
+  assert.equal(pressCount(services.calls), 0);
+});
+
+test("Page click skips the post-move native select check for a right press into a same-process iframe", async () => {
+  const services = sameProcessIframeClickServices(selectVerdict(DROPDOWN));
+
+  await clickInPage(
+    services,
+    "session:page",
+    new RefMap(),
+    'loc=role:button[name="Run iframe action"]',
+    { button: "right" },
+    0,
+    new Map([["frame-child", "session:page"]]),
+  );
+  assert.equal(pressCount(services.calls), 1);
 });
 
 test("Page click refuses a same-process iframe target covered by a select of the embedding document", async () => {
@@ -402,7 +463,7 @@ test("Page click rechecks the Page viewport before every later press into a same
       viewportChecks += 1;
       services.calls.push([method, params, sessionId]);
       // A select of the embedding document appears after the first click.
-      return selectVerdict(viewportChecks === 1 ? null : DROPDOWN);
+      return selectVerdict(pressCount(services.calls) === 0 ? null : DROPDOWN);
     }
     return cdp(method, params, sessionId);
   };
@@ -420,7 +481,7 @@ test("Page click rechecks the Page viewport before every later press into a same
       ),
     assertNativeSelectRefusal("page.click", "select#dropdown"),
   );
-  assert.equal(viewportChecks, 2);
+  assert.equal(viewportChecks, 3);
   assert.equal(pressCount(services.calls), 1, "the second press is refused");
 });
 
