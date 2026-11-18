@@ -138,6 +138,32 @@ test("snapshotText forwards a subtree root to the native snapshot", async () => 
   }
 });
 
+test("snapshotText keeps the internal frameId option off the v1 surface", async () => {
+  const previous = globalThis.ego;
+  const calls = [];
+  globalThis.ego = {
+    async snapshot(options) {
+      calls.push(options);
+      return { content: "button [ref=1]", refs: [] };
+    },
+  };
+
+  try {
+    await snapshotText({ scope: "subtree", root: 8, frameId: "frame-child" });
+    assert.deepEqual(calls, [
+      {
+        scope: "subtree",
+        root: 8,
+        includeActionMarks: true,
+        includeStableLocator: true,
+      },
+    ]);
+  } finally {
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
 test("captureScreenshot fails fast while a native dialog is pending", async () => {
   const writes = [];
   const restore = setOverrides({
