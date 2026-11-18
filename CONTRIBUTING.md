@@ -243,9 +243,10 @@ pushing browser-behavior changes if you want the result earlier.
 ## CI and releases
 
 [CI](.github/workflows/ci.yml) runs on pull requests, pushes to `dev` and `main`,
-and version tags. It installs dependencies, checks formatting and dependency
-vulnerabilities (`npm audit` runs only here, not in the Git hooks), runs
-`npm test`, and validates site learnings. The real-browser E2E suite is a local
+and version tags. It installs dependencies, checks formatting and runtime
+dependency vulnerabilities (`npm audit --omit=dev` runs only here, not in the
+Git hooks; dev dependencies are not audited), runs `npm test`, and validates
+site learnings. The real-browser E2E suite is a local
 pre-push gate and is not run by this GitHub-hosted workflow.
 
 The current release behavior is:
