@@ -1388,6 +1388,76 @@ test("the click probe records the native press so the fallback can resume it", a
   );
 });
 
+test("drag sends no fallback after a native drag whose pointerdown was canceled", async () => {
+  // A handler cancels pointerdown, so Chrome suppresses the compatibility
+  // mouseup; the thumb captured the pointer, so pointerup lands on it rather
+  // than on the drop target. The native drag still completed.
+  const thumb = { name: "thumb", contains: (node) => node === thumb };
+  const drop = { name: "drop", contains: (node) => node === drop };
+  const listeners = {};
+  const document = {
+    elementFromPoint: () => drop,
+    addEventListener(type, listener) {
+      (listeners[type] ||= []).push(listener);
+    },
+    removeEventListener(type, listener) {
+      listeners[type] = (listeners[type] || []).filter(
+        (entry) => entry !== listener,
+      );
+    },
+  };
+  const context = vm.createContext({ window: {}, document });
+  const deliver = (event) => {
+    for (const listener of listeners[event.type] || []) listener(event);
+  };
+  const dispatched = [];
+  let finish = null;
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Runtime.evaluate") {
+        const value = vm.runInContext(params.expression, context);
+        if (params.expression.includes('removeEventListener("mouseup"')) {
+          finish = JSON.parse(JSON.stringify(value));
+        }
+        return { result: { value } };
+      }
+      if (method === "Input.dispatchMouseEvent") {
+        dispatched.push(params.type);
+        if (params.type === "mouseReleased") {
+          // Neither an untrusted release nor another button's counts.
+          const pointerUp = { type: "pointerup", target: thumb };
+          deliver({ ...pointerUp, isTrusted: false, button: 0 });
+          deliver({ ...pointerUp, isTrusted: true, button: 2 });
+          assert.equal(
+            Object.values(context.window.__egoBrowserInputProbes)[0].seen,
+            false,
+          );
+          deliver({ ...pointerUp, isTrusted: true, button: 0 });
+        }
+      }
+      return {};
+    },
+  });
+  try {
+    await withFakeEgo(() =>
+      dragMouse([
+        [10, 20],
+        [50, 60],
+      ]),
+    );
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(dispatched, ["mousePressed", "mouseMoved", "mouseReleased"]);
+  assert.deepEqual(finish, { seen: true, fallback: false });
+  assert.deepEqual(
+    Object.values(listeners).flat(),
+    [],
+    "finishing the drag removes every probe listener",
+  );
+});
+
 /** Runs dragMouse with its fallback in a fake page built by `options`. */
 async function dragFallbackInFakePage(points, options) {
   let page = null;

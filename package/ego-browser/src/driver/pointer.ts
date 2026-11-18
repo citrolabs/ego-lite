@@ -466,7 +466,7 @@ export async function dragMouse(
   const first = resolved[0];
   const last = resolved.at(-1);
   maybeHighlight(first, options.label);
-  const probeId = await installMouseUpProbe(last);
+  const probeId = await installMouseUpProbe(last, button);
   let dispatchError: unknown = null;
   try {
     await dispatchMouse(first, "mousePressed", {
@@ -777,7 +777,16 @@ async function finishClickProbe(
   }
 }
 
-async function installMouseUpProbe(point: Point) {
+/**
+ * Page-side drag probe: records whether the native release arrived. A trusted
+ * `mouseup` on the drop target counts, and so does a trusted `pointerup` of
+ * the dragged button on any element: a handler that cancels `pointerdown`
+ * makes Chrome suppress the compatibility `mouseup`, and pointer capture
+ * retargets the `pointerup` to the capturing element rather than the one
+ * under the drop point. Either way the native drag completed, and replaying
+ * it would run the drag handlers a second time.
+ */
+async function installMouseUpProbe(point: Point, button: MouseButton) {
   if (!canProbeInputFallback()) return null;
   const id = `drag_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   try {
@@ -786,14 +795,19 @@ async function installMouseUpProbe(point: Point) {
       {
         expression: `(() => {
         const target = document.elementFromPoint(${JSON.stringify(point.x)}, ${JSON.stringify(point.y)});
+        const mouseButton = ${JSON.stringify(mouseButtonIndex(button))};
         window.__egoBrowserInputProbes ||= {};
         const probe = { seen: false, target };
         probe.handler = (event) => {
-          if (event.isTrusted && target && (event.target === target || target.contains(event.target))) {
+          if (!event.isTrusted) return;
+          if (event.type === "pointerup"
+            ? event.button === mouseButton
+            : target && (event.target === target || target.contains(event.target))) {
             probe.seen = true;
           }
         };
         document.addEventListener("mouseup", probe.handler, true);
+        document.addEventListener("pointerup", probe.handler, true);
         window.__egoBrowserInputProbes[${JSON.stringify(id)}] = probe;
         return Boolean(target);
       })()`,
@@ -902,10 +916,11 @@ async function finishDragProbe(
         const probe = probes[${JSON.stringify(id)}];
         if (!probe) return { seen: false, fallback: false };
         document.removeEventListener("mouseup", probe.handler, true);
+        document.removeEventListener("pointerup", probe.handler, true);
         delete probes[${JSON.stringify(id)}];
         if (probe.seen) return { seen: true, fallback: false };
         ${SYNTHETIC_POINTER_JS}
-        const mouseButton = ${JSON.stringify(button === "left" ? 0 : button === "middle" ? 1 : 2)};
+        const mouseButton = ${JSON.stringify(mouseButtonIndex(button))};
         const pressedButtons = ${JSON.stringify(pressedButtons(button))};
         const targetAt = (point) => document.elementFromPoint(point.x, point.y) || document.body;
         const initAt = (point, buttons) => ({
@@ -1241,4 +1256,9 @@ function pressedButtons(button: MouseButton) {
     return 4;
   }
   throw new Error(`unsupported mouse button: ${button}`);
+}
+
+/** The DOM `MouseEvent.button` index for a CDP button name. */
+function mouseButtonIndex(button: MouseButton) {
+  return button === "left" ? 0 : button === "middle" ? 1 : 2;
 }
