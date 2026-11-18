@@ -87,9 +87,26 @@ type ClickTarget = Point & { probeId: string | null };
  * As in Chrome, a canceled `pointerdown` suppresses the compatibility
  * mousedown, mousemove, and mouseup until the button is released; `click`
  * still fires.
+ *
+ * `pointerenter` and `mouseenter` do not bubble, so they are dispatched on
+ * every entered element from the outermost ancestor down to the target, as
+ * Chrome does, so an enter listener on a trigger still fires when the point
+ * hits a child icon or label.
+ *
+ * Synthetic events cannot establish native pointer capture: Chrome ignores
+ * `setPointerCapture()` for a pointer whose buttons it never saw pressed. The
+ * sequence therefore runs inside `withSyntheticCapture()`, which records
+ * capture requests for the synthetic pointer, routes later pointer and
+ * compatibility mouse events to the capturing element, and fires
+ * `gotpointercapture` / `lostpointercapture` around them, so a slider that
+ * captures on `pointerdown` keeps receiving moves and the release after the
+ * path leaves it.
  */
 const SYNTHETIC_POINTER_JS = `
+  const SYNTHETIC_POINTER_ID = 1;
   let syntheticMouseSuppressed = false;
+  let syntheticCaptureTarget = null;
+  let syntheticPendingCapture = null;
   const syntheticEvent = (Ctor, type, init, extra) => {
     const bubbles = type !== "pointerenter" && type !== "mouseenter";
     return new Ctor(type, {
@@ -107,7 +124,7 @@ const SYNTHETIC_POINTER_JS = `
       // Pointer events without a button change report button -1.
       button: type === "pointerdown" || type === "pointerup" ? init.button : -1,
       detail: 0,
-      pointerId: 1,
+      pointerId: SYNTHETIC_POINTER_ID,
       pointerType: "mouse",
       isPrimary: true,
       width: 1,
@@ -117,24 +134,97 @@ const SYNTHETIC_POINTER_JS = `
   };
   const fireMouse = (target, type, init, detail = 0) =>
     target.dispatchEvent(syntheticEvent(MouseEvent, type, init, { detail }));
+  // Elements entered when the pointer arrives at target, outermost first,
+  // crossing shadow roots to their hosts.
+  const enteredChain = (target) => {
+    const chain = [];
+    for (let node = target; node; ) {
+      chain.push(node);
+      const parent = node.parentNode;
+      node = parent && parent.nodeType === 11 && parent.host ? parent.host : parent;
+      if (node && node.nodeType === 9) break;
+    }
+    return chain.reverse();
+  };
   const syntheticPointerEnter = (target, init) => {
+    const chain = enteredChain(target);
     firePointer(target, "pointerover", init);
-    firePointer(target, "pointerenter", init);
+    for (const node of chain) firePointer(node, "pointerenter", init);
     fireMouse(target, "mouseover", init);
-    fireMouse(target, "mouseenter", init);
+    for (const node of chain) fireMouse(node, "mouseenter", init);
+  };
+  // Applies a capture change requested by the previous handler before the
+  // next pointer event, as Chrome processes pending capture.
+  const syntheticCaptureTargetFor = (target, init) => {
+    if (syntheticPendingCapture !== syntheticCaptureTarget) {
+      const previous = syntheticCaptureTarget;
+      syntheticCaptureTarget = syntheticPendingCapture;
+      if (previous) firePointer(previous, "lostpointercapture", init);
+      if (syntheticCaptureTarget) firePointer(syntheticCaptureTarget, "gotpointercapture", init);
+    }
+    return syntheticCaptureTarget || target;
   };
   const syntheticPointerMove = (target, init) => {
-    firePointer(target, "pointermove", init);
-    if (!syntheticMouseSuppressed) fireMouse(target, "mousemove", init);
+    const routed = syntheticCaptureTargetFor(target, init);
+    firePointer(routed, "pointermove", init);
+    if (!syntheticMouseSuppressed) fireMouse(routed, "mousemove", init);
   };
   const syntheticPointerDown = (target, init, detail) => {
-    if (!firePointer(target, "pointerdown", init)) syntheticMouseSuppressed = true;
-    if (!syntheticMouseSuppressed) fireMouse(target, "mousedown", init, detail);
+    const routed = syntheticCaptureTargetFor(target, init);
+    if (!firePointer(routed, "pointerdown", init)) syntheticMouseSuppressed = true;
+    if (!syntheticMouseSuppressed) fireMouse(routed, "mousedown", init, detail);
   };
   const syntheticPointerUp = (target, init, detail) => {
-    firePointer(target, "pointerup", init);
-    if (!syntheticMouseSuppressed) fireMouse(target, "mouseup", init, detail);
+    const routed = syntheticCaptureTargetFor(target, init);
+    firePointer(routed, "pointerup", init);
+    if (!syntheticMouseSuppressed) fireMouse(routed, "mouseup", init, detail);
     syntheticMouseSuppressed = false;
+    // Releasing the button implicitly releases capture.
+    syntheticPendingCapture = null;
+    syntheticCaptureTargetFor(target, init);
+  };
+  // Runs a synthetic sequence with the pointer-capture methods answering for
+  // the synthetic pointer id, then restores the page's own methods.
+  const withSyntheticCapture = (run) => {
+    const proto = typeof Element === "function" ? Element.prototype : null;
+    if (!proto) return run();
+    const names = ["setPointerCapture", "releasePointerCapture", "hasPointerCapture"];
+    const saved = names.map((name) => [name, Object.getOwnPropertyDescriptor(proto, name)]);
+    const original = Object.fromEntries(names.map((name) => [name, proto[name]]));
+    const forward = (name, element, args) => {
+      if (typeof original[name] !== "function") return undefined;
+      return original[name].apply(element, args);
+    };
+    const patch = {
+      setPointerCapture(pointerId) {
+        if (pointerId !== SYNTHETIC_POINTER_ID) return forward("setPointerCapture", this, arguments);
+        if (this.isConnected !== false) syntheticPendingCapture = this;
+      },
+      releasePointerCapture(pointerId) {
+        if (pointerId !== SYNTHETIC_POINTER_ID) return forward("releasePointerCapture", this, arguments);
+        if (syntheticPendingCapture === this) syntheticPendingCapture = null;
+      },
+      hasPointerCapture(pointerId) {
+        if (pointerId !== SYNTHETIC_POINTER_ID) return forward("hasPointerCapture", this, arguments);
+        return syntheticPendingCapture === this;
+      },
+    };
+    for (const name of names) {
+      Object.defineProperty(proto, name, {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: patch[name],
+      });
+    }
+    try {
+      return run();
+    } finally {
+      for (const [name, descriptor] of saved) {
+        if (descriptor) Object.defineProperty(proto, name, descriptor);
+        else delete proto[name];
+      }
+    }
   };
 `;
 
@@ -498,10 +588,12 @@ async function finishClickProbe(
           buttons: 0,
         };
         const pressed = { ...init, buttons: 1 };
-        syntheticPointerEnter(target, init);
-        syntheticPointerMove(target, init);
-        syntheticPointerDown(target, pressed, clickCount);
-        syntheticPointerUp(target, init, clickCount);
+        withSyntheticCapture(() => {
+          syntheticPointerEnter(target, init);
+          syntheticPointerMove(target, init);
+          syntheticPointerDown(target, pressed, clickCount);
+          syntheticPointerUp(target, init, clickCount);
+        });
         fireMouse(target, "click", init, clickCount);
         if (clickCount > 1) fireMouse(target, "dblclick", init, 2);
         return { seen: false, fallback: true };
@@ -658,12 +750,14 @@ async function finishDragProbe(
         const points = ${JSON.stringify(points.map(({ x, y }) => ({ x, y })))};
         const first = points[0];
         const last = points.at(-1);
-        syntheticPointerEnter(targetAt(first), initAt(first, 0));
-        syntheticPointerDown(targetAt(first), initAt(first, pressedButtons), 1);
-        for (const point of points.slice(1)) {
-          syntheticPointerMove(targetAt(point), initAt(point, pressedButtons));
-        }
-        syntheticPointerUp(targetAt(last), initAt(last, 0), 1);
+        withSyntheticCapture(() => {
+          syntheticPointerEnter(targetAt(first), initAt(first, 0));
+          syntheticPointerDown(targetAt(first), initAt(first, pressedButtons), 1);
+          for (const point of points.slice(1)) {
+            syntheticPointerMove(targetAt(point), initAt(point, pressedButtons));
+          }
+          syntheticPointerUp(targetAt(last), initAt(last, 0), 1);
+        });
         return { seen: false, fallback: true };
       })()`,
         returnByValue: true,

@@ -583,13 +583,49 @@ test("click reads the probe and falls back to synthetic events only after a disp
 });
 
 /**
- * Runs a fallback expression against a minimal page whose only element
- * records every event it receives. The probe store answers any id with an
- * unseen probe for that element. `cancel` lists event types whose listener
- * calls preventDefault, as a pointer-driven widget does on pointerdown.
+ * Runs a fallback expression against a minimal page whose elements record
+ * every event they receive. By default the page holds one element, `target`;
+ * `build(createElement)` may instead return `{ target, elementAt }` for a
+ * nested tree and a point-to-element map. The probe store answers any id with
+ * an unseen probe for the target. `cancel` lists event types whose listener
+ * calls preventDefault, as a pointer-driven widget does on pointerdown;
+ * `listeners` adds extra handlers by element name and event type, called
+ * with the event and the element.
+ *
+ * As in Chrome, the native setPointerCapture rejects the synthetic pointer
+ * because its buttons were never pressed natively.
  */
-function runFallbackInFakePage(expression, { cancel = [] } = {}) {
+function runFallbackInFakePage(
+  expression,
+  { cancel = [], build, listeners = {} } = {},
+) {
   const events = [];
+  class FakeElement extends EventTarget {
+    constructor(name, parentNode = null) {
+      super();
+      this.name = name;
+      this.parentNode = parentNode;
+      this.nodeType = 1;
+      this.isConnected = true;
+    }
+    contains(node) {
+      for (let current = node; current; current = current.parentNode) {
+        if (current === this) return true;
+      }
+      return false;
+    }
+    setPointerCapture() {
+      throw new Error("NotFoundError: No active pointer with the given id");
+    }
+    releasePointerCapture() {}
+    hasPointerCapture() {
+      return false;
+    }
+  }
+  const nativeCapture = Object.getOwnPropertyDescriptor(
+    FakeElement.prototype,
+    "setPointerCapture",
+  );
   class FakeMouseEvent extends Event {
     constructor(type, init = {}) {
       super(type, init);
@@ -612,10 +648,20 @@ function runFallbackInFakePage(expression, { cancel = [] } = {}) {
       });
     }
   }
-  const target = new EventTarget();
-  target.contains = (node) => node === target;
+  const elements = [];
+  const createElement = (name, parent) => {
+    const element = new FakeElement(name, parent);
+    elements.push(element);
+    return element;
+  };
+  const tree = build
+    ? build(createElement)
+    : { target: createElement("target") };
+  const target = tree.target;
+  const elementAt = tree.elementAt ?? (() => target);
   const record = (event) => {
     events.push({
+      on: event.currentTarget.name,
       type: event.type,
       kind: event instanceof FakePointerEvent ? "pointer" : "mouse",
       bubbles: event.bubbles,
@@ -642,8 +688,17 @@ function runFallbackInFakePage(expression, { cancel = [] } = {}) {
     "mouseup",
     "click",
     "dblclick",
+    "gotpointercapture",
+    "lostpointercapture",
   ]) {
-    target.addEventListener(type, record);
+    for (const element of elements) element.addEventListener(type, record);
+  }
+  for (const element of elements) {
+    for (const [type, handler] of Object.entries(
+      listeners[element.name] ?? {},
+    )) {
+      element.addEventListener(type, (event) => handler(event, element));
+    }
   }
   const probe = { seen: false, target, dispose() {} };
   const window = {
@@ -655,13 +710,19 @@ function runFallbackInFakePage(expression, { cancel = [] } = {}) {
   const value = vm.runInNewContext(expression, {
     window,
     document: {
-      elementFromPoint: () => target,
+      elementFromPoint: (x, y) => elementAt(x, y),
       body: target,
       removeEventListener() {},
     },
+    Element: FakeElement,
     MouseEvent: FakeMouseEvent,
     PointerEvent: FakePointerEvent,
   });
+  // The fallback must hand the page its own capture methods back.
+  assert.deepEqual(
+    Object.getOwnPropertyDescriptor(FakeElement.prototype, "setPointerCapture"),
+    nativeCapture,
+  );
   // The value comes from another realm; copy it so deepEqual compares data.
   return { value: { ...value }, events };
 }
@@ -847,6 +908,167 @@ test("drag fallback sends pointer events alongside the mouse events", async () =
       ["mousemove", 50, 60, 1],
       ["pointerup", 50, 60, 0],
       ["mouseup", 50, 60, 0],
+    ],
+  );
+});
+
+test("click fallback sends enter events to every entered ancestor of a nested target", async () => {
+  // The point hits an icon inside a menu trigger; enter events do not bubble,
+  // so the trigger only sees them when they are dispatched on it directly.
+  const { restore, page } = clickFallbackInFakePage({
+    build(createElement) {
+      const trigger = createElement("trigger");
+      const icon = createElement("icon", trigger);
+      return { target: icon };
+    },
+  });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  const enters = page()
+    .events.filter((event) => /over|enter/.test(event.type))
+    .map((event) => [event.type, event.on]);
+  assert.deepEqual(enters, [
+    ["pointerover", "icon"],
+    ["pointerenter", "trigger"],
+    ["pointerenter", "icon"],
+    ["mouseover", "icon"],
+    ["mouseenter", "trigger"],
+    ["mouseenter", "icon"],
+  ]);
+});
+
+/** Runs dragMouse with its fallback in a fake page built by `options`. */
+async function dragFallbackInFakePage(points, options) {
+  let page = null;
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Runtime.evaluate") {
+        if (params.expression.includes('removeEventListener("mouseup"')) {
+          page = runFallbackInFakePage(params.expression, options);
+          return { result: { value: page.value } };
+        }
+        return { result: { value: true } };
+      }
+      if (method === "Input.dispatchMouseEvent") {
+        throw new Error("CDP request timed out: Input.dispatchMouseEvent");
+      }
+      return {};
+    },
+  });
+  try {
+    await withFakeEgo(() => dragMouse(points));
+  } finally {
+    restore();
+  }
+  return page;
+}
+
+/** A slider thumb at x < 20 and a page body everywhere else. */
+function sliderPage(createElement) {
+  const body = createElement("body");
+  const thumb = createElement("thumb", body);
+  return { target: thumb, elementAt: (x) => (x < 20 ? thumb : body) };
+}
+
+test("drag fallback routes events to the element that captured the pointer", async () => {
+  let hasCapture = null;
+  const page = await dragFallbackInFakePage(
+    [
+      [10, 20],
+      [30, 40],
+      [50, 60],
+    ],
+    {
+      build: sliderPage,
+      listeners: {
+        thumb: {
+          pointerdown(event, thumb) {
+            thumb.setPointerCapture(event.pointerId);
+            hasCapture = thumb.hasPointerCapture(event.pointerId);
+          },
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(page.value, { seen: false, fallback: true });
+  assert.equal(hasCapture, true);
+  const afterDown = page.events
+    .slice(page.events.findIndex((event) => event.type === "mousedown") + 1)
+    .map((event) => [event.type, event.on, event.x]);
+  assert.deepEqual(afterDown, [
+    ["gotpointercapture", "thumb", 30],
+    ["pointermove", "thumb", 30],
+    ["mousemove", "thumb", 30],
+    ["pointermove", "thumb", 50],
+    ["mousemove", "thumb", 50],
+    ["pointerup", "thumb", 50],
+    ["mouseup", "thumb", 50],
+    ["lostpointercapture", "thumb", 50],
+  ]);
+});
+
+test("drag fallback stops routing to an element once it releases capture", async () => {
+  const page = await dragFallbackInFakePage(
+    [
+      [10, 20],
+      [30, 40],
+      [50, 60],
+    ],
+    {
+      build: sliderPage,
+      listeners: {
+        thumb: {
+          pointerdown(event, thumb) {
+            thumb.setPointerCapture(event.pointerId);
+          },
+          pointermove(event, thumb) {
+            thumb.releasePointerCapture(event.pointerId);
+          },
+        },
+      },
+    },
+  );
+
+  const afterDown = page.events
+    .slice(page.events.findIndex((event) => event.type === "mousedown") + 1)
+    .map((event) => [event.type, event.on]);
+  assert.deepEqual(afterDown, [
+    ["gotpointercapture", "thumb"],
+    ["pointermove", "thumb"],
+    ["mousemove", "thumb"],
+    ["lostpointercapture", "thumb"],
+    ["pointermove", "body"],
+    ["mousemove", "body"],
+    ["pointerup", "body"],
+    ["mouseup", "body"],
+  ]);
+});
+
+test("drag fallback without capture hit-tests each point", async () => {
+  const page = await dragFallbackInFakePage(
+    [
+      [10, 20],
+      [50, 60],
+    ],
+    { build: sliderPage },
+  );
+
+  assert.deepEqual(
+    page.events
+      .filter((event) => /move|down|up/.test(event.type))
+      .map((event) => [event.type, event.on]),
+    [
+      ["pointerdown", "thumb"],
+      ["mousedown", "thumb"],
+      ["pointermove", "body"],
+      ["mousemove", "body"],
+      ["pointerup", "body"],
+      ["mouseup", "body"],
     ],
   );
 });
