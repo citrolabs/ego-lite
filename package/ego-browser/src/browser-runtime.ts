@@ -1442,7 +1442,42 @@ function clearIgnoredFaviconRequest(
   return deleted;
 }
 
+/**
+ * Drop in-flight entries left by the document a frame just replaced.
+ *
+ * Chromium can omit both terminal events for requests whose document is
+ * navigated away while they are still loading, so those entries would
+ * otherwise block network idle forever. Only the committed frame is pruned:
+ * requests of other frames and OOPIF targets, requests without a loader, and
+ * the new document's own requests (which carry the new loaderId) stay tracked.
+ */
+function pruneReplacedDocumentRequests(targetId: string, frame): void {
+  const frameId = frame?.id;
+  const loaderId = frame?.loaderId;
+  if (typeof frameId !== "string" || typeof loaderId !== "string") return;
+  const now = state.now();
+  for (const pageTargetId of pageTreeTargetIds(pageRootTargetId(targetId))) {
+    const pageTarget = targetStates.get(pageTargetId);
+    if (!pageTarget) continue;
+    for (const [requestId, request] of pageTarget.inflightNetworkRequests) {
+      if (
+        request.frameId !== frameId ||
+        request.loaderId === undefined ||
+        request.loaderId === loaderId
+      ) {
+        continue;
+      }
+      pageTarget.inflightNetworkRequests.delete(requestId);
+      pageTarget.lastNetworkActivityAt = now;
+    }
+  }
+}
+
 function recordNetworkEvent(targetId: string, target, data): void {
+  if (data.method === "Page.frameNavigated") {
+    pruneReplacedDocumentRequests(targetId, data.params?.frame);
+    return;
+  }
   // A response to Network.disable can be followed by a queued terminal event.
   // Ignore it once tracking is off, while still accepting events that race the
   // response to our own Network.enable request.

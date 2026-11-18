@@ -459,6 +459,110 @@ test("network tracking is continuous and does not consume Page events", async ()
   }
 });
 
+test("a committed navigation releases requests orphaned by the replaced document", async () => {
+  const previous = globalThis.ego;
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      const result =
+        request.method === "Target.attachToTarget"
+          ? { sessionId: "session:page-main" }
+          : {};
+      queueMicrotask(() => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      });
+    },
+  };
+  globalThis.ego = runtime;
+  const emit = (sessionId, method, params) =>
+    runtime.onCDPMessage(JSON.stringify({ sessionId, method, params }));
+  const request = (sessionId, requestId, frameId, loaderId, type, url) =>
+    emit(sessionId, "Network.requestWillBeSent", {
+      requestId,
+      frameId,
+      loaderId,
+      type,
+      request: { url },
+    });
+
+  try {
+    const mainSession = await ensureSession("page-main");
+    emit(mainSession, "Target.attachedToTarget", {
+      sessionId: "session:frame-oopif",
+      targetInfo: { targetId: "frame-oopif", type: "iframe" },
+      waitingForDebugger: false,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    const sessions = [mainSession, "session:frame-oopif"];
+
+    request(mainSession, "L1", "page-main", "L1", "Document", "https://a/");
+    emit(mainSession, "Network.loadingFinished", { requestId: "L1" });
+    // An extension stylesheet answered but never finished before navigation.
+    request(
+      mainSession,
+      "old-css",
+      "page-main",
+      "L1",
+      "Stylesheet",
+      "chrome-extension://ext/normalize.css",
+    );
+    emit(mainSession, "Network.responseReceived", { requestId: "old-css" });
+    request(mainSession, "no-loader", "page-main", undefined, "Other", "x:");
+    request(mainSession, "sibling", "same-process-child", "C1", "Script", "s");
+    request(
+      "session:frame-oopif",
+      "oopif-xhr",
+      "frame-oopif",
+      "O1",
+      "XHR",
+      "https://b/api",
+    );
+    // The new document's navigation request starts before it commits.
+    request(mainSession, "L2", "page-main", "L2", "Document", "https://a/2");
+    assert.equal(
+      networkActivity(sessions).inflight,
+      5,
+      "a navigation that has not committed releases nothing",
+    );
+
+    emit(mainSession, "Page.frameNavigated", {
+      frame: { id: "page-main", loaderId: "L2", url: "https://a/2" },
+      type: "Navigation",
+    });
+    request(mainSession, "new-css", "page-main", "L2", "Stylesheet", "c.css");
+    assert.deepEqual(
+      networkActivity(sessions).pendingRequests.sort(),
+      [
+        "Document https://a/2",
+        "Other x:",
+        "Script s",
+        "Stylesheet c.css",
+        "XHR https://b/api",
+      ],
+      "only the replaced document's requests in that frame are released",
+    );
+
+    for (const requestId of [
+      "L2",
+      "new-css",
+      "no-loader",
+      "sibling",
+      "oopif-xhr",
+    ]) {
+      emit(
+        requestId === "oopif-xhr" ? "session:frame-oopif" : mainSession,
+        "Network.loadingFinished",
+        { requestId },
+      );
+    }
+    assert.equal(networkActivity(sessions).inflight, 0);
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
 test("Page network sessions include only its known OOPIF descendants", async () => {
   const previous = globalThis.ego;
   const runtime = {
