@@ -499,6 +499,212 @@ export function pageSnapshotReplacedIframeCase() {
   `;
 }
 
+// CITRO-5220: a backend node id is only unique within one renderer process, and
+// native snapshot prefers the main document when a root id exists in both. A
+// subtree rooted at a ref inside a cross-origin iframe must therefore name the
+// ref's frame, or it expands an unrelated host node.
+export function pageSnapshotFrameRootCollisionCase() {
+  return `
+    const task = await taskSpace(taskName);
+    const page = await newPageAt(
+      task,
+      baseUrl + "/snapshot-subtree-frame-host?mode=cross-origin"
+    );
+    try {
+      await page.waitForSelector(
+        'loc=role:button[name="Run Cross-origin OOPIF subtree action"]',
+        { state: "visible" }
+      );
+
+      const frameTarget = (await task.cdp("Target.getTargets")).targetInfos.find(
+        (target) =>
+          target.type === "iframe" &&
+          target.parentId === page.targetId &&
+          target.url.includes("/snapshot-subtree-frame-content")
+      )?.targetId;
+      assert(frameTarget, "the cross-origin fixture runs in an OOPIF target");
+      const frameSession = (
+        await cdp("Target.attachToTarget", {
+          targetId: frameTarget,
+          flatten: true,
+        })
+      ).sessionId;
+      const frameEvaluate = async (expression) => {
+        const evaluated = await cdp(
+          "Runtime.evaluate",
+          { expression, returnByValue: false },
+          frameSession
+        );
+        if (evaluated.exceptionDetails) {
+          throw new Error("frame evaluation failed: " + expression);
+        }
+        return evaluated.result;
+      };
+      // DOM.getDocument numbers every node of the session's own document; an
+      // out-of-process frame's document is not part of the host's tree. Only a
+      // rendered host node can shadow a snapshot root, because the snapshot
+      // leaves out what the page does not render.
+      const hostNodeIds = async () => {
+        const { root } = await page.cdp("DOM.getDocument", { depth: -1 });
+        const rendered = new Set();
+        let max = 0;
+        const pending = [{ node: root, shown: true }];
+        while (pending.length > 0) {
+          const { node, shown } = pending.pop();
+          max = Math.max(max, node.backendNodeId);
+          const attributeNames = (node.attributes || []).filter(
+            (_, index) => index % 2 === 0
+          );
+          const nodeShown =
+            shown &&
+            !["HEAD", "SCRIPT", "STYLE"].includes(node.nodeName) &&
+            !attributeNames.includes("hidden");
+          if (nodeShown && (node.nodeType === 1 || node.nodeType === 3)) {
+            rendered.add(node.backendNodeId);
+          }
+          for (const child of node.children || []) {
+            pending.push({ node: child, shown: nodeShown });
+          }
+        }
+        return { max, rendered };
+      };
+
+      // Each renderer process hands out backend node ids from its own counter,
+      // and either process may have been reused, so the two counters start
+      // anywhere. Add filler nodes to whichever document is behind until a new
+      // in-frame button receives an id a rendered host node already carries.
+      const maxFiller = 50000;
+      let rootName = null;
+      let backendNodeId = null;
+      for (let round = 1; round <= 6 && rootName === null; round++) {
+        const candidateName = "Frame collision root " + round;
+        const candidate = await frameEvaluate(
+          "(() => {" +
+            "const button = document.createElement('button');" +
+            "button.type = 'button';" +
+            "button.textContent = 'Collide';" +
+            "button.setAttribute('aria-label', " + JSON.stringify(candidateName) + ");" +
+            "button.addEventListener('click', () => { button.dataset.clicked = 'true'; });" +
+            "document.querySelector('main').append(button);" +
+            "return button;" +
+          "})()"
+        );
+        const candidateId = (
+          await cdp(
+            "DOM.describeNode",
+            { objectId: candidate.objectId },
+            frameSession
+          )
+        ).node.backendNodeId;
+
+        let hostIds = await hostNodeIds();
+        const idsAbove = () =>
+          [...hostIds.rendered].filter((id) => id > candidateId);
+        if (!hostIds.rendered.has(candidateId) && idsAbove().length === 0) {
+          // The host is behind: hidden nodes take its counter to just below
+          // the candidate, then a few rendered paragraphs cover the id itself.
+          const hiddenFillers = Math.max(0, candidateId - hostIds.max - 4);
+          assert(
+            hiddenFillers <= maxFiller,
+            "the host needs " + hiddenFillers + " filler nodes"
+          );
+          await page.evaluate((count) => {
+            const hidden = document.createElement("div");
+            hidden.hidden = true;
+            for (let index = 0; index < count; index++) {
+              hidden.append(document.createElement("span"));
+            }
+            const shown = document.createElement("div");
+            for (let index = 0; index < 8; index++) {
+              const filler = document.createElement("p");
+              filler.textContent = "Host collision filler";
+              shown.append(filler);
+            }
+            document.body.append(hidden, shown);
+          }, hiddenFillers);
+          hostIds = await hostNodeIds();
+        }
+        if (hostIds.rendered.has(candidateId)) {
+          rootName = candidateName;
+          backendNodeId = candidateId;
+          break;
+        }
+        // The frame is behind: burn its ids up to the next one a rendered host
+        // node uses, so that the next candidate button lands on it.
+        const nextHostId = Math.min(...idsAbove());
+        const fillers = nextHostId - candidateId - 1;
+        assert(
+          Number.isFinite(fillers) && fillers <= maxFiller,
+          "the frame needs " + fillers + " filler nodes"
+        );
+        await frameEvaluate(
+          "(() => {" +
+            "const box = document.createElement('div');" +
+            "box.hidden = true;" +
+            "for (let index = 0; index < " + fillers + "; index++) {" +
+            "  box.append(document.createElement('span'));" +
+            "}" +
+            "document.body.append(box);" +
+          "})()"
+        );
+        await cdp("DOM.getDocument", { depth: -1 }, frameSession);
+      }
+      assert(
+        rootName !== null,
+        "an in-frame button shares its backendNodeId with a rendered host node"
+      );
+      cliLog({ collidingBackendNodeId: backendNodeId, root: rootName });
+
+      const fullSnapshot = await page.snapshot({ scope: "full_page" });
+      const rootLine = fullSnapshot
+        .split("\\n")
+        .find((line) => line.includes(rootName));
+      const rootMatch = rootLine && rootLine.match(/\\[ref=([0-9]+)/);
+      assert(
+        rootMatch,
+        "the full-page snapshot exposes the in-frame button ref: " + fullSnapshot
+      );
+
+      const subtree = await page.snapshot({
+        scope: "subtree",
+        root: "@" + rootMatch[1],
+      });
+      assertIncludes(
+        subtree,
+        rootName,
+        "the subtree expands the in-frame root, not the host node with the same id"
+      );
+      assert(
+        !subtree.includes("Host collision filler") &&
+          !subtree.includes("Host sibling marker"),
+        "the in-frame subtree contains no host document content: " + subtree
+      );
+
+      const actionLine = subtree
+        .split("\\n")
+        .find((line) => line.includes(rootName));
+      const actionMatch = actionLine && actionLine.match(/\\[ref=([0-9]+)/);
+      assert(
+        actionMatch,
+        "the in-frame subtree returns an actionable ref: " + subtree
+      );
+      await page.click("@" + actionMatch[1]);
+      assertEqual(
+        await js(
+          "return [...document.querySelectorAll('button')].find((button) => button.getAttribute('aria-label') === " +
+            JSON.stringify(rootName) +
+            ")?.dataset.clicked",
+          frameTarget
+        ),
+        "true",
+        "a ref from the in-frame subtree acts inside the iframe"
+      );
+    } finally {
+      await page.close();
+    }
+  `;
+}
+
 export function pageSnapshotIframeViewportCase() {
   return `
     const task = await taskSpace(taskName);

@@ -25,6 +25,11 @@ import {
 export type SnapshotOptions = {
   scope?: "only_within_viewport" | "full_page" | "subtree";
   root?: number;
+  /**
+   * Frame that owns `root`. Backend node ids are only unique per renderer, so
+   * without it native snapshot prefers a main-document node with the same id.
+   */
+  frameId?: string;
   includeActionMarks?: boolean;
   includeStableLocator?: boolean;
 };
@@ -69,7 +74,9 @@ export const snapshotRaw = snapshot;
  * @param {{scope?: "only_within_viewport"|"full_page"|"subtree", root?: number, includeActionMarks?: boolean, includeStableLocator?: boolean}} [options]
  * @returns {Promise<string>}
  */
-export async function snapshotText(options: SnapshotOptions = {}) {
+export async function snapshotText(
+  options: Omit<SnapshotOptions, "frameId"> = {},
+) {
   const result = await snapshot({
     scope: options.scope ?? "full_page",
     ...(options.root === undefined ? {} : { root: options.root }),

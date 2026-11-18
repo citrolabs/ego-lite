@@ -334,7 +334,7 @@ type PageGotoOptions = {
 
 type PageReloadOptions = Pick<PageGotoOptions, "timeout" | "waitUntil">;
 
-type PageSnapshotOptions = Omit<SnapshotOptions, "root"> & {
+type PageSnapshotOptions = Omit<SnapshotOptions, "root" | "frameId"> & {
   root?: string;
 };
 
@@ -1993,6 +1993,7 @@ class Page {
     return this.#withPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId);
       let root: number | undefined;
+      let rootFrameId: string | undefined;
       let rootContext:
         | {
             frameId?: string;
@@ -2013,6 +2014,16 @@ class Page {
           );
         }
         root = entry.backendNodeId;
+        // Backend node ids are only unique per renderer, and native snapshot
+        // prefers the main document when ids collide. A root inside an iframe
+        // must name its frame; a main-document root must not.
+        if (
+          entry.frameId &&
+          entry.frameProvenance === "frame" &&
+          entry.frameId !== page.targetId
+        ) {
+          rootFrameId = entry.frameId;
+        }
         rootContext = {
           ...(entry.frameId ? { frameId: entry.frameId } : {}),
           ...(entry.frameProvenance
@@ -2026,6 +2037,7 @@ class Page {
         const result = await this.#services.snapshot({
           ...snapshotOptions,
           ...(root === undefined ? {} : { root }),
+          ...(rootFrameId === undefined ? {} : { frameId: rootFrameId }),
           scope: snapshotScope,
           includeActionMarks: options.includeActionMarks ?? true,
           includeStableLocator: options.includeStableLocator ?? true,
