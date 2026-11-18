@@ -221,9 +221,10 @@ test("native select detection finds drop-down selects and names a unique locator
     elements,
     querySelectorAll(selector) {
       if (selector === "*") return hosts;
-      return elements.filter((element) =>
-        selector === `select#${element.id}` ||
-        selector === `select[name=${JSON.stringify(element.name)}]`,
+      return elements.filter(
+        (element) =>
+          selector === `select#${element.id}` ||
+          selector === `select[name=${JSON.stringify(element.name)}]`,
       );
     },
   });
@@ -434,7 +435,7 @@ test("native select detection maps points into translated and scaled iframes and
     { scale: "-1 1" },
     { scale: "2 2 2" },
     { zoom: "2" },
-    { offsetPath: "path(\"M 0 0 L 10 10\")" },
+    { offsetPath: 'path("M 0 0 L 10 10")' },
   ]) {
     styles.set(body, style);
     assert.equal(

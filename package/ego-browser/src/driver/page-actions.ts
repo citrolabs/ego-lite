@@ -2281,9 +2281,7 @@ function framePointMapping(model: any): FramePointMapping {
     );
   };
   if (!upright(content) || !upright(border)) {
-    throw new Error(
-      "the iframe is rotated, skewed, flipped or 3D-transformed",
-    );
+    throw new Error("the iframe is rotated, skewed, flipped or 3D-transformed");
   }
   const width = Number(model.width);
   const height = Number(model.height);

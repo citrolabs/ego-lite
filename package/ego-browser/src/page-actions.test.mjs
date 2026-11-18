@@ -1185,25 +1185,24 @@ test("Page mouse click maps a frame nested in an isolated-world frame from the s
       ["frame-1", "session:page"],
       ["frame-2", "session:inner"],
     ]);
-  const services = crossOriginFrameServices(selectVerdict(DROPDOWN), (
-    method,
-    params,
-    sessionId,
-  ) => {
-    if (method === "Runtime.evaluate" && params.contextId === 7) {
-      return { result: { type: "object", objectId: "iframe-2" } };
-    }
-    if (method === "DOM.describeNode" && params.objectId === "iframe-2") {
-      return { node: { nodeName: "IFRAME", frameId: "frame-2" } };
-    }
-    if (method === "DOM.getBoxModel" && params.objectId === "iframe-2") {
-      const rect = [120, 220, 220, 220, 220, 320, 120, 320];
-      return {
-        model: { content: rect, border: rect, width: 100, height: 100 },
-      };
-    }
-    return undefined;
-  });
+  const services = crossOriginFrameServices(
+    selectVerdict(DROPDOWN),
+    (method, params, sessionId) => {
+      if (method === "Runtime.evaluate" && params.contextId === 7) {
+        return { result: { type: "object", objectId: "iframe-2" } };
+      }
+      if (method === "DOM.describeNode" && params.objectId === "iframe-2") {
+        return { node: { nodeName: "IFRAME", frameId: "frame-2" } };
+      }
+      if (method === "DOM.getBoxModel" && params.objectId === "iframe-2") {
+        const rect = [120, 220, 220, 220, 220, 320, 120, 320];
+        return {
+          model: { content: rect, border: rect, width: 100, height: 100 },
+        };
+      }
+      return undefined;
+    },
+  );
 
   await assert.rejects(
     () =>

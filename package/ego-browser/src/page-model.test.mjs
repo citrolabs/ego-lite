@@ -4945,9 +4945,7 @@ test("Page mouse tracks the moved-to point when a native select refuses the clic
       false,
       "the refused click must not press",
     );
-    const press = pointerCalls.find(
-      (params) => params.type === "mousePressed",
-    );
+    const press = pointerCalls.find((params) => params.type === "mousePressed");
     assert.deepEqual(
       [press.x, press.y, press.button],
       [90, 40, "right"],
