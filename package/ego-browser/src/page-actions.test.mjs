@@ -165,7 +165,7 @@ test("Page click force skips the hit test but still rejects a disabled element",
   }
   assert.match(
     checks.at(-1),
-    /nativeSelectMenuAt\(hitElementAtPoint\(this, point\)\)/,
+    /nativeSelectMenuAt\(deepestHitElement\(hitElementAtPoint\(this, point\), point\)\)/,
     "force does not change the press, so the native select check still runs",
   );
   assert.equal(
@@ -424,7 +424,7 @@ test("Page click keeps raw-selector OOPIF input local but renders its cursor in 
     ([method, params]) =>
       method === "Runtime.callFunctionOn" &&
       params.functionDeclaration.includes(
-        "nativeSelectMenuAt(hitElementAtPoint",
+        "nativeSelectMenuAt(deepestHitElement(hitElementAtPoint",
       ),
   );
   assert(
@@ -575,8 +575,8 @@ test("Page click refuses a left press that would open a native select menu", asy
   assert.equal(pressCount(services.calls), 0);
   assert.match(
     pageCalls(services.calls).at(-1),
-    /nativeSelectMenuAt\(hitElementAtPoint\(this, point\)\)/,
-    "the check looks at the element under the press point, not the target",
+    /nativeSelectMenuAt\(deepestHitElement\(hitElementAtPoint\(this, point\), point\)\)/,
+    "the check looks at the element under the press point, below shadow hosts, not the target",
   );
 });
 
@@ -649,12 +649,10 @@ test("Page mouse click refuses coordinates on a native select", async () => {
       "with a selector or snapshot ref that matches only this <select>",
     ),
   );
-  assert.equal(
-    services.calls.some(([method]) => method === "Input.dispatchMouseEvent"),
-    false,
-    "no pointer input reaches the page",
+  assert.equal(pressCount(services.calls), 0, "no press reaches the page");
+  const [, params, sessionId] = services.calls.find(
+    ([method]) => method === "Runtime.evaluate",
   );
-  const [, params, sessionId] = services.calls[0];
   assert.equal(sessionId, "session:page");
   assert.match(params.expression, /let x = 40;\s+let y = 50;/);
   assert.match(params.expression, /contentDocument/);
@@ -711,13 +709,25 @@ function crossOriginFrameServices(inFrame, respond = () => undefined) {
       return { node: { nodeName: "IFRAME", frameId: "frame-1" } };
     }
     if (method === "DOM.getBoxModel") {
-      return { model: { content: [100, 200, 400, 200, 400, 500, 100, 500] } };
+      return { model: frameBox() };
     }
     if (method === "Page.createIsolatedWorld") {
       return { executionContextId: 7 };
     }
     return undefined;
   });
+}
+
+/**
+ * The box model of a borderless 300x300 iframe whose content box starts at
+ * (100, 200), rendered with `scale` and optional quads replacing the content
+ * and border quads (to model rotation and the like).
+ */
+function frameBox({ scale = 1, quad } = {}) {
+  const right = 100 + 300 * scale;
+  const bottom = 200 + 300 * scale;
+  const rect = quad ?? [100, 200, right, 200, right, bottom, 100, bottom];
+  return { content: rect, border: rect, width: 300, height: 300 };
 }
 
 /** A `respond` hook that answers one CDP method and leaves the rest alone. */
@@ -766,11 +776,7 @@ test("Page mouse click checks a native select inside an out-of-process iframe in
       ),
     assertNativeSelectRefusal("page.mouse.click", "select#dropdown"),
   );
-  assert.equal(
-    blocked.calls.some(([method]) => method === "Input.dispatchMouseEvent"),
-    false,
-    "no pointer input reaches the page",
-  );
+  assert.equal(pressCount(blocked.calls), 0, "no press reaches the page");
   const [[, params, sessionId]] = frameEvaluations(blocked.calls);
   assert.equal(sessionId, "session:frame");
   assert.equal(params.contextId, undefined);
@@ -912,11 +918,183 @@ test("Page mouse click fails closed when the frame under the point cannot be ins
       name,
     );
     assert.equal(
-      services.calls.some(([method]) => method === "Input.dispatchMouseEvent"),
-      false,
-      `${name}: no pointer input reaches the page`,
+      pressCount(services.calls),
+      0,
+      `${name}: no press reaches the page`,
     );
   }
+});
+
+test("Page mouse click maps the point through a scaled cross-origin iframe", async () => {
+  const frameSessions = async () => new Map([["frame-1", "session:frame"]]);
+  const services = crossOriginFrameServices(
+    selectVerdict(DROPDOWN),
+    answer("DOM.getBoxModel", { model: frameBox({ scale: 2 }) }),
+  );
+
+  await assert.rejects(
+    () =>
+      clickPointInPage(
+        services,
+        "session:page",
+        250,
+        300,
+        {},
+        0,
+        0,
+        frameSessions,
+      ),
+    assertNativeSelectRefusal("page.mouse.click", "select#dropdown"),
+  );
+  const [[, params]] = frameEvaluations(services.calls);
+  assert.match(
+    params.expression,
+    /let x = 75;\s+let y = 50;/,
+    "the frame-local point undoes the scale, not just the origin",
+  );
+});
+
+test("Page mouse click refuses a point inside an iframe whose transform it cannot invert", async () => {
+  const frameSessions = async () => new Map([["frame-1", "session:frame"]]);
+  const quads = [
+    ["rotated", [250, 100, 400, 250, 250, 400, 100, 250]],
+    ["flipped", [400, 200, 100, 200, 100, 500, 400, 500]],
+    ["skewed", [100, 200, 400, 200, 500, 500, 200, 500]],
+    ["in perspective", [100, 200, 400, 200, 450, 500, 50, 500]],
+  ];
+  for (const [name, quad] of quads) {
+    const services = crossOriginFrameServices(
+      selectVerdict(null),
+      answer("DOM.getBoxModel", { model: frameBox({ quad }) }),
+    );
+    await assert.rejects(
+      () =>
+        clickPointInPage(
+          services,
+          "session:page",
+          250,
+          300,
+          {},
+          0,
+          0,
+          frameSessions,
+        ),
+      assertUncheckedRefusal(
+        "page.mouse.click",
+        "the iframe is rotated, skewed, flipped or 3D-transformed",
+      ),
+      name,
+    );
+    assert.equal(pressCount(services.calls), 0, name);
+    assert.equal(frameEvaluations(services.calls).length, 0, name);
+  }
+});
+
+test("Page mouse click maps a frame nested in an isolated-world frame from the session viewport", async () => {
+  // The outer frame is unreadable but same-process (isolated world 7); inside
+  // it, a cross-origin frame lives in its own session. Both box models are
+  // reported in the Page session's viewport.
+  const frameSessions = async () =>
+    new Map([
+      ["frame-1", "session:page"],
+      ["frame-2", "session:inner"],
+    ]);
+  const services = crossOriginFrameServices(selectVerdict(DROPDOWN), (
+    method,
+    params,
+    sessionId,
+  ) => {
+    if (method === "Runtime.evaluate" && params.contextId === 7) {
+      return { result: { type: "object", objectId: "iframe-2" } };
+    }
+    if (method === "DOM.describeNode" && params.objectId === "iframe-2") {
+      return { node: { nodeName: "IFRAME", frameId: "frame-2" } };
+    }
+    if (method === "DOM.getBoxModel" && params.objectId === "iframe-2") {
+      const rect = [120, 220, 220, 220, 220, 320, 120, 320];
+      return {
+        model: { content: rect, border: rect, width: 100, height: 100 },
+      };
+    }
+    return undefined;
+  });
+
+  await assert.rejects(
+    () =>
+      clickPointInPage(
+        services,
+        "session:page",
+        140,
+        250,
+        {},
+        0,
+        0,
+        frameSessions,
+      ),
+    assertNativeSelectRefusal("page.mouse.click", "select#dropdown"),
+  );
+  const [outer, inner] = frameEvaluations(services.calls);
+  assert.match(outer[1].expression, /let x = 40;\s+let y = 50;/);
+  assert.equal(inner[2], "session:inner");
+  assert.match(
+    inner[1].expression,
+    /let x = 20;\s+let y = 30;/,
+    "the inner frame is mapped from the Page viewport, not the outer frame's",
+  );
+});
+
+test("Page mouse click checks for a native select after the move and before every press", async () => {
+  // A hover handler reveals a select once the pointer has moved.
+  const hover = pointServices(null, (method) => {
+    if (method === "Runtime.evaluate") {
+      const moved = hover.calls.some(
+        ([called, params]) =>
+          called === "Input.dispatchMouseEvent" && params.type === "mouseMoved",
+      );
+      return selectVerdict(moved ? DROPDOWN : null);
+    }
+  });
+  await assert.rejects(
+    () => clickPointInPage(hover, "session:page", 40, 50),
+    assertNativeSelectRefusal("page.mouse.click", "select#dropdown"),
+  );
+  assert.equal(pressCount(hover.calls), 0);
+
+  // The first click of a double click reveals a select under the point.
+  const reveal = pointServices(null, (method) => {
+    if (method === "Runtime.evaluate") {
+      return selectVerdict(pressCount(reveal.calls) > 0 ? DROPDOWN : null);
+    }
+  });
+  await assert.rejects(
+    () => clickPointInPage(reveal, "session:page", 40, 50, { clickCount: 2 }),
+    assertNativeSelectRefusal("page.mouse.click", "select#dropdown"),
+  );
+  assert.equal(pressCount(reveal.calls), 1, "the second press is refused");
+
+  const clear = pointServices(null);
+  await clickPointInPage(clear, "session:page", 40, 50, { clickCount: 3 });
+  assert.deepEqual(
+    clear.calls
+      .filter(
+        ([method, params]) =>
+          method === "Runtime.evaluate" ||
+          (method === "Input.dispatchMouseEvent" &&
+            params.type !== "mouseReleased"),
+      )
+      .map(([method, params]) =>
+        method === "Runtime.evaluate" ? "check" : params.type,
+      ),
+    [
+      "mouseMoved",
+      "check",
+      "mousePressed",
+      "check",
+      "mousePressed",
+      "check",
+      "mousePressed",
+    ],
+  );
 });
 
 test("Page mouse click presses on an iframe element that has no content frame", async () => {
@@ -957,9 +1135,9 @@ test("Page mouse presses fail closed when the hit test gives no positive answer"
       name,
     );
     assert.equal(
-      click.calls.some(([method]) => method === "Input.dispatchMouseEvent"),
-      false,
-      `${name}: no pointer input reaches the page`,
+      pressCount(click.calls),
+      0,
+      `${name}: no press reaches the page`,
     );
 
     const down = pointServices(null, respond);

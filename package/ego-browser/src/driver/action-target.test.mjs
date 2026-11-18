@@ -279,3 +279,122 @@ test("native select detection finds drop-down selects and names a unique locator
   );
   assert.equal(nativeSelectMenuAt(null), null);
 });
+
+function nativeSelectHelpers() {
+  return Function(`
+    ${COMPOSED_PARENT_HELPER}
+    ${NATIVE_SELECT_FUNCTIONS}
+    return { deepestHitElement, frameContentPoint, nativeSelectMenuAt };
+  `)();
+}
+
+test("native select detection descends into the shadow root of a custom element inside the target", () => {
+  const { deepestHitElement, nativeSelectMenuAt } = nativeSelectHelpers();
+  const root = { nodeType: 11, querySelectorAll: () => ({ length: 0 }) };
+  const select = {
+    tagName: "SELECT",
+    parentElement: null,
+    options: [{ label: "One" }],
+    getAttribute: () => null,
+    getRootNode: () => root,
+    matches: () => false,
+  };
+  const points = [];
+  const host = {
+    tagName: "MY-PICKER",
+    shadowRoot: {
+      elementFromPoint(x, y) {
+        points.push([x, y]);
+        return select;
+      },
+    },
+  };
+  root.host = host;
+  // The wrapper hit test stops at the shadow host, which is not a select.
+  assert.equal(nativeSelectMenuAt(host), null);
+  assert.equal(deepestHitElement(host, { x: 3, y: 4 }), select);
+  assert.deepEqual(points, [[3, 4]]);
+  assert.equal(
+    nativeSelectMenuAt(deepestHitElement(host, { x: 3, y: 4 })).optionCount,
+    1,
+  );
+
+  const closed = { tagName: "DIV", shadowRoot: null };
+  assert.equal(deepestHitElement(closed, { x: 0, y: 0 }), closed);
+  const self = { tagName: "X", shadowRoot: { elementFromPoint: () => self } };
+  assert.equal(deepestHitElement(self, { x: 0, y: 0 }), self);
+  assert.equal(deepestHitElement(null, { x: 0, y: 0 }), null);
+});
+
+test("native select detection maps points into translated and scaled iframes and refuses other transforms", () => {
+  const { frameContentPoint } = nativeSelectHelpers();
+  const styles = new Map();
+  const view = {
+    getComputedStyle: (node) => ({
+      transform: "none",
+      rotate: "none",
+      scale: "none",
+      zoom: "1",
+      offsetPath: "none",
+      paddingLeft: "0px",
+      paddingTop: "0px",
+      ...styles.get(node),
+    }),
+  };
+  const body = { nodeType: 1, parentElement: null };
+  const frame = (rect) => ({
+    nodeType: 1,
+    parentElement: body,
+    ownerDocument: { defaultView: view },
+    offsetWidth: 300,
+    offsetHeight: 200,
+    clientLeft: 2,
+    clientTop: 3,
+    getBoundingClientRect: () => rect,
+  });
+
+  const plain = frame({ left: 100, top: 50, width: 300, height: 200 });
+  styles.set(plain, { paddingLeft: "4px", paddingTop: "5px" });
+  assert.deepEqual(frameContentPoint(plain, { x: 150, y: 100 }), {
+    x: 44,
+    y: 42,
+  });
+
+  // An ancestor scales the iframe by two: the bounding box doubles, the
+  // layout size does not.
+  const scaled = frame({ left: 100, top: 50, width: 600, height: 400 });
+  styles.set(body, { transform: "matrix(2, 0, 0, 2, 10, 20)" });
+  assert.deepEqual(frameContentPoint(scaled, { x: 250, y: 150 }), {
+    x: 73,
+    y: 47,
+  });
+  styles.set(body, { scale: "2" });
+  assert.deepEqual(frameContentPoint(scaled, { x: 250, y: 150 }), {
+    x: 73,
+    y: 47,
+  });
+
+  for (const style of [
+    { transform: "matrix(0, 1, -1, 0, 0, 0)" },
+    { transform: "matrix(-1, 0, 0, 1, 0, 0)" },
+    { transform: "matrix(1, 0, 0.5, 1, 0, 0)" },
+    { transform: "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)" },
+    { rotate: "45deg" },
+    { scale: "-1 1" },
+    { scale: "2 2 2" },
+    { zoom: "2" },
+    { offsetPath: "path(\"M 0 0 L 10 10\")" },
+  ]) {
+    styles.set(body, style);
+    assert.equal(
+      frameContentPoint(scaled, { x: 250, y: 150 }),
+      null,
+      JSON.stringify(style),
+    );
+  }
+  styles.delete(body);
+
+  const empty = frame({ left: 0, top: 0, width: 0, height: 0 });
+  empty.offsetWidth = 0;
+  assert.equal(frameContentPoint(empty, { x: 0, y: 0 }), null);
+});

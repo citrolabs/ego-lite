@@ -1228,15 +1228,6 @@ export async function clickPointInPage(
   const button = options.button ?? "left";
   const clickCount = options.clickCount ?? 1;
   const buttons = pressedButtons(button);
-  if (button === "left") {
-    await assertNoNativeSelectAtViewportPoint(
-      services,
-      sessionId,
-      { x, y },
-      "page.mouse.click",
-      frameSessions,
-    );
-  }
   showAgentActionLabel(services, options.label);
   await dispatchMouseEvent(services, sessionId, {
     type: "mouseMoved",
@@ -1247,6 +1238,17 @@ export async function clickPointInPage(
     modifiers,
   });
   for (let count = 1; count <= clickCount; count += 1) {
+    // Checked after the move and before every press: a hover handler or an
+    // earlier click of the sequence can put a select under the point.
+    if (button === "left") {
+      await assertNoNativeSelectAtViewportPoint(
+        services,
+        sessionId,
+        { x, y },
+        "page.mouse.click",
+        frameSessions,
+      );
+    }
     await dispatchMouseEvent(services, sessionId, {
       type: "mousePressed",
       x,
@@ -1864,8 +1866,9 @@ async function assertClickTargetActionable(
 ): Promise<void> {
   const { hitTest, nativeSelect = false, actionName = "page.click" } = options;
   // The native select check looks at the element the press really lands on,
-  // which may be a transparent <select> inside the target or, with `force`,
-  // something other than the target.
+  // which may be a transparent <select> inside the target, a <select> in the
+  // shadow root of a custom element inside it or, with `force`, something
+  // other than the target.
   const helpers = nativeSelect
     ? `${HIT_TARGET_HELPERS}${NATIVE_SELECT_FUNCTIONS}`
     : hitTest
@@ -1877,7 +1880,7 @@ async function assertClickTargetActionable(
     if (isActionTargetDisabled(this)) return { error: "element is disabled" };
     ${
       nativeSelect
-        ? `const nativeSelect = nativeSelectMenuAt(hitElementAtPoint(this, point));
+        ? `const nativeSelect = nativeSelectMenuAt(deepestHitElement(hitElementAtPoint(this, point), point));
     if (nativeSelect) return { nativeSelect };`
         : ""
     }
@@ -1992,7 +1995,10 @@ async function assertNoNativeSelectAtViewportPoint(
 ): Promise<void> {
   let currentSessionId = sessionId;
   let contextId: number | undefined;
+  // The point in the current document's viewport, and in the viewport of the
+  // current session's local root.
   let { x, y } = point;
+  let sessionPoint = { x, y };
   for (let depth = 0; depth < NATIVE_SELECT_FRAME_DEPTH; depth += 1) {
     // Evaluates to the frame element itself when its document is unreadable
     // and to a JSON verdict otherwise, so the common case is one round trip.
@@ -2003,12 +2009,7 @@ async function assertNoNativeSelectAtViewportPoint(
       let x = ${x};
       let y = ${y};
       for (let depth = 0; depth < ${NATIVE_SELECT_FRAME_DEPTH}; depth += 1) {
-        let element = doc.elementFromPoint(x, y);
-        while (element?.shadowRoot) {
-          const inner = element.shadowRoot.elementFromPoint(x, y);
-          if (!inner || inner === element) break;
-          element = inner;
-        }
+        const element = deepestHitElement(doc.elementFromPoint(x, y), { x, y });
         if (!element) return JSON.stringify({ nativeSelect: null });
         const tag = String(element.tagName || "").toUpperCase();
         if (tag !== "IFRAME" && tag !== "FRAME") {
@@ -2019,10 +2020,12 @@ async function assertNoNativeSelectAtViewportPoint(
           inner = element.contentDocument;
         } catch {}
         if (!inner) return element;
-        const rect = element.getBoundingClientRect();
-        const style = getComputedStyle(element);
-        x -= rect.left + element.clientLeft + (parseFloat(style.paddingLeft) || 0);
-        y -= rect.top + element.clientTop + (parseFloat(style.paddingTop) || 0);
+        const local = frameContentPoint(element, { x, y });
+        if (!local) {
+          return JSON.stringify({ unchecked: "the point is inside a rotated, skewed, flipped, zoomed or 3D-transformed iframe" });
+        }
+        x = local.x;
+        y = local.y;
         doc = inner;
       }
       return JSON.stringify({ unchecked: "iframes are nested too deeply" });
@@ -2060,10 +2063,13 @@ async function assertNoNativeSelectAtViewportPoint(
       );
       // An <iframe> without a content frame has no document to press on.
       if (!frame) return;
+      // Box models are reported in the session's own viewport, so a frame
+      // evaluated in an isolated world of the same session keeps mapping from
+      // that viewport, while a frame in its own session starts a new one.
+      ({ x, y } = frame.toFrame(sessionPoint));
+      if (frame.sessionId !== currentSessionId) sessionPoint = { x, y };
       currentSessionId = frame.sessionId;
       contextId = frame.contextId;
-      x -= frame.origin.x;
-      y -= frame.origin.y;
       continue;
     }
     let verdict: any = null;
@@ -2105,8 +2111,8 @@ async function assertNoNativeSelectAtViewportPoint(
 /**
  * Where to continue the hit test for a frame element whose document its
  * embedder cannot read: the session and execution context that own the frame's
- * document, and the frame's content origin in the embedding session's
- * viewport. Null when the element has no content frame. Throws when the frame
+ * document, and the mapping from the embedding session's viewport into the
+ * frame's content viewport. Null when the element has no content frame. Throws when the frame
  * cannot be reached, so the caller never presses into an uninspected document.
  */
 async function uninspectedFrameAtPoint(
@@ -2118,11 +2124,11 @@ async function uninspectedFrameAtPoint(
 ): Promise<{
   sessionId: string;
   contextId?: number;
-  origin: { x: number; y: number };
+  toFrame: FramePointMapping;
 } | null> {
   try {
     let frameId: unknown;
-    let content: unknown;
+    let model: unknown;
     try {
       const described = await services.cdp(
         "DOM.describeNode",
@@ -2136,21 +2142,14 @@ async function uninspectedFrameAtPoint(
         { objectId },
         sessionId,
       );
-      content = box?.model?.content;
+      model = box?.model;
     } finally {
       await releaseObject(services, sessionId, objectId);
     }
-    if (
-      !Array.isArray(content) ||
-      !Number.isFinite(content[0]) ||
-      !Number.isFinite(content[1])
-    ) {
-      throw new Error("the iframe has no box");
-    }
-    const origin = { x: content[0] as number, y: content[1] as number };
+    const toFrame = framePointMapping(model);
     const frameSessionId = (await frameSessions?.())?.get(frameId);
     if (frameSessionId && frameSessionId !== sessionId) {
-      return { sessionId: frameSessionId, origin };
+      return { sessionId: frameSessionId, toFrame };
     }
     // Same process, but a document the embedder may not read (for example a
     // sandboxed or data: frame): evaluate inside the frame itself.
@@ -2162,13 +2161,74 @@ async function uninspectedFrameAtPoint(
     if (!Number.isInteger(world?.executionContextId)) {
       throw new Error("the iframe has no execution context");
     }
-    return { sessionId, contextId: world.executionContextId, origin };
+    return { sessionId, contextId: world.executionContextId, toFrame };
   } catch (error) {
     throw nativeSelectUncheckedError(
       actionName,
       `the point is inside an iframe that could not be inspected: ${errorText(error)}`,
     );
   }
+}
+
+type FramePointMapping = (point: { x: number; y: number }) => {
+  x: number;
+  y: number;
+};
+
+/** Rendered quads may carry sub-pixel noise from layout snapping. */
+const QUAD_TOLERANCE = 0.5;
+
+/**
+ * Inverts the mapping from a frame's content viewport to the viewport the
+ * frame element's box model is reported in. The rendered quads already include
+ * every transform of the frame and its ancestors; the layout width and height
+ * do not, so their ratio is the scale. Only translation and positive,
+ * axis-aligned scaling can be inverted this way: a quad that is not an upright
+ * rectangle (rotation, skew, flip, perspective) throws, so the caller refuses
+ * the press instead of checking the wrong point.
+ */
+function framePointMapping(model: any): FramePointMapping {
+  const content = model?.content;
+  const border = model?.border;
+  const quadOk = (quad: unknown): quad is number[] =>
+    Array.isArray(quad) &&
+    quad.length === 8 &&
+    quad.every((value) => Number.isFinite(value));
+  if (!quadOk(content) || !quadOk(border)) {
+    throw new Error("the iframe has no box");
+  }
+  const upright = (quad: number[]) => {
+    const [x0, y0, x1, y1, x2, y2, x3, y3] = quad;
+    const near = (a: number, b: number) => Math.abs(a - b) <= QUAD_TOLERANCE;
+    return (
+      x1 > x0 &&
+      y3 > y0 &&
+      near(y0, y1) &&
+      near(x0, x3) &&
+      near(x2, x1) &&
+      near(y2, y3)
+    );
+  };
+  if (!upright(content) || !upright(border)) {
+    throw new Error(
+      "the iframe is rotated, skewed, flipped or 3D-transformed",
+    );
+  }
+  const width = Number(model.width);
+  const height = Number(model.height);
+  if (!(width > 0) || !(height > 0)) {
+    throw new Error("the iframe has no layout size");
+  }
+  const scaleX = (border[2] - border[0]) / width;
+  const scaleY = (border[7] - border[1]) / height;
+  if (!(scaleX > 0) || !(scaleY > 0)) {
+    throw new Error("the iframe has no layout size");
+  }
+  const [originX, originY] = content;
+  return ({ x, y }) => ({
+    x: (x - originX) / scaleX,
+    y: (y - originY) / scaleY,
+  });
 }
 
 function errorText(error: unknown): string {

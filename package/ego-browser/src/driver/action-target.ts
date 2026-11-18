@@ -365,7 +365,8 @@ export const EDIT_ACTION_TARGET_HELPERS = `
 // task space until it goes away (CITRO-4909). Pointer actions therefore refuse
 // such a press and point the caller to page.selectOption(). List boxes
 // (multiple or size > 1) and disabled selects open no menu and stay clickable.
-// Requires composedParent().
+// Requires composedParent(). The helpers also locate the element a press lands
+// on below shadow hosts and inside transformed iframes.
 export const NATIVE_SELECT_FUNCTIONS = `
   function nativeSelectMenuAt(hitElement) {
     let select = hitElement;
@@ -393,6 +394,60 @@ export const NATIVE_SELECT_FUNCTIONS = `
       locator,
       options: options.slice(0, 10).map((option) => String(option.label || "").slice(0, 60)),
       optionCount: options.length,
+    };
+  }
+  // A document or shadow root hit test stops at a shadow host, so descend
+  // through open shadow roots to the element the press really lands on.
+  function deepestHitElement(element, point) {
+    while (element?.shadowRoot) {
+      const inner = element.shadowRoot.elementFromPoint?.(point.x, point.y);
+      if (!inner || inner === element) break;
+      element = inner;
+    }
+    return element;
+  }
+  // Maps a point in the viewport of the frame element's document to the
+  // viewport of its content document. Only translation and positive,
+  // axis-aligned scaling of the frame or its ancestors can be inverted from
+  // the layout box; any other transform (rotation, skew, flip, 3D, CSS zoom,
+  // a motion path) returns null so the caller refuses the press.
+  function frameContentPoint(frame, point) {
+    const view = frame.ownerDocument?.defaultView || globalThis;
+    for (let node = frame; node; node = composedParent(node)) {
+      if (node.nodeType !== undefined && node.nodeType !== 1) continue;
+      const style = view.getComputedStyle(node);
+      const transform = String(style.transform || "none");
+      if (transform !== "none") {
+        const match = /^matrix\\(([^)]*)\\)$/.exec(transform);
+        if (!match) return null;
+        const [a, b, c, d] = match[1].split(",").map(Number);
+        if (!(a > 0) || !(d > 0) || Math.abs(b) > 1e-6 || Math.abs(c) > 1e-6) {
+          return null;
+        }
+      }
+      if (String(style.rotate || "none") !== "none") return null;
+      const scale = String(style.scale || "none");
+      if (scale !== "none") {
+        const factors = scale.trim().split(/\\s+/).map(Number);
+        if (factors.length > 2 || factors.some((factor) => !(factor > 0))) {
+          return null;
+        }
+      }
+      const zoom = String(style.zoom || "1");
+      if (zoom !== "1" && zoom !== "normal") return null;
+      if (String(style.offsetPath || "none") !== "none") return null;
+    }
+    const width = frame.offsetWidth;
+    const height = frame.offsetHeight;
+    if (!(width > 0) || !(height > 0)) return null;
+    const rect = frame.getBoundingClientRect();
+    const scaleX = rect.width / width;
+    const scaleY = rect.height / height;
+    if (!(scaleX > 0) || !(scaleY > 0)) return null;
+    const style = view.getComputedStyle(frame);
+    return {
+      x: (point.x - rect.left) / scaleX - (frame.clientLeft || 0) - (parseFloat(style.paddingLeft) || 0),
+      y: (point.y - rect.top) / scaleY - (frame.clientTop || 0) - (parseFloat(style.paddingTop) || 0),
     };
   }
 `;
