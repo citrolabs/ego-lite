@@ -314,7 +314,14 @@ export async function clickInPage(
       },
       cursorPoint,
     );
-    if (target.frameId && target.sessionId === sessionId) {
+    // Input for a same-process iframe is dispatched through the Page session
+    // in Page viewport coordinates, so an element of an embedding document
+    // that covers the iframe (such as a drop-down select) takes the press.
+    // The target's own document cannot see it, so the native select check
+    // also starts from the dispatch viewport.
+    const sameProcessFrame =
+      Boolean(target.frameId) && target.sessionId === sessionId;
+    if (sameProcessFrame) {
       // Moving into a same-process iframe can adjust the outer document's
       // scroll position. Translate the frame-local point again before the
       // press so native input uses the post-hover viewport coordinates.
@@ -335,6 +342,7 @@ export async function clickInPage(
           hitTest: !options.force,
           nativeSelect,
           viewportPoint: { x: point.x, y: point.y },
+          checkViewport: true,
           frameSessions,
         },
       );
@@ -356,8 +364,6 @@ export async function clickInPage(
       // presses in any iframe only recheck the enabled state. An out-of-process
       // iframe had no check since its point was resolved, so its first left
       // press still checks for a native select.
-      const sameProcessFrame =
-        Boolean(target.frameId) && target.sessionId === sessionId;
       if (!target.frameId || count > 1 || (nativeSelect && !sameProcessFrame)) {
         await assertClickTargetActionable(
           services,
@@ -368,6 +374,7 @@ export async function clickInPage(
             hitTest: !options.force && !target.frameId,
             nativeSelect,
             viewportPoint: { x: point.x, y: point.y },
+            checkViewport: sameProcessFrame,
             frameSessions,
           },
         );
@@ -1885,6 +1892,13 @@ async function assertClickTargetActionable(
      * from this point through the frame's documents.
      */
     viewportPoint?: { x: number; y: number };
+    /**
+     * With `nativeSelect`, always continue the check at `viewportPoint` from
+     * the top document of `sessionId`, not only when the target's document
+     * hits an iframe: the target lives in a same-process iframe whose input is
+     * dispatched in the embedding viewport, where another document may cover it.
+     */
+    checkViewport?: boolean;
     frameSessions?: FrameSessionsLoader;
   },
 ): Promise<void> {
@@ -1950,9 +1964,10 @@ async function assertClickTargetActionable(
       "the page-side hit test returned no result",
     );
   }
-  if (nativeSelect && result.frameHit === true) {
-    // The hit test of the target's document stops at the iframe element; the
-    // press itself reaches whatever the frame's document has at that point.
+  if (nativeSelect && (result.frameHit === true || options.checkViewport)) {
+    // The hit test of the target's document stops at an iframe element (the
+    // press reaches whatever the frame's document has at that point) and does
+    // not see embedding documents that may cover the target's own frame.
     if (!options.viewportPoint) {
       throw nativeSelectUncheckedError(
         actionName,

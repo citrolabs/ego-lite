@@ -211,12 +211,26 @@ test("Page click rechecks the target before every press of a multi-click", async
   assert.deepEqual(presses, [1, 2]);
 });
 
-test("Page click translates same-process iframe coordinates to the Page viewport", async () => {
+/**
+ * Services for a click on a button inside a same-process iframe. Its input is
+ * dispatched through the Page session in Page viewport coordinates;
+ * `viewportVerdict` answers the native select hit test started from that
+ * viewport's top document.
+ */
+function sameProcessIframeClickServices(viewportVerdict = selectVerdict(null)) {
   const calls = [];
   const states = [];
   const services = {
+    calls,
+    states,
     async cdp(method, params = {}, sessionId) {
       calls.push([method, params, sessionId]);
+      if (
+        method === "Runtime.evaluate" &&
+        params.expression?.includes("contentDocument")
+      ) {
+        return viewportVerdict;
+      }
       if (method === "Accessibility.getFullAXTree") {
         return params.frameId === "frame-child"
           ? {
@@ -264,8 +278,11 @@ test("Page click translates same-process iframe coordinates to the Page viewport
     },
     async sleep() {},
   };
+  return services;
+}
 
-  await clickInPage(
+function clickSameProcessIframeButton(services) {
+  return clickInPage(
     services,
     "session:page",
     new RefMap(),
@@ -274,6 +291,13 @@ test("Page click translates same-process iframe coordinates to the Page viewport
     0,
     new Map([["frame-child", "session:page"]]),
   );
+}
+
+test("Page click translates same-process iframe coordinates to the Page viewport", async () => {
+  const services = sameProcessIframeClickServices();
+  const { calls, states } = services;
+
+  await clickSameProcessIframeButton(services);
 
   const pointerEvents = calls
     .filter(([method]) => method === "Input.dispatchMouseEvent")
@@ -327,6 +351,72 @@ test("Page click translates same-process iframe coordinates to the Page viewport
     "same-process iframe input keeps mouseMoved and mousePressed contiguous",
   );
   assert.deepEqual(states, ["Clicking element"]);
+  const viewportCheck = calls.findLastIndex(
+    ([method, params, sessionId]) =>
+      method === "Runtime.evaluate" &&
+      sessionId === "session:page" &&
+      params.expression?.includes("contentDocument"),
+  );
+  assert(
+    viewportCheck > initialMoveIndex && viewportCheck < moveIndex,
+    "the press point is checked from the Page viewport before the final move",
+  );
+  assert.equal(
+    calls[viewportCheck][1].contextId,
+    undefined,
+    "the viewport check starts in the Page's top document",
+  );
+  assert.match(
+    calls[viewportCheck][1].expression,
+    /let x = 110;\s+let y = 239;/,
+    "the viewport check uses the post-hover Page coordinates of the press",
+  );
+});
+
+test("Page click refuses a same-process iframe target covered by a select of the embedding document", async () => {
+  // The iframe's own hit test sees only its button; the Page viewport, where
+  // the press is dispatched, has a drop-down select over it.
+  const services = sameProcessIframeClickServices(selectVerdict(DROPDOWN));
+
+  await assert.rejects(
+    () => clickSameProcessIframeButton(services),
+    assertNativeSelectRefusal("page.click", "select#dropdown"),
+  );
+  assert.equal(pressCount(services.calls), 0);
+});
+
+test("Page click rechecks the Page viewport before every later press into a same-process iframe", async () => {
+  const services = sameProcessIframeClickServices();
+  let viewportChecks = 0;
+  const cdp = services.cdp;
+  services.cdp = async (method, params = {}, sessionId) => {
+    if (
+      method === "Runtime.evaluate" &&
+      params.expression?.includes("contentDocument")
+    ) {
+      viewportChecks += 1;
+      services.calls.push([method, params, sessionId]);
+      // A select of the embedding document appears after the first click.
+      return selectVerdict(viewportChecks === 1 ? null : DROPDOWN);
+    }
+    return cdp(method, params, sessionId);
+  };
+
+  await assert.rejects(
+    () =>
+      clickInPage(
+        services,
+        "session:page",
+        new RefMap(),
+        'loc=role:button[name="Run iframe action"]',
+        { clickCount: 2 },
+        0,
+        new Map([["frame-child", "session:page"]]),
+      ),
+    assertNativeSelectRefusal("page.click", "select#dropdown"),
+  );
+  assert.equal(viewportChecks, 2);
+  assert.equal(pressCount(services.calls), 1, "the second press is refused");
 });
 
 test("Page click keeps raw-selector OOPIF input local but renders its cursor in the Page viewport", async () => {
