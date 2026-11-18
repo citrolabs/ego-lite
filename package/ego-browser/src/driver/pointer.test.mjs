@@ -700,6 +700,14 @@ function runFallbackInFakePage(
       element.addEventListener(type, (event) => handler(event, element));
     }
   }
+  const document = Object.assign(new EventTarget(), {
+    name: "document",
+    nodeType: 9,
+    elementFromPoint: (x, y) => elementAt(x, y),
+    body: target,
+    removeEventListener() {},
+  });
+  document.addEventListener("lostpointercapture", record);
   const probe = { seen: false, target, dispose() {} };
   const window = {
     __egoBrowserInputProbes: new Proxy(
@@ -709,11 +717,7 @@ function runFallbackInFakePage(
   };
   const value = vm.runInNewContext(expression, {
     window,
-    document: {
-      elementFromPoint: (x, y) => elementAt(x, y),
-      body: target,
-      removeEventListener() {},
-    },
+    document,
     Element: FakeElement,
     MouseEvent: FakeMouseEvent,
     PointerEvent: FakePointerEvent,
@@ -1047,6 +1051,79 @@ test("drag fallback stops routing to an element once it releases capture", async
     ["pointerup", "body"],
     ["mouseup", "body"],
   ]);
+});
+
+test("drag fallback resumes hit-testing when the capturing element is removed", async () => {
+  // A handler that captures and then replaces its element must not leave the
+  // rest of the drag aimed at a detached node that document listeners miss.
+  const page = await dragFallbackInFakePage(
+    [
+      [10, 20],
+      [30, 40],
+      [50, 60],
+    ],
+    {
+      build: sliderPage,
+      listeners: {
+        thumb: {
+          pointerdown(event, thumb) {
+            thumb.setPointerCapture(event.pointerId);
+          },
+          pointermove(_event, thumb) {
+            thumb.isConnected = false;
+          },
+        },
+      },
+    },
+  );
+
+  const afterDown = page.events
+    .slice(page.events.findIndex((event) => event.type === "mousedown") + 1)
+    .map((event) => [event.type, event.on]);
+  assert.deepEqual(afterDown, [
+    ["gotpointercapture", "thumb"],
+    ["pointermove", "thumb"],
+    ["mousemove", "thumb"],
+    ["lostpointercapture", "document"],
+    ["pointermove", "body"],
+    ["mousemove", "body"],
+    ["pointerup", "body"],
+    ["mouseup", "body"],
+  ]);
+});
+
+test("drag fallback ignores a capture request from an element removed before the next event", async () => {
+  const page = await dragFallbackInFakePage(
+    [
+      [10, 20],
+      [50, 60],
+    ],
+    {
+      build: sliderPage,
+      listeners: {
+        thumb: {
+          pointerdown(event, thumb) {
+            thumb.setPointerCapture(event.pointerId);
+            thumb.isConnected = false;
+          },
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(
+    page.events
+      .filter((event) => /move|down|up|capture/.test(event.type))
+      .map((event) => [event.type, event.on]),
+    [
+      ["pointerdown", "thumb"],
+      ["mousedown", "thumb"],
+      ["pointermove", "body"],
+      ["mousemove", "body"],
+      ["pointerup", "body"],
+      ["mouseup", "body"],
+    ],
+  );
 });
 
 test("drag fallback without capture hit-tests each point", async () => {

@@ -100,7 +100,8 @@ type ClickTarget = Point & { probeId: string | null };
  * compatibility mouse events to the capturing element, and fires
  * `gotpointercapture` / `lostpointercapture` around them, so a slider that
  * captures on `pointerdown` keeps receiving moves and the release after the
- * path leaves it.
+ * path leaves it. A capturing element that leaves the document loses capture,
+ * and events go back to hit-testing.
  */
 const SYNTHETIC_POINTER_JS = `
   const SYNTHETIC_POINTER_ID = 1;
@@ -155,7 +156,19 @@ const SYNTHETIC_POINTER_JS = `
   };
   // Applies a capture change requested by the previous handler before the
   // next pointer event, as Chrome processes pending capture.
+  // An element removed from the document loses capture, and Chrome then fires
+  // lostpointercapture at the document and resumes hit-testing, so later
+  // events reach document listeners instead of a detached node.
   const syntheticCaptureTargetFor = (target, init) => {
+    if (syntheticPendingCapture && syntheticPendingCapture.isConnected === false) {
+      syntheticPendingCapture = null;
+    }
+    if (syntheticCaptureTarget && syntheticCaptureTarget.isConnected === false) {
+      syntheticCaptureTarget = null;
+      if (typeof document.dispatchEvent === "function") {
+        firePointer(document, "lostpointercapture", init);
+      }
+    }
     if (syntheticPendingCapture !== syntheticCaptureTarget) {
       const previous = syntheticCaptureTarget;
       syntheticCaptureTarget = syntheticPendingCapture;
