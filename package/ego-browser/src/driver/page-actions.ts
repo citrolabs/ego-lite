@@ -258,6 +258,9 @@ export async function clickInPage(
   // `force` only skips actionability checks; the press itself is the same, so
   // it would still open a native select menu.
   const nativeSelect = button === "left";
+  // When the press lands on an iframe, the native select check descends into
+  // it; frames in other processes are inspected in their own sessions.
+  const frameSessions: FrameSessionsLoader = async () => iframeSessions;
   const target = await resolveElementObjectId(
     cdpAdapter(services),
     sessionId,
@@ -328,7 +331,12 @@ export async function clickInPage(
         target.sessionId,
         target.objectId,
         point.local,
-        { hitTest: !options.force, nativeSelect },
+        {
+          hitTest: !options.force,
+          nativeSelect,
+          viewportPoint: { x: point.x, y: point.y },
+          frameSessions,
+        },
       );
       await dispatchMouseEvent(services, target.sessionId, {
         type: "mouseMoved",
@@ -356,7 +364,12 @@ export async function clickInPage(
           target.sessionId,
           target.objectId,
           point.local,
-          { hitTest: !options.force && !target.frameId, nativeSelect },
+          {
+            hitTest: !options.force && !target.frameId,
+            nativeSelect,
+            viewportPoint: { x: point.x, y: point.y },
+            frameSessions,
+          },
         );
       }
       await dispatchMouseEvent(services, target.sessionId, {
@@ -1862,13 +1875,25 @@ async function assertClickTargetActionable(
   sessionId: string,
   objectId: string,
   point: { x: number; y: number },
-  options: { hitTest: boolean; nativeSelect?: boolean; actionName?: string },
+  options: {
+    hitTest: boolean;
+    nativeSelect?: boolean;
+    actionName?: string;
+    /**
+     * The press point in the viewport of `sessionId`. Required with
+     * `nativeSelect`: when the press lands on an iframe, the check continues
+     * from this point through the frame's documents.
+     */
+    viewportPoint?: { x: number; y: number };
+    frameSessions?: FrameSessionsLoader;
+  },
 ): Promise<void> {
   const { hitTest, nativeSelect = false, actionName = "page.click" } = options;
   // The native select check looks at the element the press really lands on,
   // which may be a transparent <select> inside the target, a <select> in the
   // shadow root of a custom element inside it or, with `force`, something
-  // other than the target.
+  // other than the target. When that element is an iframe, the press reaches
+  // the frame's document, so the check descends into it below.
   const helpers = nativeSelect
     ? `${HIT_TARGET_HELPERS}${NATIVE_SELECT_FUNCTIONS}`
     : hitTest
@@ -1880,9 +1905,12 @@ async function assertClickTargetActionable(
     if (isActionTargetDisabled(this)) return { error: "element is disabled" };
     ${
       nativeSelect
-        ? `const nativeSelect = nativeSelectMenuAt(deepestHitElement(hitElementAtPoint(this, point), point));
-    if (nativeSelect) return { nativeSelect };`
-        : ""
+        ? `const pressed = deepestHitElement(hitElementAtPoint(this, point), point);
+    const nativeSelect = nativeSelectMenuAt(pressed);
+    if (nativeSelect) return { nativeSelect };
+    const pressedTag = String(pressed?.tagName || "").toUpperCase();
+    const frameHit = pressedTag === "IFRAME" || pressedTag === "FRAME";`
+        : "const frameHit = false;"
     }
     ${
       hitTest
@@ -1892,7 +1920,7 @@ async function assertClickTargetActionable(
     }`
         : ""
     }
-    return { ok: true };
+    return { ok: true, frameHit };
   }`;
   const response = await services.cdp(
     "Runtime.callFunctionOn",
@@ -1920,6 +1948,23 @@ async function assertClickTargetActionable(
     throw nativeSelectUncheckedError(
       actionName,
       "the page-side hit test returned no result",
+    );
+  }
+  if (nativeSelect && result.frameHit === true) {
+    // The hit test of the target's document stops at the iframe element; the
+    // press itself reaches whatever the frame's document has at that point.
+    if (!options.viewportPoint) {
+      throw nativeSelectUncheckedError(
+        actionName,
+        "the press lands on an iframe",
+      );
+    }
+    await assertNoNativeSelectAtViewportPoint(
+      services,
+      sessionId,
+      options.viewportPoint,
+      actionName,
+      options.frameSessions,
     );
   }
 }

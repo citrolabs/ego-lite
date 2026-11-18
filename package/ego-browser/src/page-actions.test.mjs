@@ -42,6 +42,13 @@ function topLevelClickServices({
   return services;
 }
 
+/**
+ * The page-side native select check inspects the element the press lands on
+ * (below shadow hosts), not the target itself.
+ */
+const PRESSED_SELECT_CHECK =
+  /const pressed = deepestHitElement\(hitElementAtPoint\(this, point\), point\);\s+const nativeSelect = nativeSelectMenuAt\(pressed\);/;
+
 function actionSequence(calls) {
   return calls
     .filter(([method]) => method !== "Runtime.evaluate")
@@ -165,7 +172,7 @@ test("Page click force skips the hit test but still rejects a disabled element",
   }
   assert.match(
     checks.at(-1),
-    /nativeSelectMenuAt\(deepestHitElement\(hitElementAtPoint\(this, point\), point\)\)/,
+    PRESSED_SELECT_CHECK,
     "force does not change the press, so the native select check still runs",
   );
   assert.equal(
@@ -423,9 +430,7 @@ test("Page click keeps raw-selector OOPIF input local but renders its cursor in 
   const selectCheck = calls.findIndex(
     ([method, params]) =>
       method === "Runtime.callFunctionOn" &&
-      params.functionDeclaration.includes(
-        "nativeSelectMenuAt(deepestHitElement(hitElementAtPoint",
-      ),
+      PRESSED_SELECT_CHECK.test(params.functionDeclaration),
   );
   assert(
     selectCheck >= 0 && selectCheck < pressIndex,
@@ -575,7 +580,7 @@ test("Page click refuses a left press that would open a native select menu", asy
   assert.equal(pressCount(services.calls), 0);
   assert.match(
     pageCalls(services.calls).at(-1),
-    /nativeSelectMenuAt\(deepestHitElement\(hitElementAtPoint\(this, point\), point\)\)/,
+    PRESSED_SELECT_CHECK,
     "the check looks at the element under the press point, below shadow hosts, not the target",
   );
 });
@@ -593,6 +598,92 @@ test("Page click with force is refused on a native select as well", async () => 
     assertNativeSelectRefusal("page.click", "select#dropdown"),
   );
   assert.equal(pressCount(services.calls), 0);
+});
+
+/**
+ * A selector click whose press lands on an iframe element: the target's own
+ * hit test stops at the iframe, so the check continues from the press point
+ * through the frame. The frame is out of process here and has its own session
+ * in the Page's frame map; `inFrame` answers the hit test inside it.
+ */
+function iframeHitClickServices(inFrame) {
+  const calls = [];
+  return {
+    calls,
+    async cdp(method, params = {}, sessionId) {
+      calls.push([method, params, sessionId]);
+      if (method === "Runtime.evaluate") {
+        if (params.expression?.includes("contentDocument")) {
+          return sessionId === "session:page"
+            ? { result: { type: "object", objectId: "iframe-1" } }
+            : inFrame;
+        }
+        if (sessionId !== "session:page") return { result: { value: 0 } };
+        return params.returnByValue === false
+          ? { result: { objectId: "wrapper-1" } }
+          : { result: { value: 1 } };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        const value = params.functionDeclaration.includes("setTimeout(finish")
+          ? { x: 140, y: 250 }
+          : { ok: true, frameHit: true };
+        return { result: { value } };
+      }
+      if (method === "DOM.describeNode") {
+        return { node: { nodeName: "IFRAME", frameId: "frame-1" } };
+      }
+      if (method === "DOM.getBoxModel") return { model: frameBox() };
+      return {};
+    },
+    async showAgentMousePosition() {},
+    async showAgentTaskState() {},
+    async sleep() {},
+  };
+}
+
+test("Page click checks the frame document when the press lands on an iframe", async () => {
+  const frames = () => new Map([["frame-1", "session:frame"]]);
+  const blocked = iframeHitClickServices(selectVerdict(DROPDOWN));
+
+  await assert.rejects(
+    () =>
+      clickInPage(
+        blocked,
+        "session:page",
+        new RefMap(),
+        "#wrapper",
+        {},
+        0,
+        frames(),
+      ),
+    assertNativeSelectRefusal("page.click", "select#dropdown"),
+  );
+  assert.equal(pressCount(blocked.calls), 0, "no press reaches the frame");
+  assert.match(
+    pageCalls(blocked.calls).at(-1),
+    /frameHit = pressedTag === "IFRAME" \|\| pressedTag === "FRAME"/,
+  );
+  const [, params] = blocked.calls.find(
+    ([method, , sessionId]) =>
+      method === "Runtime.evaluate" && sessionId === "session:frame",
+  );
+  assert.match(
+    params.expression,
+    /let x = 40;\s+let y = 50;/,
+    "the press point is translated into the frame's viewport",
+  );
+
+  const clear = iframeHitClickServices(selectVerdict(null));
+  await clickInPage(
+    clear,
+    "session:page",
+    new RefMap(),
+    "#wrapper",
+    { force: true },
+    0,
+    frames(),
+  );
+  assert.equal(pressCount(clear.calls), 1);
 });
 
 test("Page right click and middle click skip the native select check", async () => {

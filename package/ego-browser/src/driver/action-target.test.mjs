@@ -215,13 +215,21 @@ test("native select detection finds drop-down selects and names a unique locator
     ${NATIVE_SELECT_FUNCTIONS}
     return { nativeSelectMenuAt };
   `)();
-  const matches = new Map();
-  const root = {
-    nodeType: 9,
+  // A tiny tree scope: `elements` answer selectors by id or name; `hosts`
+  // carry open shadow roots, which are tree scopes of their own.
+  const scope = (elements = [], hosts = []) => ({
+    elements,
     querySelectorAll(selector) {
-      return { length: matches.get(selector) ?? 0 };
+      if (selector === "*") return hosts;
+      return elements.filter((element) =>
+        selector === `select#${element.id}` ||
+        selector === `select[name=${JSON.stringify(element.name)}]`,
+      );
     },
-  };
+  });
+  const topView = {};
+  topView.top = topView;
+  const doc = { ...scope(), defaultView: topView };
   const select = ({
     id = "",
     name = null,
@@ -229,20 +237,26 @@ test("native select detection finds drop-down selects and names a unique locator
     size = 0,
     disabled = false,
     labels = ["Alpha", "Beta"],
-  } = {}) => ({
-    tagName: "SELECT",
-    parentElement: null,
-    id,
-    multiple,
-    size,
-    disabled,
-    options: labels.map((label) => ({ label })),
-    getAttribute: (attribute) => (attribute === "name" ? name : null),
-    getRootNode: () => root,
-    matches: () => disabled,
-  });
+    ownerDocument = doc,
+    inDocument = true,
+  } = {}) => {
+    const element = {
+      tagName: "SELECT",
+      parentElement: null,
+      id,
+      name,
+      multiple,
+      size,
+      disabled,
+      options: labels.map((label) => ({ label })),
+      ownerDocument,
+      getAttribute: (attribute) => (attribute === "name" ? name : null),
+      matches: () => disabled,
+    };
+    if (inDocument) ownerDocument.elements.push(element);
+    return element;
+  };
 
-  matches.set("select#dropdown", 1);
   const dropdown = select({ id: "dropdown" });
   const option = { tagName: "OPTION", parentElement: dropdown };
   assert.deepEqual(nativeSelectMenuAt(option), {
@@ -251,17 +265,54 @@ test("native select detection finds drop-down selects and names a unique locator
     optionCount: 2,
   });
 
-  matches.set('select[name="month"]', 1);
   assert.equal(
     nativeSelectMenuAt(select({ name: "month" })).locator,
     'select[name="month"]',
   );
 
-  matches.set('select[name="shared"]', 4);
+  select({ name: "shared" });
   assert.equal(
     nativeSelectMenuAt(select({ name: "shared" })).locator,
     null,
     "an ambiguous selector is not offered",
+  );
+
+  // Page CSS selectors also match inside open shadow roots, so a duplicate id
+  // in another tree scope makes the locator ambiguous too.
+  const shadow = scope();
+  doc.querySelectorAll = ((query) => (selector) =>
+    selector === "*" ? [{ shadowRoot: shadow }] : query(selector))(
+    doc.querySelectorAll,
+  );
+  select({ id: "twin" });
+  shadow.elements.push({ id: "twin", name: null });
+  assert.equal(
+    nativeSelectMenuAt(select({ id: "twin", inDocument: false })).locator,
+    null,
+    "a selector that matches another element is not offered",
+  );
+  assert.equal(
+    nativeSelectMenuAt(select({ id: "twin" })).locator,
+    null,
+    "a selector matched in several tree scopes is not offered",
+  );
+
+  // A select inside an iframe: its id may name a control of the top document
+  // for page.selectOption(), so no locator is suggested at all.
+  const frameView = { top: topView };
+  const frameDoc = { ...scope(), defaultView: frameView };
+  const framed = select({ id: "framed", ownerDocument: frameDoc });
+  assert.equal(nativeSelectMenuAt(framed).locator, null);
+  assert.equal(nativeSelectMenuAt(framed).optionCount, 2);
+  const crossOrigin = {
+    get top() {
+      throw new Error("SecurityError");
+    },
+  };
+  const crossDoc = { ...scope(), defaultView: crossOrigin };
+  assert.equal(
+    nativeSelectMenuAt(select({ id: "x", ownerDocument: crossDoc })).locator,
+    null,
   );
 
   const many = select({

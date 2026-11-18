@@ -375,16 +375,39 @@ export const NATIVE_SELECT_FUNCTIONS = `
     }
     if (!select || select.multiple || Number(select.size) > 1) return null;
     if (select.disabled || select.matches?.(":disabled")) return null;
-    const root = select.getRootNode ? select.getRootNode() : null;
     const escape = (value) =>
       typeof CSS !== "undefined" && CSS.escape ? CSS.escape(value) : value;
     const candidates = [];
     if (select.id) candidates.push("select#" + escape(select.id));
     const name = select.getAttribute?.("name");
     if (name) candidates.push("select[name=" + JSON.stringify(name) + "]");
-    const locator = candidates.find((candidate) => {
+    // A suggested locator must mean this select to page.selectOption(), whose
+    // CSS selectors query the top-level document and every open shadow root in
+    // it. A select inside an iframe gets no locator (its id or name may also
+    // match a control of the top document), and a candidate counts only when it
+    // matches exactly one element across all of those tree scopes.
+    const doc = select.ownerDocument;
+    const view = doc?.defaultView;
+    let topLevel = false;
+    try {
+      topLevel = Boolean(view) && view === view.top;
+    } catch {}
+    const matchesInPage = (selector) => {
+      const matches = [];
+      const roots = [doc];
+      while (roots.length) {
+        const root = roots.pop();
+        matches.push(...root.querySelectorAll(selector));
+        for (const element of root.querySelectorAll("*")) {
+          if (element.shadowRoot) roots.push(element.shadowRoot);
+        }
+      }
+      return matches;
+    };
+    const locator = !topLevel ? null : candidates.find((candidate) => {
       try {
-        return root?.querySelectorAll?.(candidate).length === 1;
+        const matches = matchesInPage(candidate);
+        return matches.length === 1 && matches[0] === select;
       } catch {
         return false;
       }
