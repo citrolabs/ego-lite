@@ -635,6 +635,7 @@ function runFallbackInFakePage(
         button: init.button ?? 0,
         buttons: init.buttons ?? 0,
         detail: init.detail ?? 0,
+        relatedTarget: init.relatedTarget ?? null,
       });
     }
   }
@@ -665,6 +666,7 @@ function runFallbackInFakePage(
       type: event.type,
       kind: event instanceof FakePointerEvent ? "pointer" : "mouse",
       bubbles: event.bubbles,
+      related: event.relatedTarget?.name ?? null,
       button: event.button,
       buttons: event.buttons,
       detail: event.detail,
@@ -678,11 +680,15 @@ function runFallbackInFakePage(
   for (const type of [
     "pointerover",
     "pointerenter",
+    "pointerout",
+    "pointerleave",
     "pointermove",
     "pointerdown",
     "pointerup",
     "mouseover",
     "mouseenter",
+    "mouseout",
+    "mouseleave",
     "mousemove",
     "mousedown",
     "mouseup",
@@ -1013,6 +1019,13 @@ test("drag fallback routes events to the element that captured the pointer", asy
     ["pointerup", "thumb", 50],
     ["mouseup", "thumb", 50],
     ["lostpointercapture", "thumb", 50],
+    // Capture ended away from the thumb, so the hover moves to the body.
+    ["pointerout", "thumb", 50],
+    ["pointerleave", "thumb", 50],
+    ["pointerover", "body", 50],
+    ["mouseout", "thumb", 50],
+    ["mouseleave", "thumb", 50],
+    ["mouseover", "body", 50],
   ]);
 });
 
@@ -1046,6 +1059,12 @@ test("drag fallback stops routing to an element once it releases capture", async
     ["pointermove", "thumb"],
     ["mousemove", "thumb"],
     ["lostpointercapture", "thumb"],
+    ["pointerout", "thumb"],
+    ["pointerleave", "thumb"],
+    ["pointerover", "body"],
+    ["mouseout", "thumb"],
+    ["mouseleave", "thumb"],
+    ["mouseover", "body"],
     ["pointermove", "body"],
     ["mousemove", "body"],
     ["pointerup", "body"],
@@ -1085,6 +1104,10 @@ test("drag fallback resumes hit-testing when the capturing element is removed", 
     ["pointermove", "thumb"],
     ["mousemove", "thumb"],
     ["lostpointercapture", "document"],
+    // The detached thumb gets no out or leave events, and the body, which
+    // the pointer never left, is not entered again.
+    ["pointerover", "body"],
+    ["mouseover", "body"],
     ["pointermove", "body"],
     ["mousemove", "body"],
     ["pointerup", "body"],
@@ -1124,6 +1147,69 @@ test("drag fallback ignores a capture request from an element removed before the
       ["mouseup", "body"],
     ],
   );
+});
+
+test("drag fallback leaves the source element when the pointer moves to another one", async () => {
+  // A tooltip that opens on mouseenter must close on mouseleave once the
+  // drag moves from the source's icon to a separate drop target.
+  let tooltipOpen = false;
+  const page = await dragFallbackInFakePage(
+    [
+      [10, 20],
+      [50, 60],
+    ],
+    {
+      build(createElement) {
+        const root = createElement("root");
+        const source = createElement("source", root);
+        const icon = createElement("icon", source);
+        const dropTarget = createElement("drop", root);
+        return {
+          target: icon,
+          elementAt: (x) => (x < 20 ? icon : dropTarget),
+        };
+      },
+      listeners: {
+        source: {
+          mouseenter() {
+            tooltipOpen = true;
+          },
+          mouseleave() {
+            tooltipOpen = false;
+          },
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(page.value, { seen: false, fallback: true });
+  assert.equal(tooltipOpen, false);
+  const boundary = page.events
+    .filter((event) => /over|enter|out|leave/.test(event.type))
+    .map((event) => [event.type, event.on, event.related, event.bubbles]);
+  assert.deepEqual(boundary, [
+    ["pointerover", "icon", null, true],
+    ["pointerenter", "root", null, false],
+    ["pointerenter", "source", null, false],
+    ["pointerenter", "icon", null, false],
+    ["mouseover", "icon", null, true],
+    ["mouseenter", "root", null, false],
+    ["mouseenter", "source", null, false],
+    ["mouseenter", "icon", null, false],
+    ["pointerout", "icon", "drop", true],
+    ["pointerleave", "icon", "drop", false],
+    ["pointerleave", "source", "drop", false],
+    ["pointerover", "drop", "icon", true],
+    ["pointerenter", "drop", "icon", false],
+    ["mouseout", "icon", "drop", true],
+    ["mouseleave", "icon", "drop", false],
+    ["mouseleave", "source", "drop", false],
+    ["mouseover", "drop", "icon", true],
+    ["mouseenter", "drop", "icon", false],
+  ]);
+  // The boundary events come before the move that crosses the boundary.
+  const types = page.events.map((event) => event.type);
+  assert.ok(types.lastIndexOf("mouseenter") < types.indexOf("pointermove"));
 });
 
 test("drag fallback without capture hit-tests each point", async () => {

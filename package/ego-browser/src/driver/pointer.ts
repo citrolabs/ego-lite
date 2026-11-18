@@ -88,10 +88,13 @@ type ClickTarget = Point & { probeId: string | null };
  * mousedown, mousemove, and mouseup until the button is released; `click`
  * still fires.
  *
- * `pointerenter` and `mouseenter` do not bubble, so they are dispatched on
- * every entered element from the outermost ancestor down to the target, as
- * Chrome does, so an enter listener on a trigger still fires when the point
- * hits a child icon or label.
+ * The sequence tracks the element under the pointer. When it changes, the old
+ * element gets `pointerout` and the new one `pointerover`, and the
+ * non-bubbling leave and enter events go to every element the pointer left
+ * (innermost first) or entered (outermost first), pointer events before the
+ * mouse ones, as Chrome does. So an enter listener on a trigger still fires
+ * when the point hits a child icon, and hover state opened on enter is
+ * cleared when a drag moves away.
  *
  * Synthetic events cannot establish native pointer capture: Chrome ignores
  * `setPointerCapture()` for a pointer whose buttons it never saw pressed. The
@@ -100,16 +103,21 @@ type ClickTarget = Point & { probeId: string | null };
  * compatibility mouse events to the capturing element, and fires
  * `gotpointercapture` / `lostpointercapture` around them, so a slider that
  * captures on `pointerdown` keeps receiving moves and the release after the
- * path leaves it. A capturing element that leaves the document loses capture,
- * and events go back to hit-testing.
+ * path leaves it. While captured, the capturing element counts as the one
+ * under the pointer; when capture ends, the hover moves to the hit element.
+ * A capturing element that leaves the document loses capture, and events go
+ * back to hit-testing.
  */
 const SYNTHETIC_POINTER_JS = `
   const SYNTHETIC_POINTER_ID = 1;
   let syntheticMouseSuppressed = false;
   let syntheticCaptureTarget = null;
   let syntheticPendingCapture = null;
+  let syntheticHovered = null;
+  let syntheticHoveredChain = [];
+  const NON_BUBBLING = ["pointerenter", "pointerleave", "mouseenter", "mouseleave"];
   const syntheticEvent = (Ctor, type, init, extra) => {
-    const bubbles = type !== "pointerenter" && type !== "mouseenter";
+    const bubbles = !NON_BUBBLING.includes(type);
     return new Ctor(type, {
       ...init,
       bubbles,
@@ -119,9 +127,10 @@ const SYNTHETIC_POINTER_JS = `
       ...extra,
     });
   };
-  const firePointer = (target, type, init) => {
+  const firePointer = (target, type, init, relatedTarget = null) => {
     const Pointer = typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
     return target.dispatchEvent(syntheticEvent(Pointer, type, init, {
+      relatedTarget,
       // Pointer events without a button change report button -1.
       button: type === "pointerdown" || type === "pointerup" ? init.button : -1,
       detail: 0,
@@ -133,8 +142,8 @@ const SYNTHETIC_POINTER_JS = `
       pressure: init.buttons ? 0.5 : 0,
     }));
   };
-  const fireMouse = (target, type, init, detail = 0) =>
-    target.dispatchEvent(syntheticEvent(MouseEvent, type, init, { detail }));
+  const fireMouse = (target, type, init, detail = 0, relatedTarget = null) =>
+    target.dispatchEvent(syntheticEvent(MouseEvent, type, init, { detail, relatedTarget }));
   // Elements entered when the pointer arrives at target, outermost first,
   // crossing shadow roots to their hosts.
   const enteredChain = (target) => {
@@ -147,12 +156,36 @@ const SYNTHETIC_POINTER_JS = `
     }
     return chain.reverse();
   };
+  // Moves the hover to target: out and leave events on what the pointer
+  // left, then over and enter events on what it entered. The chain entered
+  // last is kept, so an element that has left the document gets no out or
+  // leave events while its still-connected ancestors are not re-entered.
   const syntheticPointerEnter = (target, init) => {
-    const chain = enteredChain(target);
-    firePointer(target, "pointerover", init);
-    for (const node of chain) firePointer(node, "pointerenter", init);
-    fireMouse(target, "mouseover", init);
-    for (const node of chain) fireMouse(node, "mouseenter", init);
+    if (target === syntheticHovered) return;
+    const connected = (node) => node.isConnected !== false;
+    const previous = syntheticHovered && connected(syntheticHovered) ? syntheticHovered : null;
+    const fromChain = syntheticHoveredChain;
+    const toChain = enteredChain(target);
+    syntheticHovered = target;
+    syntheticHoveredChain = toChain;
+    let shared = 0;
+    while (
+      shared < fromChain.length &&
+      shared < toChain.length &&
+      fromChain[shared] === toChain[shared]
+    ) {
+      shared += 1;
+    }
+    const left = fromChain.slice(shared).reverse().filter(connected);
+    const entered = toChain.slice(shared);
+    const boundary = (fire, prefix) => {
+      if (previous) fire(previous, prefix + "out", target);
+      for (const node of left) fire(node, prefix + "leave", target);
+      fire(target, prefix + "over", previous);
+      for (const node of entered) fire(node, prefix + "enter", previous);
+    };
+    boundary((node, type, related) => firePointer(node, type, init, related), "pointer");
+    boundary((node, type, related) => fireMouse(node, type, init, 0, related), "mouse");
   };
   // Applies a capture change requested by the previous handler before the
   // next pointer event, as Chrome processes pending capture.
@@ -179,22 +212,26 @@ const SYNTHETIC_POINTER_JS = `
   };
   const syntheticPointerMove = (target, init) => {
     const routed = syntheticCaptureTargetFor(target, init);
+    syntheticPointerEnter(routed, init);
     firePointer(routed, "pointermove", init);
     if (!syntheticMouseSuppressed) fireMouse(routed, "mousemove", init);
   };
   const syntheticPointerDown = (target, init, detail) => {
     const routed = syntheticCaptureTargetFor(target, init);
+    syntheticPointerEnter(routed, init);
     if (!firePointer(routed, "pointerdown", init)) syntheticMouseSuppressed = true;
     if (!syntheticMouseSuppressed) fireMouse(routed, "mousedown", init, detail);
   };
   const syntheticPointerUp = (target, init, detail) => {
     const routed = syntheticCaptureTargetFor(target, init);
+    syntheticPointerEnter(routed, init);
     firePointer(routed, "pointerup", init);
     if (!syntheticMouseSuppressed) fireMouse(routed, "mouseup", init, detail);
     syntheticMouseSuppressed = false;
-    // Releasing the button implicitly releases capture.
+    // Releasing the button implicitly releases capture, and the hover then
+    // moves from the capturing element to the one under the pointer.
     syntheticPendingCapture = null;
-    syntheticCaptureTargetFor(target, init);
+    syntheticPointerEnter(syntheticCaptureTargetFor(target, init), init);
   };
   // Runs a synthetic sequence with the pointer-capture methods answering for
   // the synthetic pointer id, then restores the page's own methods.
