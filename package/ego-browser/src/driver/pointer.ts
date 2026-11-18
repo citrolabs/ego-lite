@@ -298,9 +298,19 @@ const SYNTHETIC_POINTER_JS = `
     syntheticPointerEnter(syntheticCaptureTargetFor(target, init), init);
     return { target: routed, captured };
   };
+  // The element under the point now. A pointerdown handler can replace the
+  // pressed element (an icon swapped inside its button), so the release
+  // hit-tests again instead of reusing a node that may have left the page.
+  const syntheticHitTarget = (init, fallback) => {
+    const hit = typeof document.elementFromPoint === "function"
+      ? document.elementFromPoint(init.clientX, init.clientY)
+      : null;
+    return hit || fallback;
+  };
   // Chrome's click target: the capturing element when the pointer was
   // captured at release, otherwise the nearest common ancestor of the press
-  // and release targets.
+  // and release targets. A press target that left the document shares no
+  // ancestor with the release, so the click goes to the release target.
   const syntheticClickTarget = (down, up) => {
     if (up.captured) return up.target;
     const pressedChain = enteredChain(down);
@@ -632,7 +642,9 @@ function newProbeId(kind: string) {
  * whether a trusted click reached it. It also records how much of the native
  * press arrived before the click (a trusted `pointerdown` on the target, then
  * the compatibility `mousedown` and the release), so the fallback resumes
- * only the missing events instead of pressing a second time. The listeners
+ * only the missing events instead of pressing a second time. It also records
+ * the element a native press handler captured the pointer to, so the resumed
+ * release goes to that element and the native capture is released. The listeners
  * remove themselves on the first matching click, and the whole probe removes
  * itself after CLICK_PROBE_TTL_MS so an acknowledged click never has to read
  * it back.
@@ -645,6 +657,8 @@ function clickProbeInstallJs(id: string, pointExpression: string) {
       seen: false,
       target: document.elementFromPoint(probePoint.x, probePoint.y),
       pressTarget: null,
+      pointerId: null,
+      captureTarget: null,
       mouseDown: false,
       released: false,
     };
@@ -652,7 +666,20 @@ function clickProbeInstallJs(id: string, pointExpression: string) {
       probe.target && (event.target === probe.target || probe.target.contains(event.target));
     const pressListeners = {
       pointerdown: (event) => {
-        if (event.isTrusted && !probe.pressTarget && onTarget(event)) probe.pressTarget = event.target;
+        if (event.isTrusted && !probe.pressTarget && onTarget(event)) {
+          probe.pressTarget = event.target;
+          probe.pointerId = event.pointerId;
+        }
+      },
+      // Native capture the press handlers took, so a resumed release can go
+      // to the capturing element.
+      gotpointercapture: (event) => {
+        if (event.isTrusted && probe.pressTarget && event.pointerId === probe.pointerId) {
+          probe.captureTarget = event.target;
+        }
+      },
+      lostpointercapture: (event) => {
+        if (event.isTrusted && event.target === probe.captureTarget) probe.captureTarget = null;
       },
       mousedown: (event) => {
         if (event.isTrusted && probe.pressTarget) probe.mouseDown = true;
@@ -745,6 +772,37 @@ async function finishClickProbe(
         };
         const pressed = { ...init, buttons: 1 };
         const nativeDown = probe.pressTarget;
+        // Capture a native pointerdown handler took (or still has pending,
+        // which hasPointerCapture reports before gotpointercapture fires).
+        const nativeCaptureTarget = () => {
+          if (!nativeDown || probe.pointerId === null || probe.pointerId === undefined) return null;
+          const held = (element) => {
+            try {
+              return element.isConnected !== false &&
+                typeof element.hasPointerCapture === "function" &&
+                element.hasPointerCapture(probe.pointerId);
+            } catch {
+              return false;
+            }
+          };
+          if (probe.captureTarget && held(probe.captureTarget)) return probe.captureTarget;
+          if (typeof document.querySelectorAll !== "function") return null;
+          for (const element of document.querySelectorAll("*")) {
+            if (held(element)) return element;
+          }
+          return null;
+        };
+        // A capture the native press took carries over to the synthetic
+        // release: it goes to the capturing element, which then gets
+        // lostpointercapture. The native capture is released first, while
+        // the page's own capture methods are still in place, so it does not
+        // outlive the click.
+        const nativeCapture = nativeCaptureTarget();
+        if (nativeCapture) {
+          try {
+            nativeCapture.releasePointerCapture(probe.pointerId);
+          } catch {}
+        }
         const clickTarget = withSyntheticCapture(() => {
           if (nativeDown) {
             // The native press arrived (a slow handler held up its click), so
@@ -754,13 +812,19 @@ async function finishClickProbe(
             syntheticHover.element = nativeDown;
             syntheticHover.chain = enteredChain(nativeDown);
             syntheticMouseSuppressed = !probe.mouseDown;
-            const up = syntheticPointerUp(target, init, clickCount);
+            if (nativeCapture) {
+              // gotpointercapture already fired natively when it was observed;
+              // otherwise the synthetic release fires it before pointerup.
+              syntheticCaptureTarget = probe.captureTarget === nativeCapture ? nativeCapture : null;
+              syntheticPendingCapture = nativeCapture;
+            }
+            const up = syntheticPointerUp(syntheticHitTarget(init, target), init, clickCount);
             return syntheticClickTarget(nativeDown, up);
           }
           syntheticPointerEnter(target, init);
           syntheticPointerMove(target, init);
           const down = syntheticPointerDown(target, pressed, clickCount);
-          const up = syntheticPointerUp(target, init, clickCount);
+          const up = syntheticPointerUp(syntheticHitTarget(init, target), init, clickCount);
           return syntheticClickTarget(down, up);
         });
         fireMouse(clickTarget, "click", init, clickCount);

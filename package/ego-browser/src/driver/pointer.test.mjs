@@ -724,6 +724,7 @@ function createFakePage({ cancel = [], build, listeners = {} } = {}) {
     name: "document",
     nodeType: 9,
     elementFromPoint: (x, y) => elementAt(x, y),
+    querySelectorAll: () => elements.filter((element) => element.isConnected),
     body: target,
     removeEventListener() {},
   });
@@ -1331,6 +1332,113 @@ test("click fallback keeps mouseup out after a canceled native pointerdown", asy
   );
 });
 
+/**
+ * Gives `other` a native capture of pointer 1, as a native pointerdown
+ * handler would take it; releasing it is recorded in `released`.
+ */
+function nativeCaptureOnOther(elements, released) {
+  let held = true;
+  elements.other.hasPointerCapture = (id) => held && id === 1;
+  elements.other.releasePointerCapture = (id) => {
+    released.push(id);
+    held = false;
+  };
+}
+
+for (const [name, observed, expected] of [
+  [
+    "after gotpointercapture fired",
+    true,
+    [
+      ["pointerup", "other"],
+      ["mouseup", "other"],
+      ["lostpointercapture", "other"],
+      ["click", "other"],
+    ],
+  ],
+  [
+    "while the capture is still pending",
+    false,
+    [
+      ["gotpointercapture", "other"],
+      ["pointerup", "other"],
+      ["mouseup", "other"],
+      ["lostpointercapture", "other"],
+      ["click", "other"],
+    ],
+  ],
+]) {
+  test(`click fallback releases to the element a native press captured ${name}`, async () => {
+    // The native pointerdown handler captured the pointer to `other` before
+    // the dispatch timed out. Chrome would send the release and the click to
+    // the capturing element; the native capture must not outlive the click.
+    const released = [];
+    const { restore, page } = clickFallbackInFakePage({
+      build: triggerAndOtherPage,
+      probeState: (elements) => {
+        nativeCaptureOnOther(elements, released);
+        return {
+          pressTarget: elements.trigger,
+          pointerId: 1,
+          captureTarget: observed ? elements.other : null,
+          mouseDown: true,
+        };
+      },
+    });
+    try {
+      await withFakeEgo(() => click("#target"));
+    } finally {
+      restore();
+    }
+
+    const routed = page()
+      .events.filter((event) => /up|click|capture/.test(event.type))
+      .map((event) => [event.type, event.on]);
+    assert.deepEqual(routed, expected);
+    assert.deepEqual(released, [1], "the native capture was released");
+  });
+}
+
+test("click fallback hit-tests the release after pointerdown replaces the pressed element", async () => {
+  // A pointerdown handler swaps the pressed icon for a new one. The release
+  // and the click go to the element now under the point, not the removed one.
+  const { restore, page } = clickFallbackInFakePage({
+    build(createElement) {
+      const body = createElement("body");
+      const icon = createElement("icon", body);
+      const replacement = createElement("replacement", body);
+      return {
+        target: icon,
+        elementAt: () => (icon.isConnected ? icon : replacement),
+      };
+    },
+    listeners: {
+      icon: {
+        pointerdown(event, icon) {
+          icon.isConnected = false;
+          icon.parentNode = null;
+        },
+      },
+    },
+  });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  const routed = page()
+    .events.filter((event) => /down|up|click/.test(event.type))
+    .map((event) => [event.type, event.on]);
+  assert.deepEqual(routed, [
+    ["pointerdown", "icon"],
+    ["mousedown", "icon"],
+    ["pointerup", "replacement"],
+    ["mouseup", "replacement"],
+    ["click", "replacement"],
+  ]);
+});
+
 test("click fallback sends nothing once the native release was delivered", async () => {
   // The whole native click went out and landed outside the probed target.
   const { restore, page } = clickFallbackInFakePage({
@@ -1401,9 +1509,9 @@ test("the click probe records the native press so the fallback can resume it", a
     clearTimeout: () => {},
   });
   const [probe] = Object.values(window.__egoBrowserInputProbes);
-  const deliver = (type, target, isTrusted = true) => {
+  const deliver = (type, target, isTrusted = true, extra = {}) => {
     for (const listener of listeners[type] || [])
-      listener({ type, target, isTrusted });
+      listener({ type, target, isTrusted, ...extra });
   };
 
   deliver("pointerdown", elsewhere);
@@ -1420,9 +1528,21 @@ test("the click probe records the native press so the fallback can resume it", a
     "a release without a press does not count",
   );
 
-  deliver("pointerdown", inner);
+  deliver("pointerdown", inner, true, { pointerId: 1 });
   assert.equal(probe.pressTarget, inner);
+  assert.equal(probe.pointerId, 1);
   assert.equal(probe.mouseDown, false);
+  deliver("gotpointercapture", elsewhere, true, { pointerId: 2 });
+  deliver("gotpointercapture", elsewhere, false, { pointerId: 1 });
+  assert.equal(
+    probe.captureTarget,
+    null,
+    "untrusted or other-pointer capture does not count",
+  );
+  deliver("gotpointercapture", elsewhere, true, { pointerId: 1 });
+  assert.equal(probe.captureTarget, elsewhere, "the press handler's capture");
+  deliver("lostpointercapture", elsewhere, true, { pointerId: 1 });
+  assert.equal(probe.captureTarget, null, "a released capture is dropped");
   deliver("mousedown", inner);
   assert.equal(probe.mouseDown, true);
   deliver("pointerup", inner);
