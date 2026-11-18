@@ -1243,6 +1243,11 @@ export async function clickPointInPage(
   modifiers = 0,
   baseButtons = 0,
   frameSessions?: FrameSessionsLoader,
+  /**
+   * Called once the pointer has moved to the point, before any press, so the
+   * caller can track the pointer position even when a press is refused.
+   */
+  onMoved?: () => void,
 ): Promise<void> {
   assertPoint(x, y, "page.mouse.click");
   const button = options.button ?? "left";
@@ -1257,6 +1262,7 @@ export async function clickPointInPage(
     buttons: baseButtons,
     modifiers,
   });
+  onMoved?.();
   for (let count = 1; count <= clickCount; count += 1) {
     // Checked after the move and before every press: a hover handler or an
     // earlier click of the sequence can put a select under the point.

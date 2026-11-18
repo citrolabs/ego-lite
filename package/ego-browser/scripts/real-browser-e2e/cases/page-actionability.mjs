@@ -476,10 +476,18 @@ export function pageActionabilityCase() {
     const frameOrigin = { x: 40 + 7 + 5, y: 60 + 7 + 5 };
     const frameDropdown = { x: frameOrigin.x + 30 + 80, y: frameOrigin.y + 100 + 15 };
 
+    // A select inside an iframe gets no locator suggestion (selectOption
+    // queries the top-level document), so the refusal names the generic call
+    // and lists the select's options.
     await assertRejects(
       () => framePage.mouse.click(frameDropdown.x, frameDropdown.y),
-      'page.selectOption("select#frame-dropdown"',
+      'page.mouse.click refused to press the left mouse button on a <select>',
       "mouse.click on a drop-down select inside a cross-site iframe is refused"
+    );
+    await assertRejects(
+      () => framePage.mouse.click(frameDropdown.x, frameDropdown.y),
+      'Options: "Uno", "Dos".',
+      "the cross-site iframe refusal lists the select's options"
     );
     await framePage.mouse.move(frameDropdown.x, frameDropdown.y);
     await assertRejects(

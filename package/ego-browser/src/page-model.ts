@@ -726,11 +726,15 @@ class PageMouse {
         this.#modifierMask(),
         this.#buttons,
         this.#frameSessions,
+        () => {
+          // The pointer is at (x, y) once the move lands, even if the
+          // native-select guard later refuses the press.
+          this.#x = x;
+          this.#y = y;
+          this.#lastButton = "none";
+        },
       ),
     );
-    this.#x = x;
-    this.#y = y;
-    this.#lastButton = "none";
     return receipt;
   }
 
