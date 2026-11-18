@@ -94,7 +94,12 @@ type ClickTarget = Point & { probeId: string | null };
  * (innermost first) or entered (outermost first), pointer events before the
  * mouse ones, as Chrome does. So an enter listener on a trigger still fires
  * when the point hits a child icon, and hover state opened on enter is
- * cleared when a drag moves away.
+ * cleared when a drag moves away. The hovered element and its chain persist on
+ * the page's window between fallback calls, so a later fallback that moves to
+ * another element sends leave events to the one an earlier call entered (a
+ * tooltip opened by `hover()` closes when the next fallback moves away). A
+ * trusted `pointerover` means the real pointer took over the hover, and the
+ * persisted state is dropped.
  *
  * Synthetic events cannot establish native pointer capture: Chrome ignores
  * `setPointerCapture()` for a pointer whose buttons it never saw pressed. The
@@ -106,15 +111,30 @@ type ClickTarget = Point & { probeId: string | null };
  * path leaves it. While captured, the capturing element counts as the one
  * under the pointer; when capture ends, the hover moves to the hit element.
  * A capturing element that leaves the document loses capture, and events go
- * back to hit-testing.
+ * back to hit-testing. As in Chrome, `click` goes to the capturing element when
+ * the pointer was captured at release, and otherwise to the nearest common
+ * ancestor of the press and release targets (`syntheticClickTarget()`).
  */
 const SYNTHETIC_POINTER_JS = `
   const SYNTHETIC_POINTER_ID = 1;
   let syntheticMouseSuppressed = false;
   let syntheticCaptureTarget = null;
   let syntheticPendingCapture = null;
-  let syntheticHovered = null;
-  let syntheticHoveredChain = [];
+  // Hover state shared by every fallback call in this document.
+  const syntheticHover = (() => {
+    const key = "__egoBrowserSyntheticHover";
+    if (window[key]) return window[key];
+    const state = { element: null, chain: [] };
+    Object.defineProperty(window, key, { value: state, configurable: true });
+    if (typeof document.addEventListener === "function") {
+      document.addEventListener("pointerover", (event) => {
+        if (!event.isTrusted) return;
+        state.element = null;
+        state.chain = [];
+      }, true);
+    }
+    return state;
+  })();
   const NON_BUBBLING = ["pointerenter", "pointerleave", "mouseenter", "mouseleave"];
   const syntheticEvent = (Ctor, type, init, extra) => {
     const bubbles = !NON_BUBBLING.includes(type);
@@ -161,13 +181,14 @@ const SYNTHETIC_POINTER_JS = `
   // last is kept, so an element that has left the document gets no out or
   // leave events while its still-connected ancestors are not re-entered.
   const syntheticPointerEnter = (target, init) => {
-    if (target === syntheticHovered) return;
+    if (target === syntheticHover.element) return;
     const connected = (node) => node.isConnected !== false;
-    const previous = syntheticHovered && connected(syntheticHovered) ? syntheticHovered : null;
-    const fromChain = syntheticHoveredChain;
+    const hovered = syntheticHover.element;
+    const previous = hovered && connected(hovered) ? hovered : null;
+    const fromChain = syntheticHover.chain;
     const toChain = enteredChain(target);
-    syntheticHovered = target;
-    syntheticHoveredChain = toChain;
+    syntheticHover.element = target;
+    syntheticHover.chain = toChain;
     let shared = 0;
     while (
       shared < fromChain.length &&
@@ -221,9 +242,12 @@ const SYNTHETIC_POINTER_JS = `
     syntheticPointerEnter(routed, init);
     if (!firePointer(routed, "pointerdown", init)) syntheticMouseSuppressed = true;
     if (!syntheticMouseSuppressed) fireMouse(routed, "mousedown", init, detail);
+    return routed;
   };
+  // Returns where the release went and whether the pointer was captured then.
   const syntheticPointerUp = (target, init, detail) => {
     const routed = syntheticCaptureTargetFor(target, init);
+    const captured = syntheticCaptureTarget !== null;
     syntheticPointerEnter(routed, init);
     firePointer(routed, "pointerup", init);
     if (!syntheticMouseSuppressed) fireMouse(routed, "mouseup", init, detail);
@@ -232,6 +256,16 @@ const SYNTHETIC_POINTER_JS = `
     // moves from the capturing element to the one under the pointer.
     syntheticPendingCapture = null;
     syntheticPointerEnter(syntheticCaptureTargetFor(target, init), init);
+    return { target: routed, captured };
+  };
+  // Chrome's click target: the capturing element when the pointer was
+  // captured at release, otherwise the nearest common ancestor of the press
+  // and release targets.
+  const syntheticClickTarget = (down, up) => {
+    if (up.captured) return up.target;
+    const pressedChain = enteredChain(down);
+    const releasedChain = enteredChain(up.target).reverse();
+    return releasedChain.find((node) => pressedChain.includes(node)) || up.target;
   };
   // Runs a synthetic sequence with the pointer-capture methods answering for
   // the synthetic pointer id, then restores the page's own methods.
@@ -638,14 +672,15 @@ async function finishClickProbe(
           buttons: 0,
         };
         const pressed = { ...init, buttons: 1 };
-        withSyntheticCapture(() => {
+        const clickTarget = withSyntheticCapture(() => {
           syntheticPointerEnter(target, init);
           syntheticPointerMove(target, init);
-          syntheticPointerDown(target, pressed, clickCount);
-          syntheticPointerUp(target, init, clickCount);
+          const down = syntheticPointerDown(target, pressed, clickCount);
+          const up = syntheticPointerUp(target, init, clickCount);
+          return syntheticClickTarget(down, up);
         });
-        fireMouse(target, "click", init, clickCount);
-        if (clickCount > 1) fireMouse(target, "dblclick", init, 2);
+        fireMouse(clickTarget, "click", init, clickCount);
+        if (clickCount > 1) fireMouse(clickTarget, "dblclick", init, 2);
         return { seen: false, fallback: true };
       })()`,
         returnByValue: true,

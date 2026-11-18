@@ -5,6 +5,7 @@ import { profileSelectionCase } from "./profile-selection.mjs";
 import { navigationCase } from "./navigation.mjs";
 import { observationCase } from "./observation.mjs";
 import { pointerCase } from "./pointer.mjs";
+import { pointerFallbackCase } from "./pointer-fallback.mjs";
 import { keyboardCase } from "./keyboard.mjs";
 import { keyboardRegressionCase } from "./keyboard-regression.mjs";
 import { pageKeyboardInterfaceCase } from "./page-keyboard.mjs";
@@ -113,6 +114,10 @@ export const e2eCases = [
   { name: "navigation helpers", body: navigationCase },
   { name: "observation helpers", body: observationCase },
   { name: "pointer and scroll helpers", body: pointerCase },
+  {
+    name: "click fallback opens a pointerdown-driven popover",
+    body: pointerFallbackCase,
+  },
   { name: "keyboard and file helpers", body: keyboardCase },
   { name: "keyboard regression", body: keyboardRegressionCase },
   { name: "wait, fetch, cdp, js, help", body: runtimeCase },
