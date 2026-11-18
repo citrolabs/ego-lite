@@ -98,13 +98,16 @@ type ClickTarget = Point & { probeId: string | null };
  * the page's window between fallback calls, so a later fallback that moves to
  * another element sends leave events to the one an earlier call entered (a
  * tooltip opened by `hover()` closes when the next fallback moves away). A
- * trusted `pointerover` means the real pointer took over the hover, and the
- * persisted state is dropped.
+ * trusted `pointerover` means the real pointer took over the hover: the
+ * elements the synthetic hover entered that the real pointer's own boundary
+ * events will not leave (outside both its previous and new targets) get their
+ * out and leave events, and the persisted state is dropped.
  *
  * Synthetic events cannot establish native pointer capture: Chrome ignores
  * `setPointerCapture()` for a pointer whose buttons it never saw pressed. The
  * sequence therefore runs inside `withSyntheticCapture()`, which records
- * capture requests for the synthetic pointer, routes later pointer and
+ * capture requests for the synthetic pointer made while its buttons are
+ * pressed (as in Chrome, a request with no button down does nothing), routes later pointer and
  * compatibility mouse events to the capturing element, and fires
  * `gotpointercapture` / `lostpointercapture` around them, so a slider that
  * captures on `pointerdown` keeps receiving moves and the release after the
@@ -120,6 +123,8 @@ const SYNTHETIC_POINTER_JS = `
   let syntheticMouseSuppressed = false;
   let syntheticCaptureTarget = null;
   let syntheticPendingCapture = null;
+  // Buttons of the synthetic pointer event being dispatched.
+  let syntheticButtons = 0;
   // Hover state shared by every fallback call in this document.
   const syntheticHover = (() => {
     const key = "__egoBrowserSyntheticHover";
@@ -129,12 +134,44 @@ const SYNTHETIC_POINTER_JS = `
     if (typeof document.addEventListener === "function") {
       document.addEventListener("pointerover", (event) => {
         if (!event.isTrusted) return;
-        state.element = null;
-        state.chain = [];
+        // Runs after the page's scripts finished defining the helpers below.
+        handOverSyntheticHover(state, event);
       }, true);
     }
     return state;
   })();
+  // The real pointer moved from event.relatedTarget to event.target. Its own
+  // boundary events leave only what it had entered, so the elements a
+  // synthetic hover entered beyond those, and that the new target does not
+  // contain, get their out and leave events here before the state is dropped.
+  const handOverSyntheticHover = (state, event) => {
+    const hovered = state.element;
+    const fromChain = state.chain;
+    state.element = null;
+    state.chain = [];
+    if (!hovered) return;
+    const to = event.target || null;
+    const from = event.relatedTarget || null;
+    const kept = new Set([
+      ...(to ? enteredChain(to) : []),
+      ...(from ? enteredChain(from) : []),
+    ]);
+    const connected = (node) => node.isConnected !== false;
+    const left = fromChain.filter((node) => !kept.has(node) && connected(node)).reverse();
+    const init = {
+      clientX: event.clientX,
+      clientY: event.clientY,
+      button: 0,
+      buttons: event.buttons || 0,
+    };
+    const out = left[0] === hovered ? hovered : null;
+    const boundary = (fire, prefix) => {
+      if (out) fire(out, prefix + "out");
+      for (const node of left) fire(node, prefix + "leave");
+    };
+    boundary((node, type) => firePointer(node, type, init, to), "pointer");
+    boundary((node, type) => fireMouse(node, type, init, 0, to), "mouse");
+  };
   const NON_BUBBLING = ["pointerenter", "pointerleave", "mouseenter", "mouseleave"];
   const syntheticEvent = (Ctor, type, init, extra) => {
     const bubbles = !NON_BUBBLING.includes(type);
@@ -149,6 +186,7 @@ const SYNTHETIC_POINTER_JS = `
   };
   const firePointer = (target, type, init, relatedTarget = null) => {
     const Pointer = typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
+    syntheticButtons = init.buttons || 0;
     return target.dispatchEvent(syntheticEvent(Pointer, type, init, {
       relatedTarget,
       // Pointer events without a button change report button -1.
@@ -282,7 +320,7 @@ const SYNTHETIC_POINTER_JS = `
     const patch = {
       setPointerCapture(pointerId) {
         if (pointerId !== SYNTHETIC_POINTER_ID) return forward("setPointerCapture", this, arguments);
-        if (this.isConnected !== false) syntheticPendingCapture = this;
+        if (syntheticButtons !== 0 && this.isConnected !== false) syntheticPendingCapture = this;
       },
       releasePointerCapture(pointerId) {
         if (pointerId !== SYNTHETIC_POINTER_ID) return forward("releasePointerCapture", this, arguments);
@@ -589,24 +627,50 @@ function newProbeId(kind: string) {
 
 /**
  * Page-side click probe: remembers the element under `pointExpression` and
- * whether a trusted click reached it. The listener removes itself on the
- * first matching click, and the whole probe removes itself after
- * CLICK_PROBE_TTL_MS so an acknowledged click never has to read it back.
+ * whether a trusted click reached it. It also records how much of the native
+ * press arrived before the click (a trusted `pointerdown` on the target, then
+ * the compatibility `mousedown` and the release), so the fallback resumes
+ * only the missing events instead of pressing a second time. The listeners
+ * remove themselves on the first matching click, and the whole probe removes
+ * itself after CLICK_PROBE_TTL_MS so an acknowledged click never has to read
+ * it back.
  */
 function clickProbeInstallJs(id: string, pointExpression: string) {
   return `
     const probePoint = ${pointExpression};
     window.__egoBrowserInputProbes ||= {};
-    const probe = { seen: false, target: document.elementFromPoint(probePoint.x, probePoint.y) };
+    const probe = {
+      seen: false,
+      target: document.elementFromPoint(probePoint.x, probePoint.y),
+      pressTarget: null,
+      mouseDown: false,
+      released: false,
+    };
+    const onTarget = (event) =>
+      probe.target && (event.target === probe.target || probe.target.contains(event.target));
+    const pressListeners = {
+      pointerdown: (event) => {
+        if (event.isTrusted && !probe.pressTarget && onTarget(event)) probe.pressTarget = event.target;
+      },
+      mousedown: (event) => {
+        if (event.isTrusted && probe.pressTarget) probe.mouseDown = true;
+      },
+      pointerup: (event) => {
+        if (event.isTrusted && probe.pressTarget) probe.released = true;
+      },
+      mouseup: (event) => {
+        if (event.isTrusted && probe.pressTarget) probe.released = true;
+      },
+    };
     probe.dispose = () => {
       document.removeEventListener("click", probe.handler, true);
+      for (const [type, listener] of Object.entries(pressListeners)) {
+        document.removeEventListener(type, listener, true);
+      }
       clearTimeout(probe.timer);
     };
     probe.handler = (event) => {
-      if (
-        event.isTrusted && probe.target &&
-        (event.target === probe.target || probe.target.contains(event.target))
-      ) {
+      if (event.isTrusted && onTarget(event)) {
         probe.seen = true;
         probe.dispose();
       }
@@ -616,6 +680,9 @@ function clickProbeInstallJs(id: string, pointExpression: string) {
       delete window.__egoBrowserInputProbes[${JSON.stringify(id)}];
     }, ${JSON.stringify(CLICK_PROBE_TTL_MS)});
     document.addEventListener("click", probe.handler, true);
+    for (const [type, listener] of Object.entries(pressListeners)) {
+      document.addEventListener(type, listener, true);
+    }
     window.__egoBrowserInputProbes[${JSON.stringify(id)}] = probe;
   `;
 }
@@ -661,6 +728,9 @@ async function finishClickProbe(
         if (!probe) return { seen: false, fallback: false };
         probe.dispose();
         delete probes[${JSON.stringify(id)}];
+        // A native release already went out with its click; the click just
+        // landed outside the target. Replaying would press a second time.
+        if (probe.released) return { seen: true, fallback: false };
         if (probe.seen || !probe.target) return { seen: probe.seen, fallback: false };
         const target = probe.target;
         ${SYNTHETIC_POINTER_JS}
@@ -672,7 +742,19 @@ async function finishClickProbe(
           buttons: 0,
         };
         const pressed = { ...init, buttons: 1 };
+        const nativeDown = probe.pressTarget;
         const clickTarget = withSyntheticCapture(() => {
+          if (nativeDown) {
+            // The native press arrived (a slow handler held up its click), so
+            // only the release and click are missing. The real pointer is over
+            // the pressed element, and a canceled native pointerdown left
+            // mousedown out, so the compatibility mouseup stays out too.
+            syntheticHover.element = nativeDown;
+            syntheticHover.chain = enteredChain(nativeDown);
+            syntheticMouseSuppressed = !probe.mouseDown;
+            const up = syntheticPointerUp(target, init, clickCount);
+            return syntheticClickTarget(nativeDown, up);
+          }
           syntheticPointerEnter(target, init);
           syntheticPointerMove(target, init);
           const down = syntheticPointerDown(target, pressed, clickCount);
