@@ -21,11 +21,15 @@ jobs:
   review:
     # Skip draft PRs. Skip bot PRs (Dependabot etc.) too: codex-action's
     # write-access check rejects non-write triggers, so the run would fail anyway.
+    # The exception is wuwei-citro[bot], the GitHub App that opens and updates
+    # the team's automated fix PRs: its PRs are reviewed like a person's, and
+    # the Codex step below lets it past the write-access check.
     # Skip fork PRs: GitHub withholds repository secrets from them, so the
     # review cannot run.
     if: >-
       ${{ github.event.pull_request.draft == false
-      && github.event.pull_request.user.type != 'Bot'
+      && (github.event.pull_request.user.type != 'Bot'
+          || github.event.pull_request.user.login == 'wuwei-citro[bot]')
       && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -197,6 +201,8 @@ jobs:
           responses-api-endpoint: ${{ vars.CODEX_RESPONSES_ENDPOINT || 'https://newapi.citrolabs.dev/v1/responses' }}
           model: ${{ vars.CODEX_REVIEW_MODEL || 'openai/gpt-6.1-sol' }}
           effort: medium
+          # Pushes by this bot trigger the review too; see the job's `if` above.
+          allow-bot-users: wuwei-citro
           prompt-file: ${{ runner.temp }}/review-prompt.md
           output-file: ${{ runner.temp }}/review.md
           # The review never needs to write files.

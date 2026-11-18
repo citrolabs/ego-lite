@@ -331,16 +331,6 @@ export async function runRealBrowserE2e() {
     passed = caseResults.every((r) => r.status !== "fail");
     printSummary(caseResults, Date.now() - totalStartedAt);
 
-    // For callers that act on individual cases (tools/linear-autofix). Written
-    // only when every case ran, so its absence means the suite did not finish.
-    if (process.env.EGO_BROWSER_REAL_E2E_RESULTS) {
-      await writeFile(
-        process.env.EGO_BROWSER_REAL_E2E_RESULTS,
-        JSON.stringify({ cases: caseResults }, null, 2),
-        "utf8",
-      );
-    }
-
     if (!passed) {
       process.exitCode = 1;
     } else if (isFullRun) {
