@@ -679,6 +679,7 @@ function createFakePage({ cancel = [], build, listeners = {} } = {}) {
       type: event.type,
       kind: event instanceof FakePointerEvent ? "pointer" : "mouse",
       bubbles: event.bubbles,
+      composed: event.composed,
       related: event.relatedTarget?.name ?? null,
       button: event.button,
       buttons: event.buttons,
@@ -995,6 +996,54 @@ test("click fallback sends enter events to every entered ancestor of a nested ta
     ["mouseenter", "trigger"],
     ["mouseenter", "icon"],
   ]);
+});
+
+test("click fallback keeps enter events inside a shadow root from reaching its host twice", async () => {
+  // A composed event dispatched inside a shadow root also reaches the host,
+  // which already gets its own enter event, so enter and leave events must not
+  // be composed, as in Chrome.
+  const { restore, page } = clickFallbackInFakePage({
+    build(createElement) {
+      const host = createElement("host");
+      const shadowRoot = { nodeType: 11, host, parentNode: null };
+      const inner = createElement("inner", shadowRoot);
+      return { target: inner };
+    },
+  });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  const { events } = page();
+  assert.deepEqual(
+    events
+      .filter((event) => event.on === "host")
+      .map((event) => [event.type, event.composed]),
+    [
+      ["pointerenter", false],
+      ["mouseenter", false],
+    ],
+  );
+  for (const event of events.filter((event) => event.on === "inner")) {
+    assert.equal(event.composed, event.bubbles, event.type);
+  }
+  const composedOf = Object.fromEntries(
+    events
+      .filter((event) => event.on === "inner")
+      .map((event) => [event.type, event.composed]),
+  );
+  assert.deepEqual(
+    [
+      composedOf.pointerenter,
+      composedOf.mouseenter,
+      composedOf.pointerover,
+      composedOf.pointerdown,
+      composedOf.click,
+    ],
+    [false, false, true, true, true],
+  );
 });
 
 /** A body holding a tooltip trigger and another element beside it. */

@@ -174,12 +174,14 @@ const SYNTHETIC_POINTER_JS = `
   };
   const NON_BUBBLING = ["pointerenter", "pointerleave", "mouseenter", "mouseleave"];
   const syntheticEvent = (Ctor, type, init, extra) => {
+    // Enter and leave events are neither bubbling nor composed: each entered
+    // ancestor, shadow hosts included, gets its own dispatch instead.
     const bubbles = !NON_BUBBLING.includes(type);
     return new Ctor(type, {
       ...init,
       bubbles,
       cancelable: bubbles,
-      composed: true,
+      composed: bubbles,
       view: window,
       ...extra,
     });
