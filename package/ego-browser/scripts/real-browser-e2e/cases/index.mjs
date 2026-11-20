@@ -75,6 +75,7 @@ import {
   pagePendingNavigationCase,
   pagePendingNavigationEvaluateScreenshotCase,
   pagePendingNavigationFreshProcessCase,
+  pageRenderBlockedScreenshotCase,
 } from "./page-pending-navigation.mjs";
 import {
   pageDelayedPopupResumeCase,
@@ -255,6 +256,11 @@ export const e2eCases = [
   {
     name: "Page pending navigation: evaluate and screenshot",
     body: pagePendingNavigationEvaluateScreenshotCase,
+    timeoutMs: 60_000,
+  },
+  {
+    name: "Page render-blocked screenshot keeps loading",
+    body: pageRenderBlockedScreenshotCase,
     timeoutMs: 60_000,
   },
   {
