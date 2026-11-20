@@ -637,6 +637,10 @@ const PAGE_UNRESPONSIVE_URL_TIMEOUT_MS = 1_000;
 // Page.stopLoading is answered by the browser process; the frame-tree read
 // afterwards is what shows whether the renderer answers again.
 const PAGE_UNRESPONSIVE_STOP_TIMEOUT_MS = 1_000;
+// A pending main-frame navigation suspends Runtime.evaluate along with every
+// other renderer command, so an answer within this budget shows the document
+// has committed and the timed-out command waits on something else.
+const PAGE_UNRESPONSIVE_PROBE_TIMEOUT_MS = 1_000;
 // The native tab list can lag the CDP target event by a few milliseconds.
 const POPUP_TAB_LIST_RETRIES = 10;
 const POPUP_TAB_LIST_RETRY_MS = 20;
@@ -3519,9 +3523,11 @@ class Page {
 
   /**
    * Replace the runtime's generic "did not answer" error with one that names
-   * this Page and what happened next. The wait that just ran out was this
-   * call's whole budget, so a main-frame navigation that did not commit in it
-   * is stopped here, as goto does at its own timeout: the Page then answers
+   * this Page and what happened next. A renderer that still answers
+   * JavaScript has no pending navigation (a screenshot of a Page that has not
+   * rendered yet, for example), so nothing is stopped. Otherwise the wait that
+   * just ran out was this call's whole budget, so a main-frame navigation that
+   * did not commit in it is stopped here, as goto does at its own timeout: the Page then answers
    * again instead of costing every later call another full wait. Thrown from
    * here so the stack shows the public call instead of a transport timer.
    */
@@ -3545,9 +3551,6 @@ class Page {
     } catch {
       // The URL is a courtesy; the error stands without it.
     }
-    const recovered = error.sessionId
-      ? await this.#stopPendingNavigation(error.sessionId)
-      : "unknown";
     const described = new PageUnresponsiveError(
       error.method,
       error.waitedMs,
@@ -3555,6 +3558,24 @@ class Page {
       error.sessionId,
     );
     const head = `Page ${this.label}${url ? ` (${url})` : ""} did not answer ${error.method} within ${error.waitedMs}ms`;
+    // A renderer that still runs JavaScript has committed its document, so
+    // there is no pending navigation to stop. Page.stopLoading would instead
+    // abort the resources the document is still loading, such as the
+    // render-blocking stylesheet a screenshot is waiting for.
+    const readyState = error.sessionId
+      ? await probeRendererReadyState(this.#services, error.sessionId)
+      : undefined;
+    if (readyState !== undefined) {
+      described.message =
+        `${head}, but it still answers JavaScript (document.readyState is "${readyState}"), so no navigation is pending and nothing was stopped. ` +
+        (error.method === "Page.captureScreenshot"
+          ? "A screenshot waits for the Page to render a frame, and it has not rendered one yet, usually because render-blocking resources such as stylesheets, fonts or synchronous scripts are still loading. Wait with page.waitForLoadState() and retry; page.snapshot() and page.evaluate() work meanwhile."
+          : "Retry the call once the Page has finished loading (page.waitForLoadState()), use page.snapshot() or page.evaluate() meanwhile, or continue on a new Page from task.newPage().");
+      return described;
+    }
+    const recovered = error.sessionId
+      ? await this.#stopPendingNavigation(error.sessionId)
+      : "unknown";
     if (recovered === "hung") {
       described.message = `${head}, and still did not answer after Page.stopLoading, so its renderer is probably hung. Continue on a new Page from task.newPage(), or close this Page and open it again.`;
     } else if (recovered === "unknown") {
@@ -4156,6 +4177,33 @@ async function stopPendingNavigationInSession(
     };
   } catch {
     return "hung";
+  }
+}
+
+/**
+ * Ask the renderer for document.readyState within a short budget. Returns the
+ * state when the renderer answered, or undefined when it did not (a pending
+ * main-frame navigation or a hung renderer) or the answer was unusable.
+ */
+async function probeRendererReadyState(
+  services: PageModelServices,
+  sessionId: string,
+): Promise<string | undefined> {
+  try {
+    const response = await services.cdp(
+      "Runtime.evaluate",
+      {
+        expression: "document.readyState",
+        returnByValue: true,
+        awaitPromise: false,
+      },
+      sessionId,
+      PAGE_UNRESPONSIVE_PROBE_TIMEOUT_MS,
+    );
+    const value = response?.result?.value ?? response?.result?.result?.value;
+    return typeof value === "string" && value.length > 0 ? value : undefined;
+  } catch {
+    return undefined;
   }
 }
 

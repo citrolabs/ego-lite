@@ -8060,8 +8060,10 @@ test("snapshot stops a pending navigation after its wait and says what the Page 
   await withFixture(async (fixture) => {
     const baseCdp = fixture.services.cdp;
     const stops = [];
+    let discoveryFailed = false;
     const task = taskForRound(fixture, "round-a", {
       async ensureFrameSessions() {
+        discoveryFailed = true;
         throw new PageUnresponsiveError(
           "Page.getFrameTree",
           15_000,
@@ -8072,6 +8074,14 @@ test("snapshot stops a pending navigation after its wait and says what the Page 
       async cdp(method, params, sessionId, timeoutMs) {
         if (method === "Target.getTargetInfo") {
           return { targetInfo: { url: "https://example.test/pending" } };
+        }
+        if (
+          method === "Runtime.evaluate" &&
+          discoveryFailed &&
+          stops.length === 0
+        ) {
+          // The pending navigation suspends the renderer probe too.
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
         }
         if (method === "Page.stopLoading") {
           stops.push({ sessionId, timeoutMs });
@@ -8118,8 +8128,10 @@ test("snapshot stops a pending navigation after its wait and says what the Page 
 test("snapshot names a probably hung renderer when stopping does not help", async () => {
   await withFixture(async (fixture) => {
     const baseCdp = fixture.services.cdp;
+    let hung = false;
     const task = taskForRound(fixture, "round-a", {
       async ensureFrameSessions() {
+        hung = true;
         throw new PageUnresponsiveError(
           "Page.getFrameTree",
           15_000,
@@ -8128,7 +8140,10 @@ test("snapshot names a probably hung renderer when stopping does not help", asyn
         );
       },
       async cdp(method, params, sessionId, timeoutMs) {
-        if (method === "Page.stopLoading") {
+        if (
+          method === "Page.stopLoading" ||
+          (hung && method === "Runtime.evaluate")
+        ) {
           throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
         }
         return baseCdp(method, params, sessionId, timeoutMs);
@@ -8156,10 +8171,12 @@ test("screenshot stops a pending navigation when the Page never answers its rend
   await withFixture(async (fixture) => {
     const baseCdp = fixture.services.cdp;
     let held = true;
+    let navigationPending = false;
     const stops = [];
     const task = taskForRound(fixture, "round-a", {
       async screenshot(path, options, sessionId) {
         if (held) {
+          navigationPending = true;
           throw new CdpRequestTimeoutError(
             "Runtime.evaluate",
             15_000,
@@ -8169,6 +8186,10 @@ test("screenshot stops a pending navigation when the Page never answers its rend
         return "/tmp/after-stop.png";
       },
       async cdp(method, params, sessionId, timeoutMs) {
+        if (held && navigationPending && method === "Runtime.evaluate") {
+          // The pending navigation suspends the renderer probe too.
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
         if (method === "Page.stopLoading") {
           stops.push({ sessionId, timeoutMs });
           held = false;
@@ -8235,6 +8256,107 @@ test("a screenshot capture timeout reports EGO_PAGE_UNRESPONSIVE naming Page.cap
         return true;
       },
     );
+  });
+});
+
+test("a screenshot of a committed Page that has not rendered yet does not stop its loading", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    const stops = [];
+    const probes = [];
+    const task = taskForRound(fixture, "round-a", {
+      async screenshot(path, options, sessionId) {
+        // A render-blocking stylesheet holds back the frame the capture waits
+        // for, while the committed document still answers JavaScript.
+        throw new CdpRequestTimeoutError(
+          "Page.captureScreenshot",
+          15_000,
+          sessionId,
+        );
+      },
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.stopLoading") stops.push({ sessionId, timeoutMs });
+        if (
+          method === "Runtime.evaluate" &&
+          params.expression === "document.readyState"
+        ) {
+          probes.push({ sessionId, timeoutMs });
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/slow-css");
+    fixture.setDocumentLifecycle({
+      readyState: "interactive",
+      domContentLoaded: true,
+    });
+    probes.length = 0;
+
+    await assert.rejects(
+      () => page.screenshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_UNRESPONSIVE");
+        assert.equal(error.method, "Page.captureScreenshot");
+        assert.equal(error.stopped, false);
+        assert.equal(error.currentUrl, undefined);
+        assert.match(
+          error.message,
+          /^Page p1 .*did not answer Page\.captureScreenshot within 15000ms, but it still answers JavaScript \(document\.readyState is "interactive"\), so no navigation is pending and nothing was stopped\./,
+        );
+        assert.match(error.message, /has not rendered one yet/);
+        assert.match(error.message, /render-blocking resources/);
+        assert.match(error.message, /page\.waitForLoadState\(\)/);
+        assert.doesNotMatch(error.message, /not committed/);
+        return true;
+      },
+    );
+    assert.deepEqual(stops, [], "the committed document keeps loading");
+    assert.equal(probes.length, 1);
+    assert.equal(probes[0].timeoutMs, 1_000);
+  });
+});
+
+test("a screenshot still stops the navigation when the renderer probe also goes unanswered", async () => {
+  await withFixture(async (fixture) => {
+    const baseCdp = fixture.services.cdp;
+    let pending = false;
+    const stops = [];
+    const task = taskForRound(fixture, "round-a", {
+      async screenshot(path, options, sessionId) {
+        pending = true;
+        throw new CdpRequestTimeoutError(
+          "Page.captureScreenshot",
+          15_000,
+          sessionId,
+        );
+      },
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (pending && method === "Runtime.evaluate") {
+          throw new CdpRequestTimeoutError(method, timeoutMs, sessionId);
+        }
+        if (method === "Page.stopLoading") {
+          stops.push({ sessionId, timeoutMs });
+          pending = false;
+          return {};
+        }
+        return baseCdp(method, params, sessionId, timeoutMs);
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/previous");
+
+    await assert.rejects(
+      () => page.screenshot(),
+      (error) => {
+        assert.equal(error.code, "EGO_PAGE_UNRESPONSIVE");
+        assert.equal(error.stopped, true);
+        assert.match(
+          error.message,
+          /did not answer Page\.captureScreenshot within 15000ms: a main-frame navigation had started but not committed\./,
+        );
+        return true;
+      },
+    );
+    assert.equal(stops.length, 1);
   });
 });
 

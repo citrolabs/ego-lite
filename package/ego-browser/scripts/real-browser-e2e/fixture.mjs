@@ -21,6 +21,7 @@ export async function startFixtureServer(taskName) {
   );
   let crossSiteBaseUrl = "";
   const snapshotFrameRequests = new Map();
+  const renderBlockingStylesheets = new Map();
   const fixtureServer = createServer((req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
     if (url.pathname === "/healthz") {
@@ -537,6 +538,63 @@ export async function startFixtureServer(taskName) {
         );
       }, holdMs);
       req.on("close", () => clearTimeout(timer));
+      return;
+    }
+    if (url.pathname === "/render-blocked-page") {
+      // The document commits at once, but a slow stylesheet in <head> keeps
+      // it from rendering a frame until the stylesheet arrives.
+      const delayMs = Number(url.searchParams.get("ms") || 10_000);
+      const key = url.searchParams.get("key") || "default";
+      res.writeHead(200, {
+        "content-type": "text/html",
+        "cache-control": "no-store",
+      });
+      res.end(`<!doctype html>
+        <html>
+          <head>
+            <title>Render-blocked fixture</title>
+            <link rel="stylesheet" href="/render-blocking.css?ms=${delayMs}&key=${encodeURIComponent(key)}">
+          </head>
+          <body><h1 id="render-blocked-marker">render-blocked document</h1></body>
+        </html>`);
+      return;
+    }
+    if (url.pathname === "/render-blocking.css") {
+      const delayMs = Number(url.searchParams.get("ms") || 10_000);
+      const key = url.searchParams.get("key") || "default";
+      const state = { requested: true, served: false, aborted: false };
+      renderBlockingStylesheets.set(key, state);
+      const timer = setTimeout(() => {
+        state.served = true;
+        res.writeHead(200, {
+          "content-type": "text/css",
+          "cache-control": "no-store",
+        });
+        res.end("html, body { background: rgb(22, 163, 74); }");
+      }, delayMs);
+      req.on("close", () => {
+        if (state.served) return;
+        state.aborted = true;
+        clearTimeout(timer);
+      });
+      return;
+    }
+    if (url.pathname === "/render-blocking-state") {
+      const key = url.searchParams.get("key") || "default";
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "access-control-allow-origin": "*",
+        "cache-control": "no-store",
+      });
+      res.end(
+        JSON.stringify(
+          renderBlockingStylesheets.get(key) || {
+            requested: false,
+            served: false,
+            aborted: false,
+          },
+        ),
+      );
       return;
     }
     if (url.pathname === "/streamed-page") {

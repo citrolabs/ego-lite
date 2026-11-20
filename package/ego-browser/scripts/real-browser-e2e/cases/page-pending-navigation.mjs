@@ -336,3 +336,117 @@ export function pagePendingNavigationFreshProcessCase() {
     await page.close();
   `;
 }
+
+// A committed document whose render-blocking stylesheet is still loading
+// answers JavaScript and snapshots, but Page.captureScreenshot waits for a
+// frame it cannot render yet. That timeout must not be taken for a pending
+// navigation: the stylesheet keeps loading, and the Page renders styled once
+// it arrives.
+export function pageRenderBlockedScreenshotCase() {
+  return `
+    const transportMs = ${PENDING_NAVIGATION_RESPONSE_TIMEOUT_MS};
+    process.env.EGO_BROWSER_RESPONSE_TIMEOUT_MS = String(transportMs);
+    const stylesheetMs = transportMs * 2 + 2_000;
+    const key = "render-blocked-" + Date.now();
+    const stylesheetState = async () =>
+      (await fetch(baseUrl + "/render-blocking-state?key=" + key)).json();
+    const task = await taskSpace(taskName);
+    const page = await newPageAt(task, "about:blank");
+
+    try {
+      let gotoError;
+      try {
+        await page.goto(
+          baseUrl + "/render-blocked-page?ms=" + stylesheetMs + "&key=" + key,
+          { timeout: 1_500 }
+        );
+      } catch (error) {
+        gotoError = error;
+      }
+      assertEqual(
+        gotoError?.code,
+        "EGO_NAVIGATION_TIMEOUT",
+        "goto times out while the stylesheet is held: " + gotoError?.message
+      );
+      assertEqual(gotoError?.committed, true, "the document committed");
+
+      const readyState = await page.evaluate(() => document.readyState);
+      assert(
+        readyState === "interactive" || readyState === "loading",
+        "the document is still loading its stylesheet: " + readyState
+      );
+      assertIncludes(
+        await page.snapshot(),
+        "render-blocked document",
+        "snapshot answers on the unrendered document"
+      );
+
+      const screenshotStartedAt = Date.now();
+      let screenshotError;
+      try {
+        await page.screenshot();
+      } catch (error) {
+        screenshotError = error;
+      }
+      const screenshotElapsed = Date.now() - screenshotStartedAt;
+      const before = await stylesheetState();
+      assert(
+        before.requested && !before.served,
+        "the stylesheet is still held when the screenshot gives up: " +
+          JSON.stringify(before)
+      );
+      assertEqual(
+        screenshotError?.code,
+        "EGO_PAGE_UNRESPONSIVE",
+        "a screenshot of an unrendered Page times out: " + screenshotError?.message
+      );
+      assert(
+        screenshotElapsed < transportMs * 2 + 4_000,
+        "the screenshot gives up after one bounded wait: " + screenshotElapsed
+      );
+      assertEqual(
+        screenshotError?.stopped,
+        false,
+        "a committed Page is not stopped after a screenshot timeout"
+      );
+      assertIncludes(
+        screenshotError?.message,
+        "nothing was stopped",
+        "the error says nothing was stopped"
+      );
+      assertIncludes(
+        screenshotError?.message,
+        "has not rendered one yet",
+        "the error says the Page has not rendered a frame yet"
+      );
+      assert(
+        !String(screenshotError?.message).includes("had started but not committed"),
+        "the error does not claim a pending navigation: " + screenshotError?.message
+      );
+      assertEqual(
+        before.aborted,
+        false,
+        "the render-blocking stylesheet was not aborted: " + JSON.stringify(before)
+      );
+
+      await page.waitForLoadState("load", { timeout: stylesheetMs + 5_000 });
+      const after = await stylesheetState();
+      assertEqual(after.served, true, "the stylesheet arrived: " + JSON.stringify(after));
+      assertEqual(after.aborted, false, "the stylesheet was never aborted");
+      assertEqual(
+        await page.evaluate(() => getComputedStyle(document.body).backgroundColor),
+        "rgb(22, 163, 74)",
+        "the Page renders with its stylesheet applied"
+      );
+      const shotPath = join(artifactDir, "render-blocked-after-load.png");
+      await page.screenshot({ path: shotPath });
+      const samples = countColorfulPngSamples(await readFile(shotPath));
+      assert(
+        samples.colorful >= 20,
+        "the screenshot after load shows the styled Page: " + JSON.stringify(samples)
+      );
+    } finally {
+      await page.close();
+    }
+  `;
+}
