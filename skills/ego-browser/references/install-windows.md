@@ -2,15 +2,33 @@
 
 Read `install.md` first; it covers upgrading an older ego lite and the onboarding step shared by every platform. This file has the Windows install steps, the commands that confirm the installation, and Windows troubleshooting.
 
-## Run the installer
+## Run the install script
 
-There is no install script for Windows. Have the user download the installer from https://lite.ego.app/ and run it, then open ego lite.
+The install script lives at `scripts/install.ps1` in this skill and supports Windows 10 or later on x64 and Arm64. If ego lite is already installed, it changes nothing and prints the path of `ego-browser`. Otherwise it downloads the official installer, checks its signature, runs it, and then starts onboarding, which opens the ego lite app.
 
-After the app opens, the user completes the first-run onboarding in the app (see `install.md`). Onboarding registers the `ego-browser` command on the PATH. The PATH entry only reaches processes started afterwards, so open a new terminal before checking for the command.
+Installing usually raises a Windows permission prompt (User Account Control) for "ego Installer" from CITRO LABS PTE. LIMITED. Started from your terminal, the prompt can open behind other windows or only flash on the taskbar, so tell the user to look for it and choose **Yes** before you run the script. Only the user can answer it; while it is open, the script repeats the reminder every minute.
+
+Before running the script, note:
+
+- Use the full command below. Shortened to `powershell -File`, it fails under the default execution policy with "running scripts is disabled on this system".
+- The script waits for the installer and for the user to answer the prompt, which can take several minutes, so give the command a timeout of at least 10 minutes.
+- Git Bash keeps only the low 8 bits of an exit code, so a failure such as 75003 shows up as 251. Read the full code from the `error:` line on stderr.
+
+Run it from PowerShell, cmd, or Git Bash, with the script's actual path under this skill's directory:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "<skill directory>\scripts\install.ps1"
+```
+
+The script takes no arguments and writes its messages to stderr. Exit code `0` means ego lite is installed and onboarding has started, or that it was already installed; it does not mean the user has finished onboarding. Any other code is a failure, and the `error:` line says what to do next.
+
+After the script finishes, the user completes the first-run onboarding in the app (see `install.md`). Wait for the user to confirm they've finished it before continuing. Onboarding registers the `ego-browser` command on the PATH.
 
 ## After installing: confirm `ego-browser` is available
 
-Once the user has finished onboarding, open a new terminal and confirm the command is ready. The command depends on the shell.
+The PATH entry only reaches programs started after it was added, so your terminal, and any terminal your session starts, may not find `ego-browser` yet. Until your session restarts, use the full path the script printed (`Current terminal: run ego-browser using the full path "..."`) in place of `ego-browser` in the commands below. In PowerShell, run a quoted path with `&`, for example `& "<full path>" skill`.
+
+Once the user has finished onboarding, confirm the command is ready. The command depends on the shell.
 
 PowerShell:
 
@@ -54,5 +72,6 @@ Then return to the user's original task, as `install.md` describes.
 
 ## Troubleshooting
 
-- **SmartScreen blocks the installer**: have the user choose "More info" and then "Run anyway" in the SmartScreen dialog.
-- **Command still unavailable after onboarding**: open a new terminal first, because an existing one keeps the PATH it started with. Otherwise have the user reopen ego lite, finish onboarding, and retry.
+- **`updater registration failed (exit code 75003, ...)`**: the user chose **No**, or the prompt timed out, while the script ran from your terminal. Ask the user before running the script again, because the rerun raises another prompt they must answer with **Yes**. Otherwise have them download the installer from https://lite.ego.app/ and run it themselves, outside your terminal.
+- **The script cannot run at all**: have the user download the installer from https://lite.ego.app/, run it, then open ego lite. If SmartScreen blocks the installer, have the user choose "More info" and then "Run anyway" in the SmartScreen dialog.
+- **Command still unavailable after onboarding**: use the full path the script printed (see above), or have the user open a new terminal. Otherwise have the user reopen ego lite, finish onboarding, and retry.
