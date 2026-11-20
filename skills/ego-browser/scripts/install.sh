@@ -4,8 +4,8 @@
 set -eu
 
 # Default package URL and installation paths.
-DMG_URL_ARM64="https://cdn.ego.app/channel/egobrowser_npx_referral/setup/macos/arm64/egolite.dmg"
-DMG_URL_X64="https://cdn.ego.app/channel/egobrowser_npx_referral/setup/macos/x64/egolite.dmg"
+DMG_URL_ARM64="https://cdn.ego.app/setup/macos/arm64/egolite-fHoqgZ74bOEM.dmg"
+DMG_URL_X64="https://cdn.ego.app/setup/macos/x64/egolite-fHoqgZ74bOEM.dmg"
 APP_NAME="ego lite"
 APP_BUNDLE_NAME="$APP_NAME.app"
 APP_PATH="/Applications/$APP_BUNDLE_NAME"
@@ -213,7 +213,7 @@ install_ego_lite() {
 }
 
 main() {
-	[ "$(uname -s)" = "Darwin" ] || die "this script only supports macOS"
+	[ "$(uname -s)" = "Darwin" ] || die "this script only supports macOS; on Windows and other platforms install from https://lite.ego.app/"
 
 	# Install first if not present; otherwise use the ego-browser bundled inside the app.
 	installed_app_path=$(find_ego_lite_app || true)

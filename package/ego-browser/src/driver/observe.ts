@@ -1,20 +1,21 @@
+import { randomInt } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { state } from "../state.js";
-import { cdp, evaluate } from "../cdp-eval.js";
-import { pageInfo } from "./nav.js";
+import { cdp, runtimeValue } from "../cdp-eval.js";
 import {
   browserEgo,
   browserSnapshotRefsToRefMap,
   drainBrowserEvents,
   ensureSession,
   isBrowserRuntime,
-  pendingDialog,
 } from "../browser-runtime.js";
-import { buildEgoError } from "../ego-errors.js";
+import { invokeEgo } from "../ego-errors.js";
 import { resolveElementCenter } from "../element-resolver.js";
+import { resolveInPageFrames } from "./element-ops.js";
+import { compactSnapshotResult } from "../snapshot-result.js";
 import {
   browserRefMap,
   ensureRefMapForRef,
@@ -26,7 +27,8 @@ import {
 } from "./snapshot-filter.js";
 
 export type SnapshotOptions = SnapshotFilterOptions & {
-  scope?: "only_within_viewport" | "full_page";
+  scope?: "only_within_viewport" | "full_page" | "subtree";
+  root?: number;
   includeActionMarks?: boolean;
   includeStableLocator?: boolean;
 };
@@ -50,11 +52,13 @@ type ScreenshotClip = {
   scale?: number;
 };
 
-type ScreenshotOptions = {
-  path?: string;
-  fullPage?: boolean;
+export type ScreenshotScale = "css";
+
+export type CaptureScreenshotOptions = {
+  full?: boolean;
   raw?: boolean;
   clip?: ScreenshotClip;
+  scale?: ScreenshotScale;
 };
 
 function egoSnapshotOptions(options: SnapshotOptions = {}) {
@@ -75,22 +79,18 @@ function filterOptions(options: SnapshotOptions = {}): SnapshotFilterOptions {
   };
 }
 
-export function drainEvents() {
-  return drainBrowserEvents();
+export async function drainEvents() {
+  const sessionId = isBrowserRuntime() ? await ensureSession() : undefined;
+  return drainBrowserEvents(sessionId);
 }
 
-export async function snapshotRaw(options: SnapshotOptions = {}) {
-  let result;
-  try {
-    result = await browserEgo().snapshot(egoSnapshotOptions(options));
-  } catch (err) {
-    // ego.snapshot rejects directly (it never resolves with { error }), so it never
-    // reached buildEgoError — the single birthplace that records a hard stop for the
-    // output sink and swaps native wording for ego-browser's owned guidance. Route the
-    // rejection through it so a swallowed snapshot hard stop collapses like every other
-    // ego error instead of leaking repeated native text.
-    throw buildEgoError(err, "snapshot");
-  }
+export async function snapshot(options: SnapshotOptions = {}) {
+  // Filter keys are post-processing only; the native ego.snapshot bridge must
+  // never receive them.
+  let result: any = await invokeEgo("snapshot", () =>
+    browserEgo().snapshot(egoSnapshotOptions(options)),
+  );
+  compactSnapshotResult(result);
   browserSnapshotRefsToRefMap(browserRefMap, result.refs || []);
   const filters = filterOptions(options);
   if (result.content != null) {
@@ -102,17 +102,20 @@ export async function snapshotRaw(options: SnapshotOptions = {}) {
   return result;
 }
 
-registerSnapshotForRefRefresh(() => snapshotRaw());
+registerSnapshotForRefRefresh(() => snapshot());
+
+export const snapshotRaw = snapshot;
 
 /**
- * Return snapshot content with agent-friendly defaults. The text surface most
- * agents want; use snapshotRaw when you need the structured { content, refs }.
- * @param {{scope?: "only_within_viewport"|"full_page", includeActionMarks?: boolean, includeStableLocator?: boolean, interactiveOnly?: boolean, roles?: string[], match?: string|RegExp, maxChars?: number, urls?: "none"|"host_path"}} [options]
+ * Return snapshot content with agent-friendly defaults. Use snapshotRaw / snapshot
+ * when you need the structured { content, refs } result.
+ * @param {{scope?: "only_within_viewport"|"full_page"|"subtree", root?: number, includeActionMarks?: boolean, includeStableLocator?: boolean, interactiveOnly?: boolean, roles?: string[], match?: string|RegExp, maxChars?: number, urls?: "none"|"host_path"}} [options]
  * @returns {Promise<string>}
  */
-export async function snapshot(options: SnapshotOptions = {}) {
-  const result = await snapshotRaw({
+export async function snapshotText(options: SnapshotOptions = {}) {
+  const result = await snapshot({
     scope: options.scope ?? "full_page",
+    ...(options.root === undefined ? {} : { root: options.root }),
     includeActionMarks: options.includeActionMarks ?? true,
     includeStableLocator: options.includeStableLocator ?? true,
     interactiveOnly: options.interactiveOnly,
@@ -126,25 +129,75 @@ export async function snapshot(options: SnapshotOptions = {}) {
 
 export async function elementCenter(selectorOrRef) {
   await ensureRefMapForRef(selectorOrRef);
-  return resolveElementCenter(
-    { sendRaw: cdp },
-    undefined,
-    browserRefMap,
-    selectorOrRef,
+  return resolveInPageFrames(selectorOrRef, (iframeSessions) =>
+    resolveElementCenter(
+      { sendRaw: cdp },
+      undefined,
+      browserRefMap,
+      selectorOrRef,
+      iframeSessions,
+    ),
   );
 }
 
-// Sequence number for default screenshot file names. Combined with the pid it
-// keeps concurrent agent processes (parallel task spaces) from overwriting each
-// other's shots in the shared tmpdir, and successive shots in one run distinct.
-let screenshotSeq = 0;
+/**
+ * Directory and name for a screenshot taken without an explicit path.
+ *
+ * The embedded host runs every script in one long-lived Node process, giving
+ * each run its own `globalThis` but sharing `process.env`, `os.tmpdir()` and
+ * the pid. A host that needs per-run output sets
+ * `globalThis.EGO_BROWSER_OUTPUT_DIR` to an absolute directory; a random
+ * six-digit suffix keeps concurrent runs in the shared default directory from
+ * overwriting each other while staying short enough to read back easily.
+ */
+function defaultScreenshotPath(): string {
+  const outputDir = (globalThis as { EGO_BROWSER_OUTPUT_DIR?: unknown })
+    .EGO_BROWSER_OUTPUT_DIR;
+  let directory = tmpdir();
+  if (outputDir !== undefined) {
+    // Same rule as an explicit screenshot path: the Node context does not run
+    // in the caller's working directory, so a relative directory would land
+    // somewhere unexpected (or fail with EPERM on Windows).
+    if (
+      typeof outputDir !== "string" ||
+      outputDir.length === 0 ||
+      !isAbsolute(outputDir)
+    ) {
+      throw new TypeError(
+        "globalThis.EGO_BROWSER_OUTPUT_DIR must be an absolute directory path",
+      );
+    }
+    directory = outputDir;
+  }
+  const suffix = String(randomInt(0, 1_000_000)).padStart(6, "0");
+  return join(directory, `ego-browser-shot-${suffix}.png`);
+}
 
-export async function screenshot(options: ScreenshotOptions = {}) {
-  const path =
-    options.path ??
-    join(tmpdir(), `ego-browser-shot-${process.pid}-${++screenshotSeq}.png`);
-  const full = options.fullPage ?? false;
-  const raw = options.raw ?? false;
+export async function captureScreenshot(
+  path?: string,
+  options: CaptureScreenshotOptions = {},
+) {
+  assertScreenshotScale(options.scale);
+  const sessionId = isBrowserRuntime() ? await ensureSession() : undefined;
+  return captureScreenshotForSession(path, options, sessionId);
+}
+
+/**
+ * Capture a screenshot through one explicit target session. Page objects use
+ * this entry point so another active tab cannot affect evaluation or capture.
+ */
+export async function captureScreenshotForSession(
+  path?: string,
+  options: CaptureScreenshotOptions = {},
+  sessionId?: string,
+) {
+  assertScreenshotScale(options.scale);
+  const outputPath = path ?? defaultScreenshotPath();
+  const full = options.full ?? false;
+  // CSS-pixel sizing is the default and the only declarative scale mode. Keep
+  // the legacy raw flag as an internal compatibility escape hatch.
+  const scale = options.scale ?? "css";
+  const raw = scale === "css" ? false : (options.raw ?? false);
   const params: any = {
     format: "png",
     captureBeyondViewport: full,
@@ -154,33 +207,63 @@ export async function screenshot(options: ScreenshotOptions = {}) {
       params.clip = { ...options.clip };
     }
   } else {
-    if (isBrowserRuntime()) {
-      await ensureSession();
-    }
-    if (!pendingDialog()) {
-      const dpr = Number(await evaluate("window.devicePixelRatio")) || 1;
-      const cssScale = 1 / dpr;
-      if (options.clip) {
-        params.clip = { scale: cssScale, ...options.clip };
-      } else {
-        const info = await pageInfo();
-        if ("dialog" in info) {
-          return screenshot({ ...options, path, raw: true });
-        }
-        params.clip = {
-          x: 0,
-          y: 0,
-          width: full ? info.pw : info.w,
-          height: full ? info.ph : info.h,
-          scale: cssScale,
-        };
-      }
+    const dprExpression = "window.devicePixelRatio";
+    const dpr =
+      Number(
+        runtimeValue(
+          await cdp(
+            "Runtime.evaluate",
+            {
+              expression: dprExpression,
+              returnByValue: true,
+            },
+            sessionId,
+          ),
+          dprExpression,
+        ),
+      ) || 1;
+    const cssScale = 1 / dpr;
+    if (options.clip) {
+      params.clip = { scale: cssScale, ...options.clip };
+    } else {
+      const infoExpression =
+        "({url:location.href,title:document.title,w:innerWidth,h:innerHeight,sx:scrollX,sy:scrollY,pw:document.documentElement.scrollWidth,ph:document.documentElement.scrollHeight})";
+      const info = runtimeValue(
+        await cdp(
+          "Runtime.evaluate",
+          {
+            expression: infoExpression,
+            returnByValue: true,
+          },
+          sessionId,
+        ),
+        infoExpression,
+      );
+      params.clip = {
+        // CDP interprets clip coordinates in the page's document coordinate
+        // space. A viewport screenshot therefore starts at the current scroll
+        // offset, while a full-page screenshot still starts at the document
+        // origin.
+        x: full ? 0 : info.sx,
+        y: full ? 0 : info.sy,
+        width: full ? info.pw : info.w,
+        height: full ? info.ph : info.h,
+        scale: cssScale,
+      };
     }
   }
-  const result = await cdp("Page.captureScreenshot", params);
-  await mkdir(dirname(path), { recursive: true });
-  await state.writeFile(path, Buffer.from(result.data, "base64"));
-  return path;
+  const result = await cdp("Page.captureScreenshot", params, sessionId);
+  await mkdir(dirname(outputPath), { recursive: true });
+  await state.writeFile(outputPath, Buffer.from(result.data, "base64"));
+  return outputPath;
+}
+
+function assertScreenshotScale(
+  scale: unknown,
+): asserts scale is ScreenshotScale | undefined {
+  if (scale !== undefined && scale !== "css") {
+    throw new TypeError("captureScreenshot scale must be css");
+  }
 }
 
 export {

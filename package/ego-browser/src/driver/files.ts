@@ -7,7 +7,7 @@ import { withHandle } from "./element-ops.js";
  * @param {string|string[]} path Absolute file path or paths to upload.
  * @returns {Promise<void>}
  */
-export async function setInputFiles(selector, path) {
+export async function uploadFile(selector, path) {
   const files = Array.isArray(path) ? path : [path];
   await withHandle(selector, async ({ objectId, sessionId }) => {
     await cdp("DOM.setFileInputFiles", { files, objectId }, sessionId);

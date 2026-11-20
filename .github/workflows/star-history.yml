@@ -1,0 +1,136 @@
+name: Star History
+
+on:
+  schedule:
+    # Daily at 04:17 UTC. Off the hour to avoid the top-of-hour Actions rush.
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        # The publish is normally gated on the star data moving, so a change to
+        # the SVG post-processing alone would not reach the branch until the
+        # next new star. This republishes from the restored chart on demand.
+        description: 'Republish even if the star data has not changed'
+        type: boolean
+        default: false
+
+# The stargazers API needs metadata:read + contents:write since GitHub's
+# 2026-06-30 restriction. The built-in token with contents:write covers both,
+# so no PAT is involved. contents:write is also what pushes CHART_BRANCH.
+permissions:
+  contents: write
+
+concurrency:
+  group: star-history
+  cancel-in-progress: false
+
+env:
+  # main's ruleset requires every change to arrive as a reviewed pull request,
+  # so a bot cannot commit the regenerated chart there. The chart lives on this
+  # orphan data branch instead and the README links it by raw URL; main is
+  # never written to. Renaming this branch means editing the README URLs too.
+  CHART_BRANCH: star-history
+  # Scratch directory in the runner's checkout. Deliberately not tracked on
+  # main: the only copy of the chart that matters is the one on CHART_BRANCH.
+  CHART_DIR: assets/star-history
+
+jobs:
+  star-history:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      # render-charts.sh decides "changed" by comparing .star-history.sig, and
+      # falls back to the existing chart when the stargazers API rate-limits it.
+      # Both need the previously published files on disk, and they no longer
+      # come with the checkout, so fetch them off CHART_BRANCH first.
+      - name: Restore last published chart
+        run: |
+          set -euo pipefail
+          mkdir -p "$CHART_DIR"
+          if git fetch --depth=1 origin "$CHART_BRANCH"; then
+            git archive FETCH_HEAD | tar -x -C "$CHART_DIR"
+            # Branch-local docs, not chart data; keep it out of the render dir.
+            rm -f "$CHART_DIR/README.md"
+            ls -la "$CHART_DIR"  # -a: .star-history.sig matters here
+          else
+            echo "No $CHART_BRANCH yet; this run creates it."
+          fi
+
+      # Pinned to the v1.0.5 commit; the renderer's package-lock.json makes the
+      # npm install deterministic from there. commit is left to us because the
+      # SVGs still need their font embedded, and because the files go to
+      # CHART_BRANCH rather than to the checked-out branch. update-readme is off
+      # for the same reason: the README already carries absolute CHART_BRANCH
+      # URLs, which the action's relative-path rewrite would undo.
+      - name: Check out pinned chart renderer
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: narayann7/star-history-action
+          ref: a68d8f9d67ca20d55b682a264e69152dcf326e9c
+          path: .star-history-action
+          persist-credentials: false
+
+      - name: Apply renderer axis and Action runtime fixes
+        run: |
+          git -C .star-history-action apply \
+            "$GITHUB_WORKSPACE/.github/star-history/y-axis.patch" \
+            "$GITHUB_WORKSPACE/.github/star-history/action-runtime.patch"
+
+      - id: chart
+        uses: ./.star-history-action
+        with:
+          repos: ${{ github.repository }}
+          output-dir: ${{ env.CHART_DIR }}
+          type: Date
+          themes: light,dark
+          # Only reaches the PNG; the SVGs get their font from postprocess-svg.py
+          # below. Set so the two do not drift apart.
+          font-family: Patrick Hand
+          update-readme: false
+          commit: false
+
+      - name: Test Y axis bounds
+        run: |
+          cp .github/star-history/y-axis.test.ts .star-history-action/renderer/
+          cd .star-history-action/renderer
+          node_modules/.bin/tsx --test y-axis.test.ts
+
+      # Drops the repo-avatar <image> the renderer adds beside the title, which
+      # raw.githubusercontent.com's 'default-src none' CSP refuses to load at
+      # all — it rendered as a broken-image icon — and re-embeds the @font-face
+      # the renderer strips. See postprocess-svg.py for both.
+      - name: Post-process chart SVGs
+        if: steps.chart.outputs.changed == 'true' || inputs.force
+        run: python3 .github/star-history/postprocess-svg.py "$CHART_DIR"
+
+      # A fresh orphan commit force-pushed over CHART_BRANCH: the branch stays
+      # one commit deep, so a daily 130 KB of regenerated binaries never turns
+      # into a growing history. No rule guards a non-default branch, so this
+      # needs no review and cannot be declined the way the old push to main was.
+      - name: Publish chart to CHART_BRANCH
+        if: steps.chart.outputs.changed == 'true' || inputs.force
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          cp "$CHART_DIR"/star-history-*.svg \
+             "$CHART_DIR"/star-history.png \
+             "$CHART_DIR"/.star-history.sig \
+             "$work/"
+          cp .github/star-history/branch-readme.md "$work/README.md"
+          git init -q -b "$CHART_BRANCH" "$work"
+          git -C "$work" add -A
+          git -C "$work" \
+            -c user.name='github-actions[bot]' \
+            -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "chore: update star history (run ${GITHUB_RUN_ID})"
+          git -C "$work" push --force --quiet \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "$CHART_BRANCH"
+          echo "Pushed $(git -C "$work" rev-parse --short HEAD) to $CHART_BRANCH."
+          # No cache purge needed: GitHub does not camo-proxy
+          # raw.githubusercontent.com, it serves these URLs verbatim with
+          # cache-control max-age=300, so the README picks the new chart up
+          # within five minutes. Verified against the rendered README.

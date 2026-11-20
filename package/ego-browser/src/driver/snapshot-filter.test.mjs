@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { filterSnapshotContent } from "../../dist/src/driver/snapshot-filter.js";
-import { snapshot, snapshotRaw } from "../../dist/src/driver/observe.js";
+import { snapshotText, snapshotRaw } from "../../dist/src/driver/observe.js";
 import { invalidateSession } from "../../dist/src/browser-runtime.js";
 
 // Mirrors the public snapshot grammar: the role is the leading token, names are
@@ -152,9 +152,9 @@ test("filterSnapshotContent returns content unchanged when no filters set", () =
   assert.equal(filterSnapshotContent(""), "");
 });
 
-test("snapshot applies interactiveOnly filter to text output", async () => {
+test("snapshotText applies interactiveOnly filter to text output", async () => {
   await withSnapshotEgo(SAMPLE_SNAPSHOT, async () => {
-    const text = await snapshot({ interactiveOnly: true });
+    const text = await snapshotText({ interactiveOnly: true });
     assert.match(text, /button "Add to cart"/);
     assert.doesNotMatch(text, /Static ad/);
   });
@@ -169,7 +169,7 @@ test("snapshotRaw filters content but preserves refs", async () => {
   });
 });
 
-test("snapshot passes ego options without filter keys", async () => {
+test("snapshotText passes ego options without filter keys", async () => {
   let receivedOptions;
   const previous = globalThis.ego;
   globalThis.ego = {
@@ -184,7 +184,7 @@ test("snapshot passes ego options without filter keys", async () => {
   };
   invalidateSession();
   try {
-    const text = await snapshot({
+    const text = await snapshotText({
       scope: "only_within_viewport",
       includeActionMarks: false,
       interactiveOnly: true,

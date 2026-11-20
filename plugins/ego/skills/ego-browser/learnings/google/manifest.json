@@ -1,0 +1,40 @@
+{
+  "id": "google",
+  "name": "Google Search",
+  "domains": ["google.com", "*.google.com", "www.google.com"],
+  "notes": ["notes/overview.md"],
+  "nodeTools": {
+    "search_and_extract": {
+      "description": "Perform a Google search and extract top organic results.",
+      "path": "tools/search-extract.js",
+      "callable": "searchAndExtract",
+      "args": {
+        "query": {
+          "type": "string",
+          "required": true,
+          "description": "Search query string."
+        },
+        "maxResults": {
+          "type": "integer",
+          "required": false,
+          "description": "Maximum number of results to extract."
+        }
+      },
+      "returns": {
+        "type": "array",
+        "description": "Array of {title, url, snippet} objects."
+      }
+    }
+  },
+  "browserTools": {
+    "get_autocomplete_suggestions": {
+      "description": "Get autocomplete suggestions for the current search query.",
+      "path": "browser-tools/autocomplete.js",
+      "args": {},
+      "returns": {
+        "type": "array",
+        "description": "Array of suggestion strings."
+      }
+    }
+  }
+}

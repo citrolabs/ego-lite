@@ -5,12 +5,10 @@ import { isAbsolute, relative, resolve } from "node:path";
 import {
   iterLearningDirs,
   learningEntry,
-  learningsRoot,
   loadLearningManifest,
   siteSkillsForUrl,
   siteSkillsRoot,
   urlHostname,
-  LearningEntry,
   LearningManifest,
   LearnedContext,
   LearnedKnowledgeNote,
@@ -18,11 +16,6 @@ import {
   NodeToolSchema,
   ToolSchema,
 } from "./check-domain-learning.js";
-import {
-  validateLearning,
-  validateLearnings,
-  validateSiteSkills,
-} from "./validate-learning-format.js";
 
 export {
   checkDomainLearningExists,
@@ -88,8 +81,7 @@ export async function loadLearnedContext(
         toolType: "node",
         description: schema.description || "",
         args: schema.args || {},
-        returns: schema.returns || null,
-        example: `await site.runTool("${siteId}", "${toolName}", { ... })`,
+        example: `await runSiteTool("${siteId}", "${toolName}", { ... })`,
       });
     }
 
@@ -101,8 +93,7 @@ export async function loadLearnedContext(
         toolType: "browser",
         description: schema.description || "",
         args: schema.args || {},
-        returns: schema.returns || null,
-        example: `await site.runBrowserTool("${siteId}", "${toolName}", { ... })`,
+        example: `await runSiteBrowserTool("${siteId}", "${toolName}", { ... })`,
       });
     }
   }

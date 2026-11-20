@@ -7,8 +7,8 @@ import {
   pendingDialog,
   setPreferredTarget,
 } from "../browser-runtime.js";
-import { cdp, evaluate } from "../cdp-eval.js";
-import { assertNoEgoError } from "../ego-errors.js";
+import { cdp, js } from "../cdp-eval.js";
+import { invokeEgo } from "../ego-errors.js";
 import { state } from "../state.js";
 import { waitForDocumentLoad } from "./load.js";
 
@@ -28,10 +28,10 @@ type TabInfo = {
   index?: number;
 };
 
-type GotoOptions = {
-  waitUntil?: "load" | "domcontentloaded" | "commit";
+type GotoAndWaitOptions = {
   timeout?: number;
   settle?: number;
+  wait?: boolean;
 };
 
 type ListTabsOptions = {
@@ -50,28 +50,32 @@ type OpenOrReuseTabOptions = {
 type TabTarget = string | { targetId: string };
 
 /**
- * Navigate the current tab to a URL and, by default, wait for it to load.
+ * Navigate the current tab to a URL using CDP Page.navigate.
  * @param {string} url Absolute or browser-supported URL to load.
- * @param {{waitUntil?: "load"|"domcontentloaded"|"commit", timeout?: number, settle?: number}} [options]
- *   `waitUntil: "commit"` returns once navigation is issued without waiting for the document to load.
- *   `timeout` and `settle` are in milliseconds.
+ * @returns {Promise<object>} CDP Page.navigate result.
+ */
+export async function gotoUrl(url) {
+  return cdp("Page.navigate", { url });
+}
+
+/**
+ * Navigate the current tab and wait for load/settle in one call.
+ * @param {string} url Absolute or browser-supported URL to load.
+ * @param {{timeout?: number, settle?: number, wait?: boolean}} [options]
  * @returns {Promise<{navigation: object, loaded: boolean}>}
  */
-export async function goto(url: string, options: GotoOptions = {}) {
-  const navigation = await cdp("Page.navigate", { url });
+export async function gotoAndWait(
+  url: string,
+  options: GotoAndWaitOptions = {},
+) {
+  const navigation = await gotoUrl(url);
   const loaded =
-    options.waitUntil === "commit"
+    options.wait === false
       ? false
-      : await waitForDocumentLoad({
-          timeout: options.timeout ?? 20000,
-          until:
-            options.waitUntil === "domcontentloaded"
-              ? "domcontentloaded"
-              : "load",
-        });
+      : await waitForDocumentLoad({ timeout: options.timeout ?? 20 });
   const settle = Number(options.settle ?? 0);
   if (settle > 0) {
-    await state.sleep(settle);
+    await state.sleep(settle * 1000);
   }
   return { navigation, loaded };
 }
@@ -82,26 +86,15 @@ export async function goto(url: string, options: GotoOptions = {}) {
  */
 export async function pageInfo() {
   if (isBrowserRuntime()) {
-    await ensureSession();
-    const dialog = pendingDialog();
+    const sessionId = await ensureSession();
+    const dialog = pendingDialog(sessionId);
     if (dialog) {
       return { dialog };
     }
   }
-  const expression = `(() => {
-    const root = document.documentElement;
-    return JSON.stringify({
-      url: location.href,
-      title: document.title,
-      w: innerWidth,
-      h: innerHeight,
-      sx: scrollX,
-      sy: scrollY,
-      pw: root?.scrollWidth ?? innerWidth,
-      ph: root?.scrollHeight ?? innerHeight,
-    });
-  })()`;
-  return JSON.parse(await evaluate(expression));
+  const expression =
+    "JSON.stringify({url:location.href,title:document.title,w:innerWidth,h:innerHeight,sx:scrollX,sy:scrollY,pw:document.documentElement.scrollWidth,ph:document.documentElement.scrollHeight})";
+  return JSON.parse(await js(expression));
 }
 
 /**
@@ -113,7 +106,7 @@ export async function listTabs(
   options: ListTabsOptions = {},
 ): Promise<TabInfo[]> {
   const includeChrome = options.includeChrome ?? true;
-  const result = assertNoEgoError(await browserEgo().listTabs(), "listTabs");
+  const result = await invokeEgo("listTabs", () => browserEgo().listTabs());
   const tabs = result.tabs || [];
   return tabs
     .filter(
@@ -151,11 +144,8 @@ export async function currentTab() {
  * @returns {Promise<string>} Target id.
  */
 export async function switchTab(target: string | { targetId: string }) {
-  const targetId = targetIdFrom(target, "switchTab");
-  const tabs = await listTabs();
-  currentTargetFrom(tabs, targetId, "switchTab");
+  const targetId = typeof target === "object" ? target.targetId : target;
   await cdp("Target.activateTarget", { targetId });
-  invalidateSession();
   setPreferredTarget(targetId);
   return targetId;
 }
@@ -166,10 +156,13 @@ export async function switchTab(target: string | { targetId: string }) {
  * @returns {Promise<string>} New target id.
  */
 export async function newTab(url = "about:blank") {
-  const result = assertNoEgoError(await browserEgo().createTab(url), "newTab");
+  const result = await invokeEgo("newTab", () => browserEgo().createTab(url));
   if (!result.targetId) {
     throw new Error("newTab returned no targetId");
   }
+  // Native createTab activates the new tab. Keep the harness route in sync so
+  // the next target-less helper cannot remain attached to the previous Page.
+  setPreferredTarget(result.targetId);
   return result.targetId;
 }
 
@@ -189,21 +182,21 @@ export async function openOrReuseTab(
   if (existing) {
     await switchTab(existing.targetId);
     if (options.wait) {
-      await waitForDocumentLoad({ timeout: options.timeout ?? 20000 });
+      await waitForDocumentLoad({ timeout: options.timeout ?? 20 });
     }
     const settle = Number(options.settle ?? 0);
     if (settle > 0) {
-      await state.sleep(settle);
+      await state.sleep(settle * 1000);
     }
     return { ...existing, active: true, reused: true };
   }
   const targetId = await newTab(url);
   if (options.wait !== false) {
-    await waitForDocumentLoad({ timeout: options.timeout ?? 20000 });
+    await waitForDocumentLoad({ timeout: options.timeout ?? 20 });
   }
   const settle = Number(options.settle ?? 0);
   if (settle > 0) {
-    await state.sleep(settle);
+    await state.sleep(settle * 1000);
   }
   return { targetId, url, title: "", active: true, reused: false };
 }
@@ -214,20 +207,19 @@ export async function openOrReuseTab(
  * @returns {Promise<string>} Closed target id.
  */
 export async function closeTab(target: TabTarget | undefined = undefined) {
-  const tabs = await listTabs();
   const targetId =
     target === undefined
-      ? (tabs.find((tab) => tab.active) || tabs[0])?.targetId
-      : targetIdFrom(target, "closeTab");
-  if (!targetId) throw new Error("closeTab requires a targetId");
-  currentTargetFrom(tabs, targetId, "closeTab");
+      ? (await currentTab()).targetId
+      : typeof target === "object"
+        ? target.targetId
+        : target;
+  if (!targetId) {
+    throw new Error("closeTab requires a targetId");
+  }
   await cdp("Target.closeTarget", { targetId });
-  invalidateSession();
+  invalidateSession(targetId);
   if (state.preferredTargetId === targetId) {
     clearPreferredTarget();
-  }
-  if (tabs.length > 1) {
-    await waitForClosedTarget(targetId);
   }
   return targetId;
 }
@@ -296,52 +288,4 @@ function tabMatchesUrl(tabUrl: string, wantedUrl: string, match: UrlMatchMode) {
 
 function trimSlash(pathname: string) {
   return pathname.replace(/\/+$/, "") || "/";
-}
-
-function targetIdFrom(target: TabTarget, operation: string) {
-  const targetId =
-    typeof target === "string"
-      ? target
-      : target && typeof target === "object"
-        ? target.targetId
-        : undefined;
-  if (typeof targetId !== "string" || !targetId) {
-    throw new Error(
-      `${operation} requires a targetId; received ${JSON.stringify(target)}`,
-    );
-  }
-  return targetId;
-}
-
-function currentTargetFrom(
-  tabs: TabInfo[],
-  targetId: string,
-  operation: string,
-) {
-  const tab = tabs.find((candidate) => candidate.targetId === targetId);
-  if (tab) return tab;
-  const available = tabs.map(({ targetId, title, url }) => ({
-    targetId,
-    title,
-    url,
-  }));
-  throw new Error(
-    `${operation} target not found: ${JSON.stringify(targetId)}. ` +
-      `Refresh browser.listTabs() and select a current targetId. ` +
-      `Available tabs: ${JSON.stringify(available)}`,
-  );
-}
-
-async function waitForClosedTarget(targetId: string) {
-  const deadline = state.now() + 2000;
-  while (true) {
-    const tabs = await listTabs();
-    if (!tabs.some((tab) => tab.targetId === targetId)) return tabs;
-    if (state.now() >= deadline) {
-      throw new Error(
-        `closeTab timed out waiting for target to close: ${JSON.stringify(targetId)}`,
-      );
-    }
-    await state.sleep(50);
-  }
 }

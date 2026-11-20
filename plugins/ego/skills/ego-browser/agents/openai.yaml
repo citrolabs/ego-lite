@@ -1,0 +1,7 @@
+interface:
+  display_name: "ego-browser"
+  short_description: "Automate logged-in web tasks"
+  icon_small: "./assets/composer-icon.png"
+  icon_large: "./assets/logo.png"
+  brand_color: "#1E90FF"
+  default_prompt: "Use $ego-browser to complete a browser automation task."
