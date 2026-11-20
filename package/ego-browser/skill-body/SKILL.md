@@ -199,8 +199,7 @@ click, for example) waits one bounded period, then fails with
 `EGO_PAGE_UNRESPONSIVE` and stops that navigation; the error says which
 document the Page shows now and how to load the pending one. `evaluate()`
 reports the same outcome as `EGO_PAGE_EVALUATION_TIMED_OUT` with `stopped`
-set. When the Page still answers JavaScript, nothing is pending and nothing is
-stopped; `stopped` stays false.
+set.
 
 Work efficiently:
 
@@ -355,9 +354,7 @@ application-specific visible state.
 
 `page.screenshot()` can sometimes fail after about 15s with
 `EGO_PAGE_UNRESPONSIVE` on `Page.captureScreenshot`, even if `page.evaluate()`
-still works: a capture waits for the Page to render a frame, and render-blocking
-resources such as a slow stylesheet hold that back. Wait with
-`page.waitForLoadState()` and retry at most once. For a canvas, read its pixels through
+still works. Retry at most once. For a canvas, read its pixels through
 `page.evaluate()` with `canvas.toDataURL("image/png")` (tainted canvases throw;
 WebGL may read blank).
 
