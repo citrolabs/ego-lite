@@ -408,7 +408,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
         name: "options",
         type: "object",
         description:
-          "Snapshot options: scope, includeActionMarks, includeStableLocator, interactiveOnly, roles, match, maxChars.",
+          "Snapshot options: scope, includeActionMarks, includeStableLocator, interactiveOnly, roles, match, maxChars, urls.",
       },
     ],
     returns: "Promise<string>",
@@ -423,7 +423,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
         name: "options",
         type: "object",
         description:
-          "Snapshot options: scope, includeActionMarks, includeStableLocator, interactiveOnly, roles, match, maxChars.",
+          "Snapshot options: scope, includeActionMarks, includeStableLocator, interactiveOnly, roles, match, maxChars, urls.",
       },
     ],
     returns: "Promise<object>",

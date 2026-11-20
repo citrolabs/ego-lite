@@ -5,16 +5,21 @@ import { filterSnapshotContent } from "../../dist/src/driver/snapshot-filter.js"
 import { snapshot, snapshotRaw } from "../../dist/src/driver/observe.js";
 import { invalidateSession } from "../../dist/src/browser-runtime.js";
 
-const SAMPLE_SNAPSHOT = `Page: Example Shop
-URL: https://example.com/shop
-  Static paragraph about shipping
-  banner "Site header" [ref=1, loc=role:banner]
-  link "Home" [ref=10, loc=role:link[name="Home"]]
-  button "Add to cart" [ref=42, loc=role:button[name="Add to cart"]]
-  textbox "Search" [ref=55, loc=role:textbox[name="Search"]]
-  heading "Featured products" [ref=5, loc=role:heading[name="Featured products"]]
-  Static ad: Buy now and save 50%
-  checkbox "Subscribe" [ref=60, loc=role:checkbox[name="Subscribe"]]`;
+// Mirrors the public snapshot grammar: the role is the leading token, names are
+// quoted, and metadata lives in a trailing bracket that may contain nested
+// brackets from `loc=css:a[...]`.
+const SAMPLE_SNAPSHOT = `[p1 "Example Shop" | space 1478x1344 | scroll 0,0]
+  container [ref=1]
+    banner "Site header" [ref=2, loc=role:banner, url=https://example.com/header?utm_source=nav]
+    anchor "Home" [ref=10, loc=css:a[aria-label="Home page"], url=https://example.com/home?session=abc123]
+    anchor "mirror url=https://tracker.example/pixel" [ref=11, loc=role:link, url=https://example.com/mirror?ref=nav]
+    button "Add to cart" [ref=42, loc=role:button[name="Add to cart"], url=https://example.com/cart/add?sku=1&utm=mail]
+    textbox "Search" [ref=55, loc=role:textbox[name="Search"]]
+    heading "Featured products" [ref=5]
+    text "Static paragraph about shipping"
+    text "Static ad: Buy now and save 50%"
+    checkbox "Subscribe" [ref=60, loc=role:checkbox[name="Subscribe"], url=https://example.com/subscribe]
+[more content below the viewport — scroll to reveal]`;
 
 function withSnapshotEgo(content, fn) {
   const previous = globalThis.ego;
@@ -44,18 +49,18 @@ function withSnapshotEgo(content, fn) {
     });
 }
 
-test("filterSnapshotContent interactiveOnly keeps interactive and heading refs", () => {
+test("filterSnapshotContent interactiveOnly matches the leading role token", () => {
   const filtered = filterSnapshotContent(SAMPLE_SNAPSHOT, {
     interactiveOnly: true,
   });
-  assert.match(filtered, /Page: Example Shop/);
-  assert.match(filtered, /URL: https:\/\/example.com\/shop/);
-  assert.match(filtered, /link "Home"/);
+  assert.match(filtered, /\[p1 "Example Shop"/);
+  assert.match(filtered, /anchor "Home"/);
   assert.match(filtered, /button "Add to cart"/);
   assert.match(filtered, /textbox "Search"/);
   assert.match(filtered, /heading "Featured products"/);
   assert.match(filtered, /checkbox "Subscribe"/);
   assert.match(filtered, /banner "Site header"/);
+  assert.match(filtered, /more content below the viewport/);
   assert.doesNotMatch(filtered, /Static paragraph/);
   assert.doesNotMatch(filtered, /Static ad/);
 });
@@ -64,11 +69,12 @@ test("filterSnapshotContent roles keeps only matching roles", () => {
   const filtered = filterSnapshotContent(SAMPLE_SNAPSHOT, {
     roles: ["button", "link"],
   });
-  assert.match(filtered, /Page: Example Shop/);
-  assert.match(filtered, /link "Home"/);
+  assert.match(filtered, /\[p1 "Example Shop"/);
+  assert.match(filtered, /anchor "Home"/);
   assert.match(filtered, /button "Add to cart"/);
   assert.doesNotMatch(filtered, /textbox "Search"/);
   assert.doesNotMatch(filtered, /checkbox "Subscribe"/);
+  assert.doesNotMatch(filtered, /heading "Featured products"/);
 });
 
 test("filterSnapshotContent match string is case-insensitive", () => {
@@ -88,10 +94,57 @@ test("filterSnapshotContent match regex keeps matching lines", () => {
   assert.doesNotMatch(filtered, /button "Add to cart"/);
 });
 
-test("filterSnapshotContent maxChars truncates with omission note", () => {
-  const filtered = filterSnapshotContent(SAMPLE_SNAPSHOT, { maxChars: 40 });
-  assert.ok(filtered.length > 40);
-  assert.match(filtered, /… truncated \(\d+ chars omitted for maxChars=40\)$/);
+test("filterSnapshotContent maxChars truncates at a line boundary and keeps hints", () => {
+  const filtered = filterSnapshotContent(SAMPLE_SNAPSHOT, { maxChars: 120 });
+  assert.match(filtered, /… truncated \(\d+ chars omitted for maxChars=120\)$/);
+  assert.match(filtered, /more content below the viewport/);
+  for (const line of filtered.split("\n").slice(0, -1)) {
+    assert.equal(
+      (line.match(/\[/g) || []).length,
+      (line.match(/\]/g) || []).length,
+      `unbalanced brackets in kept line: ${line}`,
+    );
+  }
+});
+
+test("filterSnapshotContent urls: none drops url metadata only", () => {
+  const filtered = filterSnapshotContent(SAMPLE_SNAPSHOT, { urls: "none" });
+  assert.match(filtered, /Static paragraph about shipping/);
+  assert.match(
+    filtered,
+    /anchor "Home" \[ref=10, loc=css:a\[aria-label="Home page"\]\]/,
+  );
+  assert.match(filtered, /mirror url=https:\/\/tracker\.example\/pixel/);
+  assert.doesNotMatch(filtered, /url=https:\/\/example\.com/);
+});
+
+test("filterSnapshotContent urls: host_path keeps origin and pathname", () => {
+  const filtered = filterSnapshotContent(SAMPLE_SNAPSHOT, {
+    urls: "host_path",
+  });
+  assert.match(filtered, /url=https:\/\/example\.com\/home/);
+  assert.match(filtered, /url=https:\/\/example\.com\/cart\/add/);
+  assert.doesNotMatch(filtered, /session=abc123|utm_source=nav|sku=1/);
+  assert.match(filtered, /mirror url=https:\/\/tracker\.example\/pixel/);
+});
+
+test("filterSnapshotContent strips url metadata without touching quoting", () => {
+  const content = `  anchor "Docs" [ref=1, loc=role:link, url="https://example.com/a?b=1"]`;
+  const filtered = filterSnapshotContent(content, { urls: "none" });
+  assert.equal(filtered, `  anchor "Docs" [ref=1, loc=role:link]`);
+});
+
+test("filterSnapshotContent still understands legacy role= metadata", () => {
+  const legacy = `Page: Legacy
+URL: https://example.com/
+  banner "Site header" [ref=1, loc=role:banner]
+  button "Add to cart" [ref=42, loc=role:button]
+  Static ad`;
+  const filtered = filterSnapshotContent(legacy, { interactiveOnly: true });
+  assert.match(filtered, /Page: Legacy/);
+  assert.match(filtered, /banner "Site header"/);
+  assert.match(filtered, /button "Add to cart"/);
+  assert.doesNotMatch(filtered, /Static ad/);
 });
 
 test("filterSnapshotContent returns content unchanged when no filters set", () => {
@@ -110,7 +163,7 @@ test("snapshot applies interactiveOnly filter to text output", async () => {
 test("snapshotRaw filters content but preserves refs", async () => {
   await withSnapshotEgo(SAMPLE_SNAPSHOT, async () => {
     const raw = await snapshotRaw({ roles: ["link"] });
-    assert.match(raw.content, /link "Home"/);
+    assert.match(raw.content, /anchor "Home"/);
     assert.doesNotMatch(raw.content, /button "Add to cart"/);
     assert.equal(raw.refs.length, 4);
   });
@@ -123,24 +176,27 @@ test("snapshot passes ego options without filter keys", async () => {
     async snapshot(options) {
       receivedOptions = options;
       return {
-        content: "Page: Test\n  button [ref=1, loc=role:button]",
+        content:
+          '  anchor "Home" [ref=1, loc=role:link, url=https://example.com/?q=1]',
         refs: [],
       };
     },
   };
   invalidateSession();
   try {
-    await snapshot({
+    const text = await snapshot({
       scope: "only_within_viewport",
       includeActionMarks: false,
       interactiveOnly: true,
       maxChars: 100,
+      urls: "none",
     });
     assert.deepEqual(receivedOptions, {
       scope: "only_within_viewport",
       includeActionMarks: false,
       includeStableLocator: true,
     });
+    assert.doesNotMatch(text, /url=/);
   } finally {
     invalidateSession();
     if (previous === undefined) {

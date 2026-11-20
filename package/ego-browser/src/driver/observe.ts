@@ -31,6 +31,17 @@ export type SnapshotOptions = SnapshotFilterOptions & {
   includeStableLocator?: boolean;
 };
 
+// Post-processing-only options that the native `ego.snapshot` contract does not
+// understand. Keeping them here means adding a filter never leaks a foreign key
+// into the browser bridge.
+const FILTER_OPTION_KEYS = [
+  "interactiveOnly",
+  "roles",
+  "match",
+  "maxChars",
+  "urls",
+] as const;
+
 type ScreenshotClip = {
   x: number;
   y: number;
@@ -47,13 +58,10 @@ type ScreenshotOptions = {
 };
 
 function egoSnapshotOptions(options: SnapshotOptions = {}) {
-  const {
-    interactiveOnly: _interactiveOnly,
-    roles: _roles,
-    match: _match,
-    maxChars: _maxChars,
-    ...egoOptions
-  } = options;
+  const egoOptions: Record<string, unknown> = { ...options };
+  for (const key of FILTER_OPTION_KEYS) {
+    delete egoOptions[key];
+  }
   return egoOptions;
 }
 
@@ -63,6 +71,7 @@ function filterOptions(options: SnapshotOptions = {}): SnapshotFilterOptions {
     roles: options.roles,
     match: options.match,
     maxChars: options.maxChars,
+    urls: options.urls,
   };
 }
 
@@ -98,7 +107,7 @@ registerSnapshotForRefRefresh(() => snapshotRaw());
 /**
  * Return snapshot content with agent-friendly defaults. The text surface most
  * agents want; use snapshotRaw when you need the structured { content, refs }.
- * @param {{scope?: "only_within_viewport"|"full_page", includeActionMarks?: boolean, includeStableLocator?: boolean, interactiveOnly?: boolean, roles?: string[], match?: string|RegExp, maxChars?: number}} [options]
+ * @param {{scope?: "only_within_viewport"|"full_page", includeActionMarks?: boolean, includeStableLocator?: boolean, interactiveOnly?: boolean, roles?: string[], match?: string|RegExp, maxChars?: number, urls?: "none"|"host_path"}} [options]
  * @returns {Promise<string>}
  */
 export async function snapshot(options: SnapshotOptions = {}) {
@@ -110,6 +119,7 @@ export async function snapshot(options: SnapshotOptions = {}) {
     roles: options.roles,
     match: options.match,
     maxChars: options.maxChars,
+    urls: options.urls,
   });
   return result.content || "";
 }
