@@ -70,6 +70,23 @@ Run from `package/ego-browser/`:
 - The code prefers the small shared state singleton (`src/state.ts`) over threading connection state through call sites.
 - Site skills must stay site-shaped and verifiable: stable URLs, durable selectors, no pixel coordinates, no secrets.
 
+## Writing Skills
+
+These rules apply to every `SKILL.md` in this repo and to the files it points to: the entry Skill (`skills/ego-browser/`), the usage guide (`package/ego-browser/skill-body/SKILL.md`), site learnings, and project Skills under `.claude/skills/`. They follow the Agent Skills standard (agentskills.io) and the Anthropic, OpenAI, and Google authoring guides.
+
+- **Write only what the agent would get wrong without it.** Skip general knowledge. For each sentence ask "would the agent make a mistake without this?"; if not, cut it, and if unsure, test it.
+- **Keep the body short and layer the rest.** Stay under 500 lines and about 5,000 tokens; the bundled usage guide also has a hard 25,000-character limit (`maxGuideLength` in `render-guide.mjs`). Move detail into a reference file one level down, and say when to read it ("read X when Y happens"), not only that it exists.
+- **One Skill does one job.**
+- **The `description` decides whether the Skill gets used.** State what it does and when to use it, in the words users say. Put the main use first. At most 1,024 characters.
+- **Explain why instead of shouting.** "Do X, because Y causes Z" works better than `MUST` and `NEVER` in capitals, and lets the agent handle cases the text did not cover.
+- **Be exact where a mistake is costly, loose elsewhere.** Give the exact command or script for fragile steps; for the rest, say what to watch for and let the agent choose the steps.
+- **Show a working example or a template** for anything with a fixed shape. Agents copy concrete examples more reliably than they follow descriptions.
+- **Put gotchas in the body, before the step they affect.** A gotcha is a concrete fact that contradicts a reasonable assumption, such as a limit or an API that only looks familiar. When you correct an agent's mistake, add the correction there.
+- **Use one term per thing, and no information that expires.**
+- **Judge by evaluation, not by how the text reads.** Test on every model the Skill must support, compare against the current version, and read the traces as well as the pass rates.
+- **More rules are not better.** Fix the general cause, not one example. When adding rules stops improving the results, try removing some.
+- **What an SDK change can achieve stays out of `SKILL.md`.** Before adding a sentence, check whether the SDK can do the job instead, for example by accepting the input or by making the error message or output say what to do next.
+
 ## Testing & QA
 
 - Framework: Node's built-in runner (`node --test`), assertions via `node:assert/strict`.
