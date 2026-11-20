@@ -80,12 +80,12 @@ These rules apply to every `SKILL.md` in this repo and to the files it points to
 - **The `description` decides whether the Skill gets used.** State what it does and when to use it, in the words users say. Put the main use first. At most 1,024 characters.
 - **Explain why instead of shouting.** "Do X, because Y causes Z" works better than `MUST` and `NEVER` in capitals, and lets the agent handle cases the text did not cover.
 - **Be exact where a mistake is costly, loose elsewhere.** Give the exact command or script for fragile steps; for the rest, say what to watch for and let the agent choose the steps.
-- **Give one default, not a menu.** Name the preferred way and mention the exception briefly.
 - **Show a working example or a template** for anything with a fixed shape. Agents copy concrete examples more reliably than they follow descriptions.
 - **Put gotchas in the body, before the step they affect.** A gotcha is a concrete fact that contradicts a reasonable assumption, such as a limit or an API that only looks familiar. When you correct an agent's mistake, add the correction there.
 - **Use one term per thing, and no information that expires.**
 - **Judge by evaluation, not by how the text reads.** Test on every model the Skill must support, compare against the current version, and read the traces as well as the pass rates.
 - **More rules are not better.** Fix the general cause, not one example. When adding rules stops improving the results, try removing some.
+- **What an SDK change can achieve stays out of `SKILL.md`.** Before adding a sentence, check whether the SDK can do the job instead, for example by accepting the input or by making the error message or output say what to do next.
 
 ## Testing & QA
 
