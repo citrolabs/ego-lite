@@ -21,13 +21,28 @@ import {
   ensureRefMapForRef,
   registerSnapshotForRefRefresh,
 } from "../ref-state.js";
+import {
+  filterSnapshotContent,
+  type SnapshotFilterOptions,
+} from "./snapshot-filter.js";
 
-export type SnapshotOptions = {
+export type SnapshotOptions = SnapshotFilterOptions & {
   scope?: "only_within_viewport" | "full_page" | "subtree";
   root?: number;
   includeActionMarks?: boolean;
   includeStableLocator?: boolean;
 };
+
+// Post-processing-only options that the native `ego.snapshot` contract does not
+// understand. Keeping them here means adding a filter never leaks a foreign key
+// into the browser bridge.
+const FILTER_OPTION_KEYS = [
+  "interactiveOnly",
+  "roles",
+  "match",
+  "maxChars",
+  "urls",
+] as const;
 
 type ScreenshotClip = {
   x: number;
@@ -46,17 +61,44 @@ export type CaptureScreenshotOptions = {
   scale?: ScreenshotScale;
 };
 
+function egoSnapshotOptions(options: SnapshotOptions = {}) {
+  const egoOptions: Record<string, unknown> = { ...options };
+  for (const key of FILTER_OPTION_KEYS) {
+    delete egoOptions[key];
+  }
+  return egoOptions;
+}
+
+function filterOptions(options: SnapshotOptions = {}): SnapshotFilterOptions {
+  return {
+    interactiveOnly: options.interactiveOnly,
+    roles: options.roles,
+    match: options.match,
+    maxChars: options.maxChars,
+    urls: options.urls,
+  };
+}
+
 export async function drainEvents() {
   const sessionId = isBrowserRuntime() ? await ensureSession() : undefined;
   return drainBrowserEvents(sessionId);
 }
 
 export async function snapshot(options: SnapshotOptions = {}) {
-  const result: any = await invokeEgo("snapshot", () =>
-    browserEgo().snapshot(options),
+  // Filter keys are post-processing only; the native ego.snapshot bridge must
+  // never receive them.
+  let result: any = await invokeEgo("snapshot", () =>
+    browserEgo().snapshot(egoSnapshotOptions(options)),
   );
   compactSnapshotResult(result);
   browserSnapshotRefsToRefMap(browserRefMap, result.refs || []);
+  const filters = filterOptions(options);
+  if (result.content != null) {
+    result = {
+      ...result,
+      content: filterSnapshotContent(result.content, filters),
+    };
+  }
   return result;
 }
 
@@ -65,8 +107,9 @@ registerSnapshotForRefRefresh(() => snapshot());
 export const snapshotRaw = snapshot;
 
 /**
- * Return snapshot content with agent-friendly defaults.
- * @param {{scope?: "only_within_viewport"|"full_page"|"subtree", root?: number, includeActionMarks?: boolean, includeStableLocator?: boolean}} [options]
+ * Return snapshot content with agent-friendly defaults. Use snapshotRaw / snapshot
+ * when you need the structured { content, refs } result.
+ * @param {{scope?: "only_within_viewport"|"full_page"|"subtree", root?: number, includeActionMarks?: boolean, includeStableLocator?: boolean, interactiveOnly?: boolean, roles?: string[], match?: string|RegExp, maxChars?: number, urls?: "none"|"host_path"}} [options]
  * @returns {Promise<string>}
  */
 export async function snapshotText(options: SnapshotOptions = {}) {
@@ -75,6 +118,11 @@ export async function snapshotText(options: SnapshotOptions = {}) {
     ...(options.root === undefined ? {} : { root: options.root }),
     includeActionMarks: options.includeActionMarks ?? true,
     includeStableLocator: options.includeStableLocator ?? true,
+    interactiveOnly: options.interactiveOnly,
+    roles: options.roles,
+    match: options.match,
+    maxChars: options.maxChars,
+    urls: options.urls,
   });
   return result.content || "";
 }
@@ -217,3 +265,8 @@ function assertScreenshotScale(
     throw new TypeError("captureScreenshot scale must be css");
   }
 }
+
+export {
+  filterSnapshotContent,
+  type SnapshotFilterOptions,
+} from "./snapshot-filter.js";

@@ -239,6 +239,11 @@ viewport, the snapshot ends with a `[more content below the viewport: ...]`
 line: nodes are omitted, not absent. If the expected result may land below
 the fold, scroll or use `full_page` before concluding it did not appear.
 
+The legacy `snapshotText()` helper also accepts text-only filters:
+`interactiveOnly`, `roles`, `match`, `maxChars`, and
+`urls: 'none' | 'host_path'` (drop or shorten per-line `url=` metadata). Refs
+and locators stay usable.
+
 The default viewport snapshot includes visible iframe content returned by the
 browser. To focus on a frame's subtree, reuse the ref printed on its `iframe`
 line:
