@@ -260,6 +260,7 @@ test("the shared install guide routes to a file per operating system", async () 
     "utf8",
   );
   assert.match(windows, /PowerShell/);
+  assert.match(windows, /scripts\/install\.ps1/);
   assert.doesNotMatch(windows, /install\.sh|Gatekeeper/);
 });
 

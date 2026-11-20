@@ -16,6 +16,7 @@ const claudeSkillSupportPaths = [
   `${claudePluginRoot}/skills/ego-browser/references/install-windows.md`,
   `${claudePluginRoot}/skills/ego-browser/references/clearing-state.md`,
   `${claudePluginRoot}/skills/ego-browser/scripts/install.sh`,
+  `${claudePluginRoot}/skills/ego-browser/scripts/install.ps1`,
 ];
 const runtimeTerms =
   /\b(?:REPL|MCP|Bun)\b|\brepl_(?:start|eval|read|status|interrupt|stop)\b/i;
