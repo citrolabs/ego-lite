@@ -4,7 +4,8 @@
   "description": "A TypeScript single-file build of the ego-browser CDP harness.",
   "type": "module",
   "bin": {
-    "ego-browser": "./dist/out/index.js"
+    "ego-browser": "./dist/out/index.js",
+    "ego-run": "./dist/src/daemon/cli.js"
   },
   "scripts": {
     "clean": "rm -rf dist artifacts",
@@ -34,5 +35,8 @@
   },
   "dependencies": {
     "acorn": "^8.16.0"
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.1.0"
   }
 }

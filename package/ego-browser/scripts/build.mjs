@@ -18,7 +18,7 @@ import { rollup } from "rollup";
 import resolve from "@rollup/plugin-node-resolve";
 import typescript from "@rollup/plugin-typescript";
 
-import { guidePlatforms, renderGuide } from "./render-guide.mjs";
+import { guideModes, guidePlatforms, renderGuide } from "./render-guide.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = dirname(dirname(root));
@@ -121,6 +121,22 @@ try {
       join(bundledGuideDir, `SKILL.${platform}.md`),
       renderGuide(guideMarkdown, { platform, name: guideSource }),
     );
+  }
+  // The same guide for the persistent-session CLI (`ego-run --session`), under
+  // `ego-browser/<mode>/`; the browser keeps printing the direct guide above.
+  for (const mode of guideModes.filter((entry) => entry !== "direct")) {
+    const modeDir = join(bundledGuideDir, mode);
+    await mkdir(modeDir, { recursive: true });
+    await writeFile(
+      join(modeDir, "SKILL.md"),
+      renderGuide(guideMarkdown, { mode, name: guideSource }),
+    );
+    for (const platform of guidePlatforms) {
+      await writeFile(
+        join(modeDir, `SKILL.${platform}.md`),
+        renderGuide(guideMarkdown, { platform, mode, name: guideSource }),
+      );
+    }
   }
   for (const entry of entrySkillEntries) {
     await cp(
