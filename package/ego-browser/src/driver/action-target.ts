@@ -359,6 +359,122 @@ export const EDIT_ACTION_TARGET_HELPERS = `
   }
 `;
 
+// A left-button press on a drop-down <select> opens the browser-drawn option
+// menu. On macOS that is an NSMenu in a nested run loop: it stays open outside
+// the page, CDP key events cannot dismiss it, and ego lite defers closing every
+// task space until it goes away (CITRO-4909). Pointer actions therefore refuse
+// such a press and point the caller to page.selectOption(). List boxes
+// (multiple or size > 1) and disabled selects open no menu and stay clickable.
+// Requires composedParent(). The helpers also locate the element a press lands
+// on below shadow hosts and inside transformed iframes.
+export const NATIVE_SELECT_FUNCTIONS = `
+  function nativeSelectMenuAt(hitElement) {
+    let select = hitElement;
+    while (select && String(select.tagName || "").toUpperCase() !== "SELECT") {
+      select = composedParent(select);
+    }
+    if (!select || select.multiple || Number(select.size) > 1) return null;
+    if (select.disabled || select.matches?.(":disabled")) return null;
+    const escape = (value) =>
+      typeof CSS !== "undefined" && CSS.escape ? CSS.escape(value) : value;
+    const candidates = [];
+    if (select.id) candidates.push("select#" + escape(select.id));
+    const name = select.getAttribute?.("name");
+    if (name) candidates.push("select[name=" + JSON.stringify(name) + "]");
+    // A suggested locator must mean this select to page.selectOption(), whose
+    // CSS selectors query the top-level document and every open shadow root in
+    // it. A select inside an iframe gets no locator (its id or name may also
+    // match a control of the top document), and a candidate counts only when it
+    // matches exactly one element across all of those tree scopes.
+    const doc = select.ownerDocument;
+    const view = doc?.defaultView;
+    let topLevel = false;
+    try {
+      topLevel = Boolean(view) && view === view.top;
+    } catch {}
+    const matchesInPage = (selector) => {
+      const matches = [];
+      const roots = [doc];
+      while (roots.length) {
+        const root = roots.pop();
+        matches.push(...root.querySelectorAll(selector));
+        for (const element of root.querySelectorAll("*")) {
+          if (element.shadowRoot) roots.push(element.shadowRoot);
+        }
+      }
+      return matches;
+    };
+    const locator = !topLevel ? null : candidates.find((candidate) => {
+      try {
+        const matches = matchesInPage(candidate);
+        return matches.length === 1 && matches[0] === select;
+      } catch {
+        return false;
+      }
+    }) || null;
+    const options = Array.from(select.options || []);
+    return {
+      locator,
+      options: options.slice(0, 10).map((option) => String(option.label || "").slice(0, 60)),
+      optionCount: options.length,
+    };
+  }
+  // A document or shadow root hit test stops at a shadow host, so descend
+  // through open shadow roots to the element the press really lands on.
+  function deepestHitElement(element, point) {
+    while (element?.shadowRoot) {
+      const inner = element.shadowRoot.elementFromPoint?.(point.x, point.y);
+      if (!inner || inner === element) break;
+      element = inner;
+    }
+    return element;
+  }
+  // Maps a point in the viewport of the frame element's document to the
+  // viewport of its content document. Only translation and positive,
+  // axis-aligned scaling of the frame or its ancestors can be inverted from
+  // the layout box; any other transform (rotation, skew, flip, 3D, CSS zoom,
+  // a motion path) returns null so the caller refuses the press.
+  function frameContentPoint(frame, point) {
+    const view = frame.ownerDocument?.defaultView || globalThis;
+    for (let node = frame; node; node = composedParent(node)) {
+      if (node.nodeType !== undefined && node.nodeType !== 1) continue;
+      const style = view.getComputedStyle(node);
+      const transform = String(style.transform || "none");
+      if (transform !== "none") {
+        const match = /^matrix\\(([^)]*)\\)$/.exec(transform);
+        if (!match) return null;
+        const [a, b, c, d] = match[1].split(",").map(Number);
+        if (!(a > 0) || !(d > 0) || Math.abs(b) > 1e-6 || Math.abs(c) > 1e-6) {
+          return null;
+        }
+      }
+      if (String(style.rotate || "none") !== "none") return null;
+      const scale = String(style.scale || "none");
+      if (scale !== "none") {
+        const factors = scale.trim().split(/\\s+/).map(Number);
+        if (factors.length > 2 || factors.some((factor) => !(factor > 0))) {
+          return null;
+        }
+      }
+      const zoom = String(style.zoom || "1");
+      if (zoom !== "1" && zoom !== "normal") return null;
+      if (String(style.offsetPath || "none") !== "none") return null;
+    }
+    const width = frame.offsetWidth;
+    const height = frame.offsetHeight;
+    if (!(width > 0) || !(height > 0)) return null;
+    const rect = frame.getBoundingClientRect();
+    const scaleX = rect.width / width;
+    const scaleY = rect.height / height;
+    if (!(scaleX > 0) || !(scaleY > 0)) return null;
+    const style = view.getComputedStyle(frame);
+    return {
+      x: (point.x - rect.left) / scaleX - (frame.clientLeft || 0) - (parseFloat(style.paddingLeft) || 0),
+      y: (point.y - rect.top) / scaleY - (frame.clientTop || 0) - (parseFloat(style.paddingTop) || 0),
+    };
+  }
+`;
+
 // Shared by resolver-level candidate selection and the final pointer check.
 // Keeping one composed-tree definition prevents the two stages from disagreeing
 // about shadow descendants, interactive ancestors, or modal blockers.

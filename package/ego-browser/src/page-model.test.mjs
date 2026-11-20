@@ -57,6 +57,7 @@ function createFixture(rootDir) {
   const pendingDialogs = new Map();
   let rejectedClickPointsRemaining = 0;
   let interceptedClickPointsRemaining = 0;
+  let nativeSelectPointsRemaining = 0;
   let scrollClickPointsRemaining = 0;
   let trapClickPoints = false;
   let wheelDispatchDurationMs = 0;
@@ -185,6 +186,31 @@ function createFixture(rootDir) {
             result: {
               type: "boolean",
               value: reading ? fileInputClicked : true,
+            },
+          };
+        }
+        if (params.expression.includes("nativeSelectMenuAt(element)")) {
+          // The coordinate-press guard: nothing at the point is a select,
+          // unless a test asked for a select under the next points.
+          if (nativeSelectPointsRemaining > 0) {
+            nativeSelectPointsRemaining -= 1;
+            return {
+              result: {
+                type: "string",
+                value: JSON.stringify({
+                  nativeSelect: {
+                    locator: "select#dropdown",
+                    options: ["Option 1", "Option 2"],
+                    optionCount: 2,
+                  },
+                }),
+              },
+            };
+          }
+          return {
+            result: {
+              type: "string",
+              value: JSON.stringify({ nativeSelect: null }),
             },
           };
         }
@@ -543,6 +569,28 @@ function createFixture(rootDir) {
             },
           };
         }
+        if (
+          params.functionDeclaration.includes("function clickTargetActionable")
+        ) {
+          // The pre-press recheck: a left press needs a positive answer.
+          if (
+            interceptedClickPointsRemaining > 0 &&
+            params.functionDeclaration.includes(
+              "interceptingElementAtPoint(this, point)",
+            )
+          ) {
+            interceptedClickPointsRemaining -= 1;
+            return {
+              result: {
+                type: "object",
+                value: {
+                  error: '<button id="overlay"> intercepts pointer events',
+                },
+              },
+            };
+          }
+          return { result: { type: "object", value: { ok: true } } };
+        }
         if (params.functionDeclaration.includes("getBoundingClientRect")) {
           if (trapClickPoints) {
             // The wheel point sits on an element that swallows wheel events:
@@ -570,7 +618,9 @@ function createFixture(rootDir) {
           }
           if (
             interceptedClickPointsRemaining > 0 &&
-            params.functionDeclaration.includes("elementFromPoint")
+            params.functionDeclaration.includes(
+              "interceptingElementAtPoint(this, point)",
+            )
           ) {
             interceptedClickPointsRemaining -= 1;
             return {
@@ -938,6 +988,9 @@ function createFixture(rootDir) {
     },
     interceptClickPoints(count) {
       interceptedClickPointsRemaining = count;
+    },
+    nativeSelectAtNextPoint() {
+      nativeSelectPointsRemaining = 1;
     },
     scrollNextClickPoint(count = 1) {
       scrollClickPointsRemaining = count;
@@ -4859,6 +4912,56 @@ test("Page mouse primitives preserve button state on one target", async () => {
       ),
     );
     assert.equal(fixture.activeTarget(), first.targetId);
+  });
+});
+
+test("Page mouse tracks the moved-to point when a native select refuses the click", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a", { platform: "darwin" });
+    const page = await openTestPage(task, "https://example.test/first");
+
+    await page.mouse.move(10, 20);
+    fixture.nativeSelectAtNextPoint();
+    await assert.rejects(
+      page.mouse.click(90, 40),
+      (error) =>
+        error.kind === "permanent" &&
+        error.message.includes("page.mouse.click refused") &&
+        error.message.includes('page.selectOption("select#dropdown"'),
+    );
+    await page.mouse.down({ button: "right" });
+    await page.mouse.move(100, 60, { steps: 2 });
+
+    const pointerCalls = fixture.calls
+      .filter(
+        ([kind, method]) =>
+          kind === "cdp" && method === "Input.dispatchMouseEvent",
+      )
+      .map(([, , params]) => params);
+    assert.equal(
+      pointerCalls.some(
+        (params) => params.type === "mousePressed" && params.button === "left",
+      ),
+      false,
+      "the refused click must not press",
+    );
+    const press = pointerCalls.find((params) => params.type === "mousePressed");
+    assert.deepEqual(
+      [press.x, press.y, press.button],
+      [90, 40, "right"],
+      "a later press must happen where the refused click moved the pointer",
+    );
+    assert.deepEqual(
+      pointerCalls
+        .filter((params) => params.type === "mouseMoved")
+        .slice(-2)
+        .map((params) => [params.x, params.y]),
+      [
+        [95, 50],
+        [100, 60],
+      ],
+      "interpolated moves must start from the refused click's point",
+    );
   });
 });
 

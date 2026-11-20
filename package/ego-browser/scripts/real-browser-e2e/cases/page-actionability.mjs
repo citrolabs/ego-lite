@@ -339,8 +339,182 @@ export function pageActionabilityCase() {
       JSON.stringify(["grouped"]),
       "selectOption can programmatically select an option in a disabled optgroup"
     );
+
+    // CITRO-4909: a left press on a drop-down <select> opens a browser menu
+    // that blocks closing task spaces on macOS. The guard must refuse it
+    // before any press reaches the page, whether or not the menu would open.
+    await page.evaluate(() => {
+      const row = document.createElement("div");
+      row.className = "action-row";
+      row.innerHTML =
+        '<select id="native-dropdown"><option value="a">Alpha</option><option value="b">Beta</option></select>' +
+        '<div id="styled-dropdown" style="position:relative;width:160px;height:40px;background:#eee">Styled' +
+        '  <select id="covering-dropdown" style="position:absolute;inset:0;width:100%;height:100%;opacity:0">' +
+        '    <option value="x">Ex</option><option value="y">Why</option></select></div>' +
+        '<select id="native-listbox" size="3"><option value="l1">One</option><option value="l2">Two</option><option value="l3">Three</option></select>';
+      document.body.append(row);
+      window.__selectPresses = 0;
+      for (const select of row.querySelectorAll("select")) {
+        select.addEventListener("mousedown", () => window.__selectPresses++);
+      }
+    });
+    try {
+    const dropdownCenter = await page.evaluate(() => {
+      const rect = document.querySelector("#native-dropdown").getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+    });
+
+    await assertRejects(
+      () => page.click("#native-dropdown", { timeout: 150 }),
+      'page.selectOption("select#native-dropdown"',
+      "click on a drop-down select names the selectOption call"
+    );
+    await assertRejects(
+      () => page.click("#native-dropdown", { force: true, timeout: 150 }),
+      "refused to press the left mouse button",
+      "force does not bypass the native select guard"
+    );
+    await assertRejects(
+      () => page.click("#styled-dropdown", { timeout: 150 }),
+      "select#covering-dropdown",
+      "click on a wrapper is refused when a transparent select receives the press"
+    );
+    await assertRejects(
+      () => page.mouse.click(dropdownCenter.x, dropdownCenter.y),
+      "page.mouse.click refused",
+      "mouse.click on a drop-down select is refused"
+    );
+    await page.mouse.move(dropdownCenter.x, dropdownCenter.y);
+    await assertRejects(
+      () => page.mouse.down(),
+      "page.mouse.down refused",
+      "mouse.down on a drop-down select is refused"
+    );
+    assertEqual(
+      await page.evaluate("window.__selectPresses"),
+      0,
+      "no refused press reaches a drop-down select"
+    );
+    assertEqual(
+      await page.evaluate(() => document.querySelector("#native-dropdown").matches(":open")),
+      false,
+      "no native select menu is left open"
+    );
+
+    await page.click("#native-listbox");
+    assertEqual(
+      await page.evaluate("window.__selectPresses"),
+      1,
+      "a list box opens no menu and stays clickable"
+    );
+    } finally {
+      // Removing a select dismisses its native menu if a regression opened one.
+      await page.evaluate(() => {
+        for (const id of ["native-listbox", "covering-dropdown"]) {
+          document.getElementById(id)?.remove();
+        }
+        const dropdown = document.getElementById("native-dropdown");
+        if (dropdown?.matches(":open")) dropdown.remove();
+      }).catch(() => {});
+    }
+    // The cleanup above keeps the dropdown unless a regression left its menu open.
+    assertEqual(
+      JSON.stringify(await page.selectOption("#native-dropdown", { label: "Beta" })),
+      JSON.stringify(["b"]),
+      "selectOption still chooses the option without opening the menu"
+    );
     } finally {
       await page.close();
+    }
+
+    // CITRO-4909: coordinate presses are dispatched in the Page session, so a
+    // drop-down select inside an iframe the Page cannot read must be found in
+    // that frame's own session (cross-site) or execution context (sandboxed).
+    const framePage = await newPageAt(task, baseUrl + "/?page-api=oopif&native-select=" + Date.now());
+    try {
+    await framePage.evaluate(async () => {
+      const frame = document.querySelector("#fixture-frame");
+      frame.style.cssText =
+        "position:fixed;left:40px;top:60px;width:500px;height:150px;border:7px solid #888;padding:5px;z-index:20;background:#fff";
+      const sandboxed = document.createElement("iframe");
+      sandboxed.id = "sandboxed-frame";
+      sandboxed.setAttribute("sandbox", "");
+      sandboxed.style.cssText =
+        "position:fixed;left:40px;top:250px;width:300px;height:80px;border:0;z-index:20;background:#fff";
+      const loaded = new Promise((resolve) => sandboxed.addEventListener("load", resolve, { once: true }));
+      sandboxed.srcdoc =
+        '<select style="position:fixed;left:20px;top:20px;width:160px;height:30px"><option>One</option><option>Two</option></select>';
+      document.body.append(sandboxed);
+      await loaded;
+    });
+    let frameTarget;
+    for (let attempt = 0; attempt < 20 && !frameTarget; attempt += 1) {
+      frameTarget = (await task.cdp("Target.getTargets")).targetInfos.find(
+        (target) =>
+          target.type === "iframe" &&
+          target.parentId === framePage.targetId &&
+          target.url.includes("/frame.html")
+      )?.targetId;
+      if (!frameTarget) await framePage.waitForTimeout(100);
+    }
+    assert(frameTarget, "the cross-site iframe is an out-of-process target");
+    const frameButton = await js(
+      "const select = document.createElement('select');" +
+      "select.id = 'frame-dropdown';" +
+      "select.innerHTML = '<option>Uno</option><option>Dos</option>';" +
+      "select.style.cssText = 'position:fixed;left:30px;top:100px;width:160px;height:30px;z-index:5';" +
+      "window.__selectPresses = 0;" +
+      "select.addEventListener('mousedown', () => window.__selectPresses++);" +
+      "document.body.append(select);" +
+      "const button = document.querySelector('#iframe-action');" +
+      "button.style.cssText = 'position:fixed;left:250px;top:20px;width:200px;height:40px;z-index:5';" +
+      "const rect = button.getBoundingClientRect();" +
+      "return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };",
+      frameTarget
+    );
+    // The iframe content box starts after its 7px border and 5px padding.
+    const frameOrigin = { x: 40 + 7 + 5, y: 60 + 7 + 5 };
+    const frameDropdown = { x: frameOrigin.x + 30 + 80, y: frameOrigin.y + 100 + 15 };
+
+    // A select inside an iframe gets no locator suggestion (selectOption
+    // queries the top-level document), so the refusal names the generic call
+    // and lists the select's options.
+    await assertRejects(
+      () => framePage.mouse.click(frameDropdown.x, frameDropdown.y),
+      'page.mouse.click refused to press the left mouse button on a <select>',
+      "mouse.click on a drop-down select inside a cross-site iframe is refused"
+    );
+    await assertRejects(
+      () => framePage.mouse.click(frameDropdown.x, frameDropdown.y),
+      'Options: "Uno", "Dos".',
+      "the cross-site iframe refusal lists the select's options"
+    );
+    await framePage.mouse.move(frameDropdown.x, frameDropdown.y);
+    await assertRejects(
+      () => framePage.mouse.down(),
+      "page.mouse.down refused",
+      "mouse.down on a drop-down select inside a cross-site iframe is refused"
+    );
+    assertEqual(
+      await js("return window.__selectPresses + ':' + document.querySelector('#frame-dropdown').matches(':open')", frameTarget),
+      "0:false",
+      "no refused press reaches the select inside the cross-site iframe"
+    );
+    await assertRejects(
+      () => framePage.mouse.click(40 + 20 + 80, 250 + 20 + 15),
+      "page.mouse.click refused",
+      "mouse.click on a drop-down select inside a sandboxed iframe is refused"
+    );
+
+    await framePage.mouse.click(frameOrigin.x + frameButton.x, frameOrigin.y + frameButton.y);
+    assertEqual(
+      await js("return document.querySelector('#iframe-result')?.textContent", frameTarget),
+      "clicked:true",
+      "mouse.click elsewhere inside the cross-site iframe still presses"
+    );
+    } finally {
+      // Closing the Page removes its frames and with them any menu a regression opened.
+      await framePage.close();
     }
   `;
 }
