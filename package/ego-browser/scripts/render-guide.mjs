@@ -34,7 +34,7 @@ export function renderGuide(source, { platform = null, name = "guide" } = {}) {
   const guide = [
     `[ego-browser:skill] ego-browser usage guide ${label}`,
     "",
-    unwrapProse(selectPlatform(match[2], platform, name).trim()),
+    compactTables(unwrapProse(selectPlatform(match[2], platform, name).trim())),
     "",
     `[ego-browser:skill] end of guide v${version}`,
     "",
@@ -111,4 +111,27 @@ export function unwrapProse(markdown) {
     if (fence) inFence = !inFence;
   }
   return lines.join("\n");
+}
+
+// Drop the padding Prettier adds to align table columns. It renders the same
+// and would otherwise spend the guide's character budget on spaces.
+export function compactTables(markdown) {
+  let inFence = false;
+  return markdown
+    .split("\n")
+    .map((line) => {
+      if (/^\s*```/.test(line)) inFence = !inFence;
+      if (inFence || !/^\s*\|.*\|\s*$/.test(line)) return line;
+      const cells = line
+        .trim()
+        .slice(1, -1)
+        .split(/(?<!\\)\|/)
+        .map((cell) => cell.trim());
+      const separator = cells.every((cell) => /^:?-+:?$/.test(cell));
+      const row = separator
+        ? cells.map((cell) => cell.replace(/-+/, "---"))
+        : cells;
+      return `| ${row.join(" | ")} |`;
+    })
+    .join("\n");
 }

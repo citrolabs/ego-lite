@@ -38,17 +38,17 @@ function assertPureSkillText(value, label) {
 function assertTaskSpaceSafety(skill, label) {
   assert.match(
     skill,
-    /One user goal keeps one TaskSpace across your replies while that space\s+exists/i,
+    /One goal uses one space; use several only when the user explicitly\s+asks/i,
     `${label} must keep one TaskSpace per user goal`,
   );
   assert.match(
     skill,
-    /continues in that goal's\s+space if it still exists, whatever state your last reply left it in/i,
+    /continues in that goal's\s+space if it\s+still\s+exists,\s+whatever\s+state\s+your\s+last\s+reply\s+left\s+it\s+in/i,
     `${label} must resume the existing TaskSpace across rounds`,
   );
   assert.match(
     skill,
-    /Claim any other user-owned or inactive space only when the user explicitly\s+asks/i,
+    /Another user-owned, inactive, or finished space\.\*\*\s+Claim it only when the\s+user explicitly asks/i,
     `${label} must not implicitly claim a user-owned TaskSpace`,
   );
   assert.match(
@@ -68,7 +68,7 @@ function assertTaskSpaceSafety(skill, label) {
   );
   assert.match(
     skill,
-    /End each reply's browser work with one `finish\(\)` in a separate last script,[\s\S]*?wait for it\s+before you report/i,
+    /Run `await task\.finish\(\{ keep: \[\] \}\)` once, in a separate last script[\s\S]*?wait for it\s+before you report/i,
     `${label} must wait for cleanup before reporting completion`,
   );
   assert.match(
@@ -161,10 +161,10 @@ test("versioned guide restores v2 Pages across script rounds", () => {
 
   assert.match(
     skill,
-    /Every invocation starts a new Node\.js process[\s\S]*Page labels\s+persist; JavaScript variables do not/i,
+    /Every round is a new Node\.js process: JavaScript variables are lost;[\s\S]*Page labels\s+persist/i,
   );
   assert.match(skill, /await taskSpace\(SPACE_ID\);[\s\S]*task\.adopt\(/);
-  assert.match(skill, /After the page changes, take a new snapshot/);
+  assert.match(skill, /a new one\s+after the page changes/);
   assert.doesNotMatch(
     skill,
     /switchTaskSpace|completeTaskSpace|closeTaskSpace/,
