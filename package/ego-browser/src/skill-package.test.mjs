@@ -218,6 +218,7 @@ test("the bundled entry Skill matches the published entry Skill", async () => {
   ]);
   assert.deepEqual((await readdir(join(entry, "references"))).sort(), [
     "clearing-state.md",
+    "install-linux.md",
     "install-macos.md",
     "install-windows.md",
     "install.md",
@@ -251,6 +252,7 @@ test("the shared install guide routes to a file per operating system", async () 
   const shared = await readFile(join(references, "install.md"), "utf8");
   assert.match(shared, /\(install-macos\.md\)/);
   assert.match(shared, /\(install-windows\.md\)/);
+  assert.match(shared, /\(install-linux\.md\)/);
   assert.doesNotMatch(shared, /PowerShell|install\.sh|SmartScreen|Gatekeeper/);
   const macos = await readFile(join(references, "install-macos.md"), "utf8");
   assert.match(macos, /scripts\/install\.sh/);
@@ -262,6 +264,10 @@ test("the shared install guide routes to a file per operating system", async () 
   assert.match(windows, /PowerShell/);
   assert.match(windows, /scripts\/install\.ps1/);
   assert.doesNotMatch(windows, /install\.sh|Gatekeeper/);
+  const linux = await readFile(join(references, "install-linux.md"), "utf8");
+  assert.match(linux, /scripts\/install\.sh/);
+  assert.match(linux, /--real-session/);
+  assert.doesNotMatch(linux, /PowerShell|SmartScreen|Gatekeeper/);
 });
 
 test("project Agent and Codex entries share the canonical Skill", async () => {

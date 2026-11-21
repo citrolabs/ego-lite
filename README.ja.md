@@ -9,6 +9,7 @@
 <p>
   <a href="https://cdn.ego.app/setup/macos/arm64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/Download-Apple%20Silicon-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Apple Silicon" /></a>
   <a href="https://cdn.ego.app/setup/macos/x64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/Download-Intel-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for Intel" /></a>
+  <a href="https://cdn.ego.app/setup/windows/x64/egoliteSetup-Y7MbxKIuhzFB.exe"><img src="https://img.shields.io/badge/Download-Windows-000000?style=for-the-badge&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTAgMGgxMS4zNzd2MTEuMzcySDB6bTEyLjYyMyAwSDI0djExLjM3MkgxMi42MjN6TTAgMTIuNjIzaDExLjM3N1YyNEgwem0xMi42MjMgMEgyNFYyNEgxMi42MjN6Ii8%2BPC9zdmc%2B" alt="Download for Windows" /></a>
   <a href="https://discord.gg/5eGZVvHbTq"><img src="https://img.shields.io/badge/Discord-Join-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord" /></a>
   <a href="https://x.com/ego_agent"><img src="https://img.shields.io/badge/Follow-%40ego__agent-000000?style=for-the-badge&logo=x&logoColor=white" alt="Follow @ego_agent on X" /></a>
   <a href="https://lite.ego.app/document/"><img src="https://img.shields.io/badge/Docs-lite.ego.app-1E90FF?style=for-the-badge&logo=gitbook&logoColor=white" alt="Docs" /></a>
@@ -39,16 +40,17 @@ https://github.com/user-attachments/assets/ffe7954b-58ee-411e-b35d-ec30c58a08bc
 
 ## クイックスタート
 
-ego lite は現在 macOS に対応しており、Windows 版はまもなくクローズドベータを開始する予定です。Linux 版は[ロードマップ](https://lite.ego.app/roadmap)にあります。
+ego lite は現在 macOS と Windows に対応しています。Linux 版は[ロードマップ](https://lite.ego.app/roadmap)にあります。
 
 ### 1. インストール
 
 自分の進め方に合う方法を選んでください。
 
-**1.1 macOS アプリをダウンロードする**
+**1.1 アプリをダウンロードする**
 
 <a href="https://cdn.ego.app/setup/macos/arm64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/⬇%20Apple%20Silicon-.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download ego lite for Apple Silicon" /></a>
 <a href="https://cdn.ego.app/setup/macos/x64/egolite-Y7MbxKIuhzFB.dmg"><img src="https://img.shields.io/badge/⬇%20Intel-.dmg-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download ego lite for Intel" /></a>
+<a href="https://cdn.ego.app/setup/windows/x64/egoliteSetup-Y7MbxKIuhzFB.exe"><img src="https://img.shields.io/badge/⬇%20Windows-.exe-000000?style=for-the-badge&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTAgMGgxMS4zNzd2MTEuMzcySDB6bTEyLjYyMyAwSDI0djExLjM3MkgxMi42MjN6TTAgMTIuNjIzaDExLjM3N1YyNEgwem0xMi42MjMgMEgyNFYyNEgxMi42MjN6Ii8%2BPC9zdmc%2B" alt="Download ego lite for Windows" /></a>
 
 クリックしてダウンロードし、開いてインストールします。Apple Silicon 版と Intel 版のどちらをインストールしても、ego lite はマシン上で使われている各エージェントの Skill ディレクトリに `ego-browser` Skill を追加します。
 
@@ -101,31 +103,31 @@ ego-browser で x.com の @ego_agent をフォローして
 
 ほとんどのツールはブラウザを自動化できます。本当に問われるのは次の 3 点です。エージェントがどのブラウザを使うのか。あなたが同時に作業を続けられるのか。そしてそのツールが、あなたがすでに使っているエージェント向けなのか、内蔵エージェント向けなのか。
 
-| 機能 | ego lite | Browser-Use | agent-browser (Vercel) | ChatGPT Atlas | Perplexity Comet |
-|---|:---:|:---:|:---:|:---:|:---:|
-| 並列マルチタスク | ✓ | — | — | — | — |
-| 再利用可能な Skill | ✓ | — | — | — | — |
-| Chrome のデータを引き継ぐ | ✓ | — | — | ✓ | ✓ |
-| 同じブラウザ、独立したワークスペース | ✓ | — | — | — | — |
-| 圧縮されたセマンティック入力 | ✓ | — | ✓ | — | — |
-| 外部エージェントから制御可能 | ✓ | ✓ | ✓ | — | — |
-| データはローカルに保存 | ✓ | ✓ | ✓ | — | — |
-| ログインの手間がない | ✓ | — | — | ✓ | ✓ |
-| 日常使いのブラウザ | ✓ | — | — | ✓ | ✓ |
-| 無料 | ✓ | ✓ | ✓ | — | — |
-
-同じ課題に取り組むカテゴリは、ほかにも 2 つあります。Browser-Use や Vercel の agent-browser のようなブラウザ自動化フレームワークは、エージェントが呼び出すライブラリであり、ブラウザ自体は付属しません。そのため操作するには別のブラウザが必要で、あなたのログイン状態がそのまま引き継がれることはほとんどありません。ChatGPT Atlas や Perplexity Comet のような AI ブラウザは内蔵エージェントを備えており、そのエージェントしかブラウザを操作できません。ego lite は 1 つのブラウザであり、最初からあなたと、どのエージェントとでも共有するために設計されています。
-
+| 機能 | ego lite | ブラウザ拡張機能<br><sub>Claude/Codex in Chrome</sub> | 内蔵ブラウザ<br><sub>Claude/ChatGPT の内蔵ブラウザ</sub> | クラウドブラウザ<br><sub>Browserbase/Browser Use</sub> | ブラウザ CLI<br><sub>playwright-cli/Browser Harness</sub> | AI ブラウザ<br><sub>Comet/Dia</sub> |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|
+| あらゆる AI エージェントに対応 | ✓ | — | — | ✓ | ✓ | — |
+| ブラウザのログイン状態をそのまま利用 | ✓ | ✓ | — | — | — | ✓ |
+| CAPTCHA が出にくい | ✓ | ✓ | — | — | — | ✓ |
+| パソコン全体を操作できる | ✓ | — | ✓ | — | ✓ | — |
+| ブラウザを乗っ取らない | ✓ | — | ✓ | ✓ | — | — |
+| 並列マルチタスク | ✓ | — | — | ✓ | — | — |
+| 大規模なスクレイピングに対応 | ✓ | — | — | ✓ | ✓ | — |
+| 普段使いのブラウザとして使える | ✓ | ✓ | — | — | — | ✓ |
+| 無料 | ✓ | — | — | — | ✓ | — |
+| データのローカル保存 | ✓ | ✓ | ✓ | — | ✓ | — |
+| 再利用可能なスキル (近日公開) | ✓ | — | — | — | — | — |
 
 ## ベンチマーク
 
-ego lite を Vercel の agent-browser と 4 つの複雑なブラウザ自動化タスクで比較し、ベンチマークしました。ego lite はどのタスクも最大 2.5 倍の速さで、しかもトークン消費を大幅に抑えて完了しました。タスクが難しいほど、差は広がります。結果は次のとおりです。
+より速く、成功率は高く、トークン消費も少なく。ego-browser と、AI エージェント向けのほかの 4 つのブラウザツールを Real-World Bench で比較しました。実際に公開されている Web サイト上で行う、31 の複雑なブラウザ自動化タスクです。ego-browser は速度、成功率、コストのそれぞれでリードしており、エージェントは複雑な Web タスクをほかのツールより 47〜63% 速くこなせます。
 
 <div align="center">
 
-<img src="docs/assets/ego-vs-agent-benchmark.png" alt="ego lite vs agent-browser, speed and cost across four tasks" width="100%" />
+<img src="docs/assets/real-world-bench.jpg" alt="Real-World Bench, 31 tasks: ego-browser vs Browser Harness, playwright-cli, chrome-devtools-cli and agent-browser on turns, rubric average, perfect rate, trajectory efficiency, average duration and average cost" width="100%" />
 
 </div>
+
+どのツールも同じ 31 のタスクを、同じエージェント（pi）と同じモデル（gpt-5.6-sol、思考レベル max）で実行し、同じ判定モデルがタスクごとの評価基準（ルーブリック）に沿って採点しました。すべての要件を満たした場合にのみ、完全成功として数えます。
 
 ## ドキュメント
 
