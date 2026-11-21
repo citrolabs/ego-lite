@@ -177,6 +177,72 @@ test("scroll targeting recognizes an element clipped by a nested scroller", () =
   assert.equal(scrollRequestForPoint(target, { x: 80, y: 160 }), null);
 });
 
+test("hit target accepts any part of the button or link that owns the target", () => {
+  const { interceptingElementAtPoint } = Function(`
+    ${HIT_TARGET_HELPERS}
+    return { interceptingElementAtPoint };
+  `)();
+  let topmost = null;
+  const root = {
+    nodeType: 9,
+    elementsFromPoint: () => [topmost],
+    elementFromPoint: () => topmost,
+  };
+  const node = (tagName, parentElement, role) => ({
+    tagName,
+    parentElement,
+    getAttribute: (name) => (name === "role" ? (role ?? null) : null),
+    hasAttribute: () => false,
+    getRootNode: () => root,
+  });
+  const point = { x: 10, y: 10 };
+
+  const body = node("BODY", null);
+  const button = node("BUTTON", body);
+  const label = node("SPAN", button);
+  const feedbackLayer = node("DIV", button);
+  topmost = feedbackLayer;
+  assert.equal(
+    interceptingElementAtPoint(label, point),
+    null,
+    "a sibling layer inside the same button does not intercept its label",
+  );
+
+  const roleLink = node("DIV", body, "link");
+  const linkLabel = node("SPAN", roleLink);
+  topmost = node("DIV", roleLink);
+  assert.equal(interceptingElementAtPoint(linkLabel, point), null);
+
+  const outsideOverlay = node("DIV", body);
+  topmost = outsideOverlay;
+  assert.equal(
+    interceptingElementAtPoint(label, point),
+    outsideOverlay,
+    "an overlay outside the button still intercepts",
+  );
+
+  const nestedLink = node("A", button);
+  nestedLink.hasAttribute = (name) => name === "href";
+  const nestedLinkLayer = node("DIV", nestedLink);
+  for (const hit of [nestedLink, nestedLinkLayer]) {
+    topmost = hit;
+    assert.equal(
+      interceptingElementAtPoint(label, point),
+      hit,
+      "a separate control nested in the button intercepts its label",
+    );
+  }
+
+  const plainParent = node("DIV", body);
+  const plainLabel = node("SPAN", plainParent);
+  topmost = node("DIV", plainParent);
+  assert.equal(
+    interceptingElementAtPoint(plainLabel, point),
+    topmost,
+    "a non-interactive container is not widened to its siblings",
+  );
+});
+
 test("action targeting chooses a real inline fragment instead of the bounding-box gap", () => {
   const { actionPointForElement } = Function(`
     ${HIT_TARGET_HELPERS}

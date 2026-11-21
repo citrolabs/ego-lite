@@ -416,11 +416,50 @@ export const HIT_TARGET_HELPERS = `
     }
     return hitElement;
   }
+  // A click on button or link content is a click on that button or link: the
+  // browser may deliver it to any part of the control, such as a sibling
+  // feedback layer stretched over the label. Form fields keep their own box.
+  function pointerHitOwner(target) {
+    const tag = String(target?.tagName || "").toUpperCase();
+    if (
+      ["INPUT", "TEXTAREA", "SELECT"].includes(tag) ||
+      target?.isContentEditable
+    ) return target;
+    let current = target;
+    while (current) {
+      const currentTag = String(current.tagName || "").toUpperCase();
+      const role = String(current.getAttribute?.("role") || "")
+        .trim().toLowerCase();
+      if (
+        currentTag === "BUTTON" || currentTag === "A" ||
+        role === "button" || role === "link"
+      ) return current;
+      current = composedParent(current);
+    }
+    return target;
+  }
   function interceptingElementAtPoint(target, point) {
     const hitElement = hitElementAtPoint(target, point);
+    const owner = pointerHitOwner(target);
+    const targetAncestors = new Set();
+    for (let node = target; node; node = composedParent(node)) {
+      targetAncestors.add(node);
+    }
+    // Walk up from the hit to the first node that also contains the target.
+    // A separate control on the way, such as a link nested in the button,
+    // would receive the click itself, so it intercepts.
     let current = hitElement;
-    while (current && current !== target) current = composedParent(current);
+    let crossesControl = false;
+    while (current && !targetAncestors.has(current)) {
+      if (isInteractiveElement(current)) crossesControl = true;
+      current = composedParent(current);
+    }
     if (current === target) return null;
+    if (current && !crossesControl) {
+      let node = current;
+      while (node && node !== owner) node = composedParent(node);
+      if (node === owner) return null;
+    }
 
     current = target;
     while (current && current !== hitElement) current = composedParent(current);
