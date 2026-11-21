@@ -545,7 +545,8 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
   {
     name: "Page.waitForFileChooser",
     signature: "page.waitForFileChooser({ timeout? })",
-    summary: "Wait for a dynamically created file chooser.",
+    summary:
+      "Wait for a dynamically created file chooser opened by this Page or any of its iframes, including cross-process ones.",
     options: { timeout },
   },
   {

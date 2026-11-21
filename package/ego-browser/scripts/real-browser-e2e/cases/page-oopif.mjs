@@ -59,6 +59,24 @@ export function pageOopifActionCase() {
       "Page.fill writes through the iframe session"
     );
 
+    // The main document has the same button; leave only the cross-site one.
+    await page.evaluate(() =>
+      document.querySelector("#dynamic-file-button").remove()
+    );
+    const frameChooserPromise = page.waitForFileChooser({ timeout: 5_000 });
+    await page.click("loc=css:#dynamic-file-button");
+    const frameChooser = await frameChooserPromise;
+    assertEqual(frameChooser.isMultiple(), true, "an OOPIF chooser reports multiple mode");
+    await frameChooser.setFiles([uploadPath, uploadPathTwo]);
+    assertEqual(
+      await js(
+        "return Array.from(document.querySelector('[data-dynamic-upload]').files).map(file => file.name).join(',')",
+        frame
+      ),
+      "fixture-upload.txt,fixture-upload-two.txt",
+      "page.waitForFileChooser uploads to an input inside the OOPIF"
+    );
+
     const sameOrigin = await newPageAt(task, baseUrl + "/same-origin-frame");
     assertIncludes(
       await sameOrigin.snapshot({ scope: "full_page" }),
