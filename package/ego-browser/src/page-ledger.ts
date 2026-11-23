@@ -19,6 +19,11 @@ export type PageOrigin = "agent" | "unknown";
 export type PageLedgerEntry = {
   targetId: string;
   openedBy: PageOrigin;
+  /**
+   * Opened by the agent during the current task. Only these Pages count
+   * against the page budget; finish() clears the flag on the Pages it keeps.
+   */
+  createdInTask?: boolean;
   refs?: PageRefState;
 };
 
@@ -34,8 +39,16 @@ export type PageLedger = {
   releasedLabels: string[];
   initialized: boolean;
   userControlPending: boolean;
+  /**
+   * Tabs that are not Pages. Current runtimes record only the SDK's blank
+   * anchor tabs here (origin "agent"); "unknown" entries come from earlier
+   * runtimes and become Pages at the next reconcile with control.
+   */
   unmanagedTargets: Record<string, PageOrigin>;
-  /** Agent tabs an earlier finish() left open for the user. */
+  /**
+   * Written by earlier runtimes: agent tabs a finish() left open for the
+   * user. Read once and converted into agent-origin Pages.
+   */
   retainedTargets: string[];
   pages: Record<string, PageLedgerEntry>;
 };
@@ -93,12 +106,15 @@ export function runtimeInstanceId(parentPid = process.ppid): string {
 }
 
 type AddPageOptions = {
-  as?: string;
   openedBy?: PageOrigin;
 };
 
 type ReconcileOptions = {
-  autoAdoptNew?: boolean;
+  /**
+   * The agent controls the space: every live tab that is not an SDK anchor
+   * becomes a Page. Without control, new tabs are left unrecorded.
+   */
+  assignLabels?: boolean;
   afterUserControl?: boolean;
 };
 
@@ -163,7 +179,11 @@ export class PageLedgerStore {
     await this.#cleanupExpiredLedgers(browserInstanceId);
     const ledger = emptyLedger(spaceId, browserInstanceId);
     const label = nextAutomaticLabel(ledger, new Set());
-    const entry: PageLedgerEntry = { targetId, openedBy: "agent" };
+    const entry: PageLedgerEntry = {
+      targetId,
+      openedBy: "agent",
+      createdInTask: true,
+    };
     ledger.initialized = true;
     ledger.usedLabels.push(label);
     ledger.pages[label] = entry;
@@ -183,20 +203,20 @@ export class PageLedgerStore {
   }
 
   /**
-   * End a task whose space stays open for the user. Labels end with the task,
-   * but the origin of the tabs the agent left open survives so a later claim
-   * does not mistake them for user tabs. The ledger stays uninitialized: every
-   * other tab found at the claim is still treated as unknown.
+   * End a task whose space stays open for the user. The Pages left open keep
+   * their labels and origin, so a later claim continues with the same labels
+   * and closes only the agent's own Pages. Label numbering continues, the
+   * Pages stop counting against the budget, and tabs the user opens before
+   * the next claim are recorded as unknown origin.
    */
-  async retainForUser(spaceId: number, targetIds: string[]): Promise<void> {
-    assertSpaceId(spaceId);
-    targetIds.forEach(assertTargetId);
-    const ledger = emptyLedger(spaceId, await this.#currentBrowserInstanceId());
-    for (const targetId of targetIds) {
-      ledger.unmanagedTargets[targetId] = "agent";
-    }
-    ledger.retainedTargets = [...targetIds];
-    await this.#writeLatest(spaceId, ledger);
+  async retainForUser(spaceId: number): Promise<void> {
+    await this.#update(spaceId, (ledger) => {
+      for (const page of Object.values(ledger.pages)) {
+        delete page.createdInTask;
+      }
+      ledger.retainedTargets = [];
+      ledger.userControlPending = true;
+    });
   }
 
   async getPage(spaceId: number, label: string): Promise<ManagedPage> {
@@ -219,7 +239,6 @@ export class PageLedgerStore {
     options: AddPageOptions = {},
   ): Promise<ManagedPage> {
     assertTargetId(targetId);
-    if (options.as !== undefined) assertLabel(options.as);
     let added: ManagedPage;
     await this.#update(spaceId, (ledger) => {
       const existing = Object.entries(ledger.pages).find(
@@ -229,14 +248,12 @@ export class PageLedgerStore {
         throw new Error(`target ${targetId} is already page ${existing[0]}`);
       }
 
-      const used = new Set(ledger.usedLabels);
-      const label = options.as || nextAutomaticLabel(ledger, used);
-      if (used.has(label)) {
-        throw new Error(`page label already used: ${label}`);
-      }
+      const label = nextAutomaticLabel(ledger, new Set(ledger.usedLabels));
+      const openedBy = options.openedBy || "agent";
       const entry: PageLedgerEntry = {
         targetId,
-        openedBy: options.openedBy || "agent",
+        openedBy,
+        ...(openedBy === "agent" ? { createdInTask: true } : {}),
       };
       ledger.initialized = true;
       delete ledger.unmanagedTargets[targetId];
@@ -276,28 +293,6 @@ export class PageLedgerStore {
       }
       removed = { label, ...entry };
       delete ledger.pages[label];
-    });
-    return removed!;
-  }
-
-  async releasePage(spaceId: number, label: string): Promise<ManagedPage> {
-    assertLabel(label);
-    let removed: ManagedPage;
-    await this.#update(spaceId, (ledger) => {
-      const entry = ledger.pages[label];
-      if (!entry) {
-        if (ledger.releasedLabels.includes(label)) {
-          throw new Error(`page ${label} was released`);
-        }
-        if (ledger.usedLabels.includes(label)) {
-          throw new Error(`page ${label} was closed`);
-        }
-        throw new Error(`page label not found: ${label}`);
-      }
-      removed = { label, ...entry };
-      delete ledger.pages[label];
-      ledger.releasedLabels.push(label);
-      ledger.unmanagedTargets[entry.targetId] = entry.openedBy;
     });
     return removed!;
   }
@@ -350,28 +345,14 @@ export class PageLedgerStore {
     const hasMissingUnmanaged = Object.keys(current.unmanagedTargets).some(
       (targetId) => !live.has(targetId),
     );
-    const knownTargets = new Set([
-      ...Object.values(current.pages).map((page) => page.targetId),
-      ...Object.keys(current.unmanagedTargets),
-    ]);
-    const newTargets = [...live].filter(
-      (targetId) => !knownTargets.has(targetId),
-    );
-    const needsInitialization = !current.initialized;
-    const protectsUserTabs =
-      options.afterUserControl || current.userControlPending;
-    const shouldAdopt =
-      current.initialized &&
-      options.autoAdoptNew &&
-      !protectsUserTabs &&
-      newTargets.length > 0;
-    if (
-      !hasMissingPage &&
-      !hasMissingUnmanaged &&
-      !needsInitialization &&
-      !protectsUserTabs &&
-      !shouldAdopt
-    ) {
+    const unlabeled = unlabeledTargets(current, live);
+    const needsLabels =
+      options.assignLabels === true &&
+      (unlabeled.length > 0 ||
+        !current.initialized ||
+        current.userControlPending ||
+        current.retainedTargets.length > 0);
+    if (!hasMissingPage && !hasMissingUnmanaged && !needsLabels) {
       return current;
     }
 
@@ -385,45 +366,39 @@ export class PageLedgerStore {
       ledger.retainedTargets = ledger.retainedTargets.filter((targetId) =>
         live.has(targetId),
       );
+      if (!options.assignLabels) return;
 
-      const managedTargets = new Set(
-        Object.values(ledger.pages).map((page) => page.targetId),
-      );
-      const untracked = [...live].filter(
-        (targetId) =>
-          !managedTargets.has(targetId) &&
-          !Object.hasOwn(ledger.unmanagedTargets, targetId),
-      );
-      if (!ledger.initialized) {
-        // The first observable tab set is the control boundary. It may contain
-        // user pages from before claim/takeover, so preserve it rather than
-        // guessing that those tabs were opened by the current agent.
-        for (const targetId of untracked) {
-          ledger.unmanagedTargets[targetId] = "unknown";
-        }
-        ledger.initialized = true;
-        ledger.userControlPending = false;
-        return;
-      }
-      if (protectsUserTabs) {
-        for (const targetId of untracked) {
-          ledger.unmanagedTargets[targetId] = "unknown";
-        }
-        ledger.userControlPending = false;
-        return;
-      }
-      if (!options.autoAdoptNew) return;
-
+      // A tab first seen without a ledger, or after the user had control, may
+      // be the user's: record it as unknown origin so finish() leaves it open.
+      // It is still a Page the agent can operate.
+      const fromUser =
+        !ledger.initialized ||
+        options.afterUserControl === true ||
+        ledger.userControlPending;
+      const retained = new Set(ledger.retainedTargets);
       const used = new Set(ledger.usedLabels);
-      for (const targetId of untracked) {
+      for (const targetId of unlabeledTargets(ledger, live)) {
+        const legacyOrigin = ledger.unmanagedTargets[targetId];
+        const openedBy: PageOrigin = retained.has(targetId)
+          ? "agent"
+          : legacyOrigin === "unknown" || fromUser
+            ? "unknown"
+            : "agent";
+        const createdInTask =
+          openedBy === "agent" && !retained.has(targetId) && !fromUser;
         const label = nextAutomaticLabel(ledger, used);
         used.add(label);
         ledger.usedLabels.push(label);
         ledger.pages[label] = {
           targetId,
-          openedBy: "agent",
+          openedBy,
+          ...(createdInTask ? { createdInTask: true } : {}),
         };
+        delete ledger.unmanagedTargets[targetId];
       }
+      ledger.retainedTargets = [];
+      ledger.initialized = true;
+      ledger.userControlPending = false;
     });
   }
 
@@ -750,6 +725,23 @@ function ledgerBrowserInstanceId(value: unknown): string | undefined {
     : undefined;
 }
 
+/**
+ * Live tabs that are neither Pages nor SDK anchors. An agent-origin
+ * unmanaged tab is an anchor unless an earlier runtime retained it for the
+ * user.
+ */
+function unlabeledTargets(ledger: PageLedger, live: Set<string>): string[] {
+  const managed = new Set(
+    Object.values(ledger.pages).map((page) => page.targetId),
+  );
+  const retained = new Set(ledger.retainedTargets);
+  return [...live].filter(
+    (targetId) =>
+      !managed.has(targetId) &&
+      (ledger.unmanagedTargets[targetId] !== "agent" || retained.has(targetId)),
+  );
+}
+
 function nextAutomaticLabel(ledger: PageLedger, used: Set<string>): string {
   let sequence = ledger.nextLabel;
   let label = `p${sequence}`;
@@ -829,7 +821,9 @@ function validateLedger(
       !stored.usedLabels.includes(label) ||
       !page ||
       typeof page.targetId !== "string" ||
-      !["agent", "user", "unknown"].includes(page.openedBy)
+      !["agent", "user", "unknown"].includes(page.openedBy) ||
+      (page.createdInTask !== undefined &&
+        typeof page.createdInTask !== "boolean")
     ) {
       throw new Error(`invalid page ledger ${path}: invalid page ${label}`);
     }
@@ -841,6 +835,7 @@ function validateLedger(
     pages[label] = {
       targetId: page.targetId,
       openedBy: normalizePageOrigin(page.openedBy),
+      ...(page.createdInTask ? { createdInTask: true } : {}),
       ...(page.refs === undefined
         ? {}
         : { refs: validatePageRefState(page.refs) }),

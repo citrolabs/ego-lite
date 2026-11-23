@@ -1056,7 +1056,7 @@ async function waitForLedgerTarget(ledger, spaceId, targetId) {
   throw new Error(`timed out waiting for ledger target ${targetId}`);
 }
 
-test("background discovery does not adopt the pre-existing tab baseline", async () => {
+test("the pre-existing tab baseline becomes an unknown-origin Page without a popup notice", async () => {
   await withFixture(async (fixture) => {
     resetPageNotices();
     fixture.addExternalTab("target-existing", "https://example.test/existing");
@@ -1066,9 +1066,10 @@ test("background discovery does not adopt the pre-existing tab baseline", async 
     await initializeTaskSpaceHandle(task);
     const page = await openTestPage(task, "https://example.test/managed");
 
-    assert.equal(page.label, "p1");
-    assert.deepEqual((await ledger.read(7)).unmanagedTargets, {
-      "target-existing": "unknown",
+    assert.equal(page.label, "p2");
+    assert.deepEqual((await ledger.read(7)).pages.p1, {
+      targetId: "target-existing",
+      openedBy: "unknown",
     });
     assert.deepEqual(consumeUnhandledPageNotices(), []);
   });
@@ -1550,7 +1551,11 @@ test("TaskSpace uses spaceId and finishes while keeping every managed Page", asy
       closedManagedLabels: [],
       preservedUnmanagedCount: 0,
     });
-    assert.deepEqual((await ledger.read(7)).pages, {});
+    const retained = await ledger.read(7);
+    assert.deepEqual(retained.pages, {
+      [page.label]: { targetId: page.targetId, openedBy: "agent" },
+    });
+    assert.equal(retained.userControlPending, true);
     assert.equal(fixture.tabs.has(page.targetId), true);
 
     assert.deepEqual(lifecycleCalls, ["handOff", "finish"]);
@@ -1579,17 +1584,14 @@ test("TaskSpace finish keeps named Pages and protects unknown-origin Pages", asy
     const p2 = await openTestPage(task, "https://example.test/two");
     const p3 = await openTestPage(task, "https://example.test/three");
     fixture.addExternalTab("target-user", "https://example.test/user");
-    await ledger.addPage(7, "target-user", {
-      as: "user-page",
-      openedBy: "unknown",
-    });
+    await ledger.addPage(7, "target-user", { openedBy: "unknown" });
 
     const receipt = await task.finish({ keep: ["p2"] });
 
     assert.deepEqual(receipt, {
       spaceId: 7,
       closedSpace: false,
-      keptManagedLabels: ["p2", "user-page"],
+      keptManagedLabels: ["p2", "p4"],
       closedManagedLabels: ["p1", "p3"],
       preservedUnmanagedCount: 0,
     });
@@ -1601,7 +1603,10 @@ test("TaskSpace finish keeps named Pages and protects unknown-origin Pages", asy
     ]);
     assert.equal(fixture.tabs.has(p1.targetId), false);
     assert.equal(fixture.tabs.has(p3.targetId), false);
-    assert.deepEqual((await ledger.read(7)).pages, {});
+    assert.deepEqual((await ledger.read(7)).pages, {
+      p2: { targetId: p2.targetId, openedBy: "agent" },
+      p4: { targetId: "target-user", openedBy: "unknown" },
+    });
   });
 });
 
@@ -1727,7 +1732,7 @@ function capturedRoundOutput() {
   return output;
 }
 
-test("a claimed space closes when the agent closes task.pages() without adopting", async () => {
+test("a claimed space continues with the kept Page label and closes with keep: []", async () => {
   await withFixture(async (fixture) => {
     resetSink();
     const lifecycleCalls = [];
@@ -1735,9 +1740,16 @@ test("a claimed space closes when the agent closes task.pages() without adopting
 
     const { task: claimed } = finishFixtureTask(fixture, lifecycleCalls);
     const pages = await claimed.pages();
-    assert.equal(pages.length, 0, "labels ended with the task");
-    for (const page of pages) await page.close();
-    assert.equal(fixture.tabs.has(keptTarget), true, "nothing was closed yet");
+    assert.deepEqual(
+      pages.map((page) => [page.label, page.targetId]),
+      [["p1", keptTarget]],
+      "the kept Page keeps its label after the claim",
+    );
+    assert.equal(
+      await claimed.page("p1").url(),
+      "https://example.test/kept",
+      "the label works without adopt",
+    );
 
     const receipt = await claimed.finish({ keep: [] });
 
@@ -1745,11 +1757,11 @@ test("a claimed space closes when the agent closes task.pages() without adopting
       spaceId: 7,
       closedSpace: true,
       keptManagedLabels: [],
-      closedManagedLabels: [],
+      closedManagedLabels: ["p1"],
       preservedUnmanagedCount: 0,
     });
     assert.deepEqual(lifecycleCalls, ["close"]);
-    assert.doesNotMatch(capturedRoundOutput(), /did not close/);
+    assert.doesNotMatch(capturedRoundOutput(), /left \d+ tab/);
   });
 });
 
@@ -1776,16 +1788,22 @@ test("a three-reply conversation closes the space it kept and claimed twice", as
     const keptTarget = await finishKeepingFirstPage(fixture, lifecycleCalls);
 
     const { task: followUp } = finishFixtureTask(fixture, lifecycleCalls);
-    const page = await followUp.adopt((await followUp.tabs())[0].page);
-    assert.equal(page.targetId, keptTarget);
+    const page = followUp.page("p1");
     await page.goto("https://example.test/follow-up");
+    assert.equal(page.targetId, keptTarget);
+    const second = await openTestPage(followUp, "https://example.test/second");
+    assert.equal(second.label, "p2", "label numbering continues after a claim");
     const kept = await followUp.finish({ keep: [page.label] });
     assert.equal(kept.closedSpace, false);
+    assert.deepEqual(kept.closedManagedLabels, ["p2"]);
     assert.deepEqual(lifecycleCalls, ["finish"]);
 
     lifecycleCalls.length = 0;
     const { task: summary } = finishFixtureTask(fixture, lifecycleCalls);
-    assert.equal((await summary.pages()).length, 0);
+    assert.deepEqual(
+      (await summary.pages()).map((item) => item.label),
+      ["p1"],
+    );
     const receipt = await summary.finish({ keep: [] });
 
     assert.equal(receipt.closedSpace, true);
@@ -1823,9 +1841,9 @@ test("a claim forgets a kept tab the user closed in the meantime", async () => {
 
     const { task: claimed } = finishFixtureTask(fixture, lifecycleCalls);
     assert.equal((await claimed.tabs()).length, 1);
-    assert.deepEqual((await ledger.read(7)).retainedTargets, [
-      stillOpen.targetId,
-    ]);
+    assert.deepEqual((await ledger.read(7)).pages, {
+      [stillOpen.label]: { targetId: stillOpen.targetId, openedBy: "agent" },
+    });
 
     const receipt = await claimed.finish({ keep: [] });
     assert.equal(receipt.closedSpace, true);
@@ -1865,7 +1883,10 @@ test("a kept tab of unknown origin stays protected after a claim", async () => {
     assert.deepEqual(lifecycleCalls, ["finish"]);
     assert.equal(fixture.tabs.has(agentPage.targetId), false);
     assert.equal(fixture.tabs.has("target-user"), true);
-    assert.match(capturedRoundOutput(), /did not close task space 7/);
+    assert.match(
+      capturedRoundOutput(),
+      /left 1 tab\(s\) of user or unknown origin open \(p2\); task space 7 now belongs to the user/,
+    );
   });
 });
 
@@ -1880,8 +1901,9 @@ test("finish reports an unclosed space only when it was asked to keep nothing", 
     const receipt = await claimed.finish({ keep: "all" });
 
     assert.equal(receipt.closedSpace, false);
-    assert.equal(receipt.preservedUnmanagedCount, 1);
-    assert.doesNotMatch(capturedRoundOutput(), /did not close/);
+    assert.deepEqual(receipt.keptManagedLabels, ["p1", "p2"]);
+    assert.equal(receipt.preservedUnmanagedCount, 0);
+    assert.doesNotMatch(capturedRoundOutput(), /now belongs to the user/);
   });
 });
 
@@ -1900,22 +1922,33 @@ test("TaskSpace finish protects a tab opened while the user owned the space", as
       [keptTarget]: "agent",
       "target-user": "unknown",
     });
+    const userPage = (await claimed.pages()).find(
+      (page) => page.targetId === "target-user",
+    );
+    assert.equal(
+      userPage.label,
+      "p2",
+      "the user's tab is a Page after the claim",
+    );
+    assert.equal(await userPage.url(), "https://example.test/user");
     const receipt = await claimed.finish({ keep: [] });
 
     assert.equal(receipt.closedSpace, false);
-    assert.equal(receipt.preservedUnmanagedCount, 1);
+    assert.deepEqual(receipt.keptManagedLabels, ["p2"]);
+    assert.deepEqual(receipt.closedManagedLabels, ["p1"]);
+    assert.equal(receipt.preservedUnmanagedCount, 0);
     assert.deepEqual(lifecycleCalls, ["finish"]);
     assert.equal(fixture.tabs.has(keptTarget), false, "the kept tab is closed");
     assert.equal(fixture.tabs.has("target-user"), true, "the user tab remains");
     assert.match(
       capturedRoundOutput(),
-      /did not close task space 7: 1 tab\(s\) of user or unknown origin/,
+      /finish\(\{ keep: \[\] \}\) closed p1 and left 1 tab\(s\) of user or unknown origin open \(p2\)/,
     );
     resetSink();
   });
 });
 
-test("TaskSpace finish leaves earlier kept tabs open unless it keeps nothing", async () => {
+test("TaskSpace finish closes an earlier kept agent Page that keep does not name", async () => {
   await withFixture(async (fixture) => {
     const lifecycleCalls = [];
     const keptTarget = await finishKeepingFirstPage(fixture, lifecycleCalls);
@@ -1924,20 +1957,13 @@ test("TaskSpace finish leaves earlier kept tabs open unless it keeps nothing", a
     const secondPage = await openTestPage(second, "https://example.test/two");
     const receipt = await second.finish({ keep: [secondPage.label] });
     assert.equal(receipt.closedSpace, false);
-    assert.equal(
-      fixture.tabs.has(keptTarget),
-      true,
-      "named keep does not close it",
-    );
+    assert.deepEqual(receipt.closedManagedLabels, ["p1"]);
+    assert.equal(fixture.tabs.has(keptTarget), false, "keep names what stays");
 
     const { task: third } = finishFixtureTask(fixture, lifecycleCalls);
     const keepAll = await third.finish({ keep: "all" });
     assert.equal(keepAll.closedSpace, false);
-    assert.equal(
-      fixture.tabs.has(keptTarget),
-      true,
-      "keep all does not close it",
-    );
+    assert.deepEqual(keepAll.keptManagedLabels, [secondPage.label]);
 
     lifecycleCalls.length = 0;
     const { task: last } = finishFixtureTask(fixture, lifecycleCalls);
@@ -2006,14 +2032,18 @@ test("TaskSpace finish closes the SDK anchor tab but keeps user tabs", async () 
     await ledger.keepUnmanaged(7, "target-user", "unknown");
     const p2 = await openTestPage(task, "https://example.test/two");
 
+    const userLabel = (await task.tabs()).find(
+      (tab) => tab.targetId === "target-user",
+    ).label;
+
     const receipt = await task.finish({ keep: [] });
 
     assert.deepEqual(receipt, {
       spaceId: 7,
       closedSpace: false,
-      keptManagedLabels: [],
-      closedManagedLabels: ["p2"],
-      preservedUnmanagedCount: 1,
+      keptManagedLabels: [userLabel],
+      closedManagedLabels: [p2.label],
+      preservedUnmanagedCount: 0,
     });
     assert.equal(
       fixture.tabs.has(p2.targetId),
@@ -2030,7 +2060,7 @@ test("TaskSpace finish closes the SDK anchor tab but keeps user tabs", async () 
   });
 });
 
-test("TaskSpace finish keeps an SDK anchor that is the last tab of a kept space", async () => {
+test("TaskSpace finish closes a space whose only tab is the SDK anchor, even with keep all", async () => {
   await withFixture(async (fixture) => {
     const lifecycleCalls = [];
     const { task } = finishFixtureTask(fixture, lifecycleCalls);
@@ -2042,21 +2072,17 @@ test("TaskSpace finish keeps an SDK anchor that is the last tab of a kept space"
 
     assert.deepEqual(receipt, {
       spaceId: 7,
-      closedSpace: false,
+      closedSpace: true,
       keptManagedLabels: [],
       closedManagedLabels: [],
       preservedUnmanagedCount: 0,
     });
-    assert.deepEqual(lifecycleCalls, ["finish"]);
-    assert.equal(
-      fixture.tabs.has(anchorTargetId),
-      true,
-      "closing the last tab would destroy the space the caller kept",
-    );
+    assert.deepEqual(lifecycleCalls, ["close"]);
+    assert.ok(anchorTargetId, "there was nothing to keep but the anchor");
   });
 });
 
-test("TaskSpace finish keeps protected unmanaged tabs even with an empty keep list", async () => {
+test("TaskSpace finish keeps unknown-origin Pages even with an empty keep list", async () => {
   await withFixture(async (fixture) => {
     const lifecycleCalls = [];
     const ledger = new PageLedgerStore({ rootDir: fixture.rootDir });
@@ -2078,9 +2104,9 @@ test("TaskSpace finish keeps protected unmanaged tabs even with an empty keep li
     assert.deepEqual(receipt, {
       spaceId: 7,
       closedSpace: false,
-      keptManagedLabels: [],
+      keptManagedLabels: ["p2"],
       closedManagedLabels: ["p1"],
-      preservedUnmanagedCount: 1,
+      preservedUnmanagedCount: 0,
     });
 
     assert.deepEqual(lifecycleCalls, ["finish"]);
@@ -2146,12 +2172,12 @@ test("Page reports a finished task when used after finish in the same round", as
 
     await assert.rejects(
       () => page.url(),
-      /^Error: page label not found: p1\. Task space 7 already finished/,
+      /^Error: page p1: task space 7 already finished; do not use Pages after task\.finish\(\)/,
     );
   });
 });
 
-test("Page reports user ownership when a later round reuses a finished task's label", async () => {
+test("Page reports user ownership for an unknown label in a space the user owns", async () => {
   await withFixture(async (fixture) => {
     const task = taskForRound(fixture, "round-a", {
       async completeTaskSpace() {},
@@ -2167,13 +2193,13 @@ test("Page reports user ownership when a later round reuses a finished task's la
       },
     );
     await assert.rejects(
-      () => nextRound.page("p1").url(),
-      /^Error: page label not found: p1\. Task space 7 is owned by the user/,
+      () => nextRound.page("p9").url(),
+      /^Error: page label not found: p9\. Task space 7 is owned by the user; claim it with claimTaskSpace\(7\)/,
     );
   });
 });
 
-test("handoff preserves user-created tabs as unknown and captures the active user page", async () => {
+test("takeover turns user-created tabs into unknown-origin Pages and captures the active user page", async () => {
   await withFixture(async (fixture) => {
     const firstRound = taskForRound(fixture, "round-a", {
       async handOffTaskSpace() {},
@@ -2194,10 +2220,12 @@ test("handoff preserves user-created tabs as unknown and captures the active use
     assert(userPage, "takeover captures the tab the user was viewing");
     assert.equal(userPage.targetId, "target-user");
     assert.equal(userPage.openedBy, "unknown");
+    assert.equal(userPage.label, "p2", "the user page is a Page right away");
+    assert.equal(await userPage.url(), "https://example.test/user-created");
 
     const inventory = await afterTakeover.tabs();
     const userItem = inventory.find((item) => item.targetId === "target-user");
-    assert.equal(userItem.label, undefined);
+    assert.equal(userItem.label, "p2");
     assert.equal(userItem.openedBy, "unknown");
 
     fixture.addExternalTab("target-popup", "https://example.test/agent-popup");
@@ -2242,7 +2270,7 @@ test("TaskSpace keeps Page state when native finish fails", async () => {
     );
 
     assert.deepEqual((await ledger.read(7)).pages, {
-      p1: { targetId: "target-1", openedBy: "agent" },
+      p1: { targetId: "target-1", openedBy: "agent", createdInTask: true },
     });
   });
 });
@@ -4117,9 +4145,9 @@ test("Page click fails closed when native mouse dispatch times out", async () =>
     );
     const inventory = await task.tabs();
     assert.equal(
-      inventory.find((item) => item.targetId === "target-user").label,
-      undefined,
-      "a tab that existed before the action must remain untracked",
+      inventory.find((item) => item.targetId === "target-user").openedBy,
+      "unknown",
+      "a tab that existed before the action keeps its unknown origin",
     );
     assert.equal(
       inventory.some((item) => item.targetId === "target-3"),
@@ -7404,7 +7432,7 @@ test("a ledger failure closes the newly created uncommitted tab", async () => {
   });
 });
 
-test("pages returns managed Page handles while tabs returns the complete inventory", async () => {
+test("pages returns every tab as a Page while tabs adds origin and the anchor", async () => {
   await withFixture(async (fixture) => {
     fixture.tabs.set("target-user", {
       targetId: "target-user",
@@ -7423,35 +7451,49 @@ test("pages returns managed Page handles while tabs returns the complete invento
 
     const pages = await task.pages();
     const tabs = await task.tabs();
-    const managedItem = tabs.find((item) => item.label === "p1");
-    const popupItem = tabs.find((item) => item.label === "p2");
-    const unknownItem = tabs.find((item) => item.targetId === "target-user");
+    const userItem = tabs.find((item) => item.targetId === "target-user");
+    const managedItem = tabs.find((item) => item.label === "p2");
+    const popupItem = tabs.find((item) => item.label === "p3");
 
     assert.deepEqual(
       pages.map((page) => page.label),
-      ["p1", "p2"],
+      ["p1", "p2", "p3"],
     );
     assert(pages.every((page) => typeof page.url === "function"));
-    assert.equal(
-      pages.some((page) => page.targetId === "target-user"),
-      false,
-    );
-    assert.equal(managedItem.page.label, "p1");
+    assert.equal(userItem.label, "p1");
+    assert.equal(userItem.openedBy, "unknown");
+    assert.equal(userItem.title, "User page");
+    assert.equal(await userItem.page.url(), "https://example.test/user");
     assert.equal(managedItem.page.targetId, managed.targetId);
     assert.equal(managedItem.title, "https://example.test/managed");
     assert.equal(managedItem.openedBy, "agent");
-    assert.equal(popupItem.page.label, "p2");
+    assert.equal(popupItem.page.label, "p3");
     assert.equal(popupItem.openedBy, "agent");
-    assert.equal(unknownItem.label, undefined);
-    assert.equal(unknownItem.page.targetId, "target-user");
-    assert.equal(unknownItem.page.spaceId, 7);
-    assert.equal(unknownItem.page.openedBy, "unknown");
-    assert.equal(unknownItem.page.snapshot, undefined);
-    assert.equal(unknownItem.page.goto, undefined);
-    assert.equal(unknownItem.page.close, undefined);
-    assert.equal(unknownItem.title, "User page");
-    assert.equal(unknownItem.openedBy, "unknown");
     assert.equal(task.listPages, undefined);
+  });
+});
+
+test("Pages of unknown origin do not count against the page budget", async () => {
+  await withFixture(async (fixture) => {
+    fixture.tabs.set("target-user", {
+      targetId: "target-user",
+      url: "https://example.test/user",
+      title: "User page",
+      active: false,
+    });
+    const task = taskForRound(fixture, "round-a", { pageBudget: 1 });
+
+    const created = await task.newPage();
+    assert.equal(created.label, "p2");
+    await assert.rejects(
+      () => task.newPage(),
+      (error) => {
+        assert.match(error.message, /Page budget reached \(1\/1\)/);
+        assert.match(error.message, /\bp2\b/);
+        assert.doesNotMatch(error.message, /\bp1\b.*User page/);
+        return true;
+      },
+    );
   });
 });
 
@@ -7476,8 +7518,9 @@ test("tabs automatically manages a tab created during agent control", async () =
   });
 });
 
-test("adopt turns a live untracked page into a managed page", async () => {
+test("adopt returns the existing Page for old scripts and keeps their label alias", async () => {
   await withFixture(async (fixture) => {
+    resetSink();
     fixture.tabs.set("target-user", {
       targetId: "target-user",
       url: "https://example.test/user",
@@ -7485,28 +7528,30 @@ test("adopt turns a live untracked page into a managed page", async () => {
       active: true,
     });
     const task = taskForRound(fixture, "round-a");
-    const [{ page: untracked }] = await task.tabs();
+    const [{ page: existing }] = await task.tabs();
 
-    const adopted = await task.adopt(untracked, { as: "notes" });
+    const adopted = await task.adopt(existing, { as: "notes" });
 
-    assert.equal(adopted.label, "notes");
+    assert.equal(adopted.label, "p1");
     assert.equal(adopted.targetId, "target-user");
     assert.equal(adopted.openedBy, "unknown");
-    assert.match(
-      await adopted.snapshot(),
-      /\[notes .*space "research"\(7\).*\]\nsnapshot:https:\/\/example\.test\/user/,
+    assert.equal(await task.page("notes").url(), "https://example.test/user");
+    assert.equal(
+      (await task.adopt(adopted)).label,
+      "p1",
+      "adopting twice is harmless",
     );
-    assert.deepEqual(
-      (await task.tabs()).map(({ label, openedBy }) => ({
-        label,
-        openedBy,
-      })),
-      [{ label: "notes", openedBy: "unknown" }],
+    const output = capturedRoundOutput();
+    assert.match(output, /task\.adopt\(\) is no longer needed/);
+    assert.equal(
+      output.match(/no longer needed/g).length,
+      1,
+      "the notice prints once",
     );
   });
 });
 
-test("adopt rejects stale, cross-space, and already managed handles", async () => {
+test("adopt rejects cross-space handles, closed tabs, and the SDK anchor", async () => {
   await withFixture(async (fixture) => {
     fixture.tabs.set("target-user", {
       targetId: "target-user",
@@ -7515,7 +7560,7 @@ test("adopt rejects stale, cross-space, and already managed handles", async () =
       active: true,
     });
     const task = taskForRound(fixture, "round-a");
-    const [{ page: untracked }] = await task.tabs();
+    const [{ page: existing }] = await task.tabs();
     const otherTask = createTaskSpaceHandle(
       { id: 8, name: "other", ownership: "agent" },
       {
@@ -7525,55 +7570,30 @@ test("adopt rejects stale, cross-space, and already managed handles", async () =
     );
 
     await assert.rejects(
-      () => otherTask.adopt(untracked),
+      () => otherTask.adopt(existing),
       /belongs to space 7, not space 8/,
     );
-
-    const adopted = await task.adopt(untracked);
     await assert.rejects(
-      () => task.adopt(untracked),
-      /target target-user is already page p1/,
+      () => task.adopt(Promise.resolve(existing)),
+      /await the page before adopting/,
     );
 
-    const inventory = await task.tabs();
-    assert.equal(inventory[0].page.label, adopted.label);
-    fixture.tabs.delete("target-user");
-    const stale = untracked;
+    await existing.close();
+    const anchor = (await task.tabs()).find((item) => !item.label);
     await assert.rejects(
-      () => task.adopt(stale),
-      /untracked page target-user is no longer open/,
+      () => task.adopt(anchor.page),
+      /SDK's blank anchor tab, not a Page/,
+    );
+    await assert.rejects(
+      () => task.adopt(existing),
+      /no longer open|was closed/,
     );
   });
 });
 
-test("adopt applies the managed-page budget before changing the ledger", async () => {
+test("release keeps a user Page open and returns it for old scripts", async () => {
   await withFixture(async (fixture) => {
-    fixture.tabs.set("target-user", {
-      targetId: "target-user",
-      url: "https://example.test/user",
-      title: "User page",
-      active: false,
-    });
-    const task = taskForRound(fixture, "round-a", { pageBudget: 1 });
-    await openTestPage(task, "https://example.test/managed");
-    const untracked = (await task.tabs()).find(
-      (item) => item.targetId === "target-user",
-    ).page;
-
-    await assert.rejects(
-      () => task.adopt(untracked),
-      /Page budget reached \(1\/1\)/,
-    );
-    const after = await task.tabs();
-    assert.equal(
-      after.find((item) => item.targetId === "target-user").label,
-      undefined,
-    );
-  });
-});
-
-test("release leaves an adopted page open and retires its label", async () => {
-  await withFixture(async (fixture) => {
+    resetSink();
     fixture.tabs.set("target-user", {
       targetId: "target-user",
       url: "https://example.test/user",
@@ -7581,17 +7601,19 @@ test("release leaves an adopted page open and retires its label", async () => {
       active: true,
     });
     const task = taskForRound(fixture, "round-a");
-    const untracked = (await task.tabs())[0].page;
-    const adopted = await task.adopt(untracked);
+    const existing = (await task.tabs())[0].page;
 
-    const released = await task.release(adopted.label);
+    const released = await task.release(existing.label);
 
     assert.equal(released.targetId, "target-user");
+    assert.equal(released.label, "p1");
     assert.equal(fixture.tabs.has("target-user"), true);
-    assert.equal((await task.tabs())[0].label, undefined);
-    await assert.rejects(() => adopted.snapshot(), /page p1 was released/);
-    const adoptedAgain = await task.adopt(released);
-    assert.equal(adoptedAgain.label, "p2");
+    assert.equal((await task.tabs())[0].label, "p1");
+    assert.equal(await existing.url(), "https://example.test/user");
+    assert.match(
+      capturedRoundOutput(),
+      /task\.release\(\) is no longer needed/,
+    );
   });
 });
 

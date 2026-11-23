@@ -129,6 +129,7 @@ test("a newly created space atomically replaces stale state with agent page p1",
       label: "p1",
       targetId: "target-initial",
       openedBy: "agent",
+      createdInTask: true,
     });
     assert.deepEqual(await store.read(7), {
       browserInstanceId: "browser-current",
@@ -141,7 +142,11 @@ test("a newly created space atomically replaces stale state with agent page p1",
       unmanagedTargets: {},
       retainedTargets: [],
       pages: {
-        p1: { targetId: "target-initial", openedBy: "agent" },
+        p1: {
+          targetId: "target-initial",
+          openedBy: "agent",
+          createdInTask: true,
+        },
       },
     });
 
@@ -167,10 +172,11 @@ test("a reused space id starts conservatively in a new browser instance", async 
     assert.deepEqual(fresh.pages, {});
 
     const baseline = await secondBrowser.reconcile(7, ["target-existing"], {
-      autoAdoptNew: true,
+      assignLabels: true,
     });
-    assert.deepEqual(baseline.pages, {});
-    assert.equal(baseline.unmanagedTargets["target-existing"], "unknown");
+    assert.deepEqual(baseline.pages, {
+      p1: { targetId: "target-existing", openedBy: "unknown" },
+    });
 
     const persisted = await readLatest(rootDir, "space-7@browser-b");
     assert.equal(persisted.browserInstanceId, "browser-b");
@@ -326,20 +332,6 @@ test("expired ledgers from other browser instances are removed", async () => {
   });
 });
 
-test("custom labels share the permanent used-label namespace", async () => {
-  await withTempLedger(async (rootDir) => {
-    const store = new PageLedgerStore({ rootDir });
-    const page = await store.addPage(2, "target-login", { as: "login" });
-
-    assert.equal(page.label, "login");
-    await store.closePage(2, "login");
-    await assert.rejects(
-      () => store.addPage(2, "target-new", { as: "login" }),
-      /page label already used: login/,
-    );
-  });
-});
-
 test("writes use a complete ledger document", async () => {
   await withTempLedger(async (rootDir) => {
     const store = new PageLedgerStore({ rootDir });
@@ -359,6 +351,7 @@ test("writes use a complete ledger document", async () => {
         p1: {
           targetId: "target-a",
           openedBy: "agent",
+          createdInTask: true,
         },
       },
     });
@@ -642,12 +635,15 @@ test("old handoff baselines migrate to a pending user-control boundary", async (
     assert.equal(restored.userControlPending, true);
 
     await store.reconcile(13, ["target-agent", "target-user"], {
-      autoAdoptNew: true,
+      assignLabels: true,
     });
     const persisted = await readLatest(rootDir, "space-13");
     assert.equal(persisted.userControlPending, false);
     assert.equal(Object.hasOwn(persisted, "handoffBaseline"), false);
-    assert.equal(persisted.unmanagedTargets["target-user"], "unknown");
+    assert.deepEqual(persisted.pages.p2, {
+      targetId: "target-user",
+      openedBy: "unknown",
+    });
   });
 });
 
@@ -676,35 +672,32 @@ test("legacy user origins are read conservatively as unknown", async () => {
   });
 });
 
-test("release removes a managed page without making its label reusable", async () => {
+test("a label released by an earlier runtime stays retired and its tab becomes a new Page", async () => {
   await withTempLedger(async (rootDir) => {
+    const path = join(rootDir, "space-3.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        spaceId: 3,
+        nextLabel: 2,
+        usedLabels: ["p1"],
+        releasedLabels: ["p1"],
+        initialized: true,
+        userControlPending: false,
+        unmanagedTargets: { "target-user": "unknown" },
+        pages: {},
+      }),
+    );
     const store = new PageLedgerStore({ rootDir });
-    const released = await store.addPage(3, "target-user", {
-      openedBy: "unknown",
+    await assert.rejects(() => store.getPage(3, "p1"), /page p1 was released/);
+
+    const reconciled = await store.reconcile(3, ["target-user"], {
+      assignLabels: true,
     });
-
-    assert.deepEqual(await store.releasePage(3, released.label), released);
-    await assert.rejects(
-      () => store.getPage(3, released.label),
-      /page p1 was released/,
-    );
-
-    const next = await store.addPage(3, "target-next");
-    assert.equal(next.label, "p2");
-
-    const reconciled = await store.reconcile(
-      3,
-      ["target-user", "target-next"],
-      { autoAdoptNew: true },
-    );
-    assert.equal(
-      Object.values(reconciled.pages).some(
-        (page) => page.targetId === "target-user",
-      ),
-      false,
-      "a released user page must not be silently adopted again",
-    );
-    assert.equal(reconciled.unmanagedTargets["target-user"], "unknown");
+    assert.deepEqual(reconciled.pages, {
+      p2: { targetId: "target-user", openedBy: "unknown" },
+    });
+    assert.deepEqual(reconciled.unmanagedTargets, {});
   });
 });
 
@@ -733,7 +726,7 @@ test("discard removes one completed space without affecting another", async () =
 
     assert.deepEqual((await store.read(7)).pages, {});
     assert.deepEqual((await store.read(8)).pages, {
-      p1: { targetId: "target-8", openedBy: "agent" },
+      p1: { targetId: "target-8", openedBy: "agent", createdInTask: true },
     });
   });
 });
@@ -766,28 +759,52 @@ test("reconciliation leaves the ledger unchanged when every target is live", asy
   });
 });
 
-test("reconciliation protects the first control baseline and adopts later agent tabs", async () => {
+test("reconciliation labels the first control baseline as unknown and later tabs as the agent's", async () => {
   await withTempLedger(async (rootDir) => {
     const store = new PageLedgerStore({ rootDir });
 
     const baseline = await store.reconcile(8, ["target-user"], {
-      autoAdoptNew: true,
+      assignLabels: true,
     });
-    assert.deepEqual(baseline.pages, {});
-    assert.equal(baseline.unmanagedTargets["target-user"], "unknown");
+    assert.deepEqual(baseline.pages, {
+      p1: { targetId: "target-user", openedBy: "unknown" },
+    });
+    assert.deepEqual(baseline.unmanagedTargets, {});
 
     const reconciled = await store.reconcile(
       8,
       ["target-user", "target-popup"],
-      { autoAdoptNew: true },
+      { assignLabels: true },
     );
-    assert.equal(reconciled.pages.p1.targetId, "target-popup");
-    assert.equal(reconciled.pages.p1.openedBy, "agent");
-    assert.equal(reconciled.unmanagedTargets["target-user"], "unknown");
+    assert.deepEqual(reconciled.pages.p2, {
+      targetId: "target-popup",
+      openedBy: "agent",
+      createdInTask: true,
+    });
   });
 });
 
-test("tabs opened during handoff remain unknown after takeover", async () => {
+test("without control, reconciliation records no new tabs and keeps the boundary pending", async () => {
+  await withTempLedger(async (rootDir) => {
+    const store = new PageLedgerStore({ rootDir });
+    await store.addPage(8, "target-agent");
+    await store.beginUserControl(8);
+
+    const userOwned = await store.reconcile(8, ["target-agent", "target-user"]);
+    assert.deepEqual(Object.keys(userOwned.pages), ["p1"]);
+    assert.equal(userOwned.userControlPending, true);
+
+    const claimed = await store.reconcile(8, ["target-agent", "target-user"], {
+      assignLabels: true,
+    });
+    assert.deepEqual(claimed.pages.p2, {
+      targetId: "target-user",
+      openedBy: "unknown",
+    });
+  });
+});
+
+test("tabs opened during handoff become unknown-origin Pages after takeover", async () => {
   await withTempLedger(async (rootDir) => {
     const firstRound = new PageLedgerStore({ rootDir });
     await firstRound.addPage(8, "target-agent");
@@ -797,33 +814,34 @@ test("tabs opened during handoff remain unknown after takeover", async () => {
     const afterTakeover = await secondRound.reconcile(
       8,
       ["target-agent", "target-user"],
-      { autoAdoptNew: true },
+      { assignLabels: true },
     );
 
     assert.equal(afterTakeover.userControlPending, false);
-    assert.equal(afterTakeover.unmanagedTargets["target-user"], "unknown");
     assert.deepEqual(afterTakeover.pages, {
-      p1: { targetId: "target-agent", openedBy: "agent" },
+      p1: { targetId: "target-agent", openedBy: "agent", createdInTask: true },
+      p2: { targetId: "target-user", openedBy: "unknown" },
     });
 
     const laterAgentPopup = await secondRound.reconcile(
       8,
       ["target-agent", "target-user", "target-popup"],
-      { autoAdoptNew: true },
+      { assignLabels: true },
     );
-    assert.equal(laterAgentPopup.pages.p2.targetId, "target-popup");
-    assert.equal(laterAgentPopup.pages.p2.openedBy, "agent");
+    assert.equal(laterAgentPopup.pages.p3.targetId, "target-popup");
+    assert.equal(laterAgentPopup.pages.p3.openedBy, "agent");
+    assert.equal(laterAgentPopup.pages.p3.createdInTask, true);
   });
 });
 
 test("an explicitly unmanaged anchor is not adopted during reconciliation", async () => {
   await withTempLedger(async (rootDir) => {
     const store = new PageLedgerStore({ rootDir });
-    await store.reconcile(10, [], { autoAdoptNew: true });
+    await store.reconcile(10, [], { assignLabels: true });
     await store.keepUnmanaged(10, "target-anchor", "agent");
 
     const reconciled = await store.reconcile(10, ["target-anchor"], {
-      autoAdoptNew: true,
+      assignLabels: true,
     });
 
     assert.deepEqual(reconciled.pages, {});
@@ -832,21 +850,80 @@ test("an explicitly unmanaged anchor is not adopted during reconciliation", asyn
 });
 
 test("retained targets default to empty for ledgers from earlier runtimes", async () => {
-  const rootDir = await mkdtemp(join(tmpdir(), "ego-ledger-retained-test-"));
-  try {
+  await withTempLedger(async (rootDir) => {
+    await writeFile(
+      join(rootDir, "space-5.json"),
+      JSON.stringify({
+        spaceId: 5,
+        nextLabel: 1,
+        usedLabels: [],
+        initialized: false,
+        unmanagedTargets: {},
+        pages: {},
+      }),
+    );
     const store = new PageLedgerStore({ rootDir });
-    await store.retainForUser(5, ["target-kept"]);
-    const retained = await store.read(5);
-    assert.deepEqual(retained.retainedTargets, ["target-kept"]);
-    assert.deepEqual(retained.unmanagedTargets, { "target-kept": "agent" });
-    assert.equal(retained.initialized, false);
-
-    const [file] = await readdir(rootDir);
-    const stored = JSON.parse(await readFile(join(rootDir, file), "utf8"));
-    delete stored.retainedTargets;
-    await writeFile(join(rootDir, file), JSON.stringify(stored));
     assert.deepEqual((await store.read(5)).retainedTargets, []);
-  } finally {
-    await rm(rootDir, { recursive: true, force: true });
-  }
+  });
+});
+
+test("tabs an earlier runtime retained for the user become agent Pages at the claim", async () => {
+  await withTempLedger(async (rootDir) => {
+    await writeFile(
+      join(rootDir, "space-5.json"),
+      JSON.stringify({
+        spaceId: 5,
+        nextLabel: 1,
+        usedLabels: [],
+        releasedLabels: [],
+        initialized: false,
+        userControlPending: false,
+        unmanagedTargets: { "target-kept": "agent" },
+        retainedTargets: ["target-kept"],
+        pages: {},
+      }),
+    );
+    const store = new PageLedgerStore({ rootDir });
+
+    const claimed = await store.reconcile(5, ["target-kept", "target-user"], {
+      assignLabels: true,
+      afterUserControl: true,
+    });
+    assert.deepEqual(claimed.pages, {
+      p1: { targetId: "target-kept", openedBy: "agent" },
+      p2: { targetId: "target-user", openedBy: "unknown" },
+    });
+    assert.deepEqual(claimed.retainedTargets, []);
+    assert.deepEqual(claimed.unmanagedTargets, {});
+  });
+});
+
+test("retainForUser keeps labels and origin, stops counting them, and marks the user boundary", async () => {
+  await withTempLedger(async (rootDir) => {
+    const store = new PageLedgerStore({ rootDir });
+    await store.initializeCreatedSpace(6, "target-a");
+    await store.addPage(6, "target-b");
+    await store.closePage(6, "p1");
+    await store.keepUnmanaged(6, "target-anchor", "agent");
+
+    await store.retainForUser(6);
+    const retained = await store.read(6);
+    assert.deepEqual(retained.pages, {
+      p2: { targetId: "target-b", openedBy: "agent" },
+    });
+    assert.equal(retained.userControlPending, true);
+    assert.deepEqual(retained.unmanagedTargets, { "target-anchor": "agent" });
+
+    const claimed = await store.reconcile(
+      6,
+      ["target-b", "target-anchor", "target-user"],
+      { assignLabels: true, afterUserControl: true },
+    );
+    assert.deepEqual(claimed.pages, {
+      p2: { targetId: "target-b", openedBy: "agent" },
+      p3: { targetId: "target-user", openedBy: "unknown" },
+    });
+    assert.deepEqual(claimed.unmanagedTargets, { "target-anchor": "agent" });
+    assert.equal((await store.addPage(6, "target-c")).label, "p4");
+  });
 });

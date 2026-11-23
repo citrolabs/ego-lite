@@ -303,7 +303,7 @@ export function egoSource(body, context) {
     // Page ledgers persist across cases and the budget is three Pages. Record
     // the Pages each space already had so a failed case can close only the
     // Pages it opened instead of exhausting the budget for every later case.
-    // Read the ledger file: task.pages() can adopt the active tab as a Page.
+    // Read the ledger file: task.pages() would turn every tab into a Page.
     const __pagesBeforeCase = new Map();
     const __taskSpace = taskSpace;
     taskSpace = async (...args) => {
@@ -328,7 +328,11 @@ export function egoSource(body, context) {
       for (const { task, targetIds } of __pagesBeforeCase.values()) {
         const pages = await task.pages().catch(() => []);
         for (const page of pages) {
-          if (!targetIds.has(page.targetId)) await page.close().catch(() => {});
+          // Tabs that existed before the case are unknown-origin Pages once
+          // listed; only the Pages the case opened are its to close.
+          if (!targetIds.has(page.targetId) && page.openedBy === "agent") {
+            await page.close().catch(() => {});
+          }
         }
       }
     }

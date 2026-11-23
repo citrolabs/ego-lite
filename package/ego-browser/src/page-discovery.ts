@@ -15,6 +15,14 @@ type PageNoticeListener = (notice: UnhandledPageNotice) => void;
 const pendingPageNotices = new Map<string, UnhandledPageNotice>();
 const observedPages = new Set<string>();
 const pageNoticeListeners = new Set<PageNoticeListener>();
+const onceNoticeKeys = new Set<string>();
+
+/** True the first time a key is seen in this round; used for one-off notices. */
+export function firstNoticeThisRound(key: string): boolean {
+  if (onceNoticeKeys.has(key)) return false;
+  onceNoticeKeys.add(key);
+  return true;
+}
 
 /** Record or refresh one discovered Page that Agent code has not used yet. */
 export function recordUnhandledPage(notice: UnhandledPageNotice): void {
@@ -94,6 +102,7 @@ export function resetPageNotices(): void {
   pendingPageNotices.clear();
   observedPages.clear();
   pageNoticeListeners.clear();
+  onceNoticeKeys.clear();
 }
 
 function pageKey(spaceId: number, targetId: string): string {
