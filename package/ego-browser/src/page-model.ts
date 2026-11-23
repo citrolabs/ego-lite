@@ -1352,7 +1352,8 @@ class TaskSpace {
       }
 
       for (const label of labelsToClose) {
-        await this.page(label).close();
+        // Canonical labels only: a legacy adopt alias must not redirect this.
+        await new Page(this, label, this.#services).close();
       }
       await this.#closeAgentUnmanagedTabs(agentUnmanagedTargets);
       await this.#services.completeTaskSpace();
@@ -1545,6 +1546,16 @@ class TaskSpace {
         );
       }
       if (options.as !== undefined && options.as !== label) {
+        // An alias must never shadow a real label: finish() and task.page()
+        // would otherwise reach a different Page than the label names.
+        if (
+          /^p\d+$/.test(options.as) ||
+          ledger.usedLabels.includes(options.as)
+        ) {
+          throw new Error(
+            `task.adopt cannot use { as: ${JSON.stringify(options.as)} }: it is a Page label. Use ${label} instead`,
+          );
+        }
         this.#legacyLabels.set(options.as, label);
       }
       deprecationNotice(

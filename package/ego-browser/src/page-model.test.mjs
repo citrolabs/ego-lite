@@ -7551,6 +7551,45 @@ test("adopt returns the existing Page for old scripts and keeps their label alia
   });
 });
 
+test("adopt refuses an alias that would shadow a Page label, so finish cannot close a user Page", async () => {
+  await withFixture(async (fixture) => {
+    fixture.tabs.set("target-user", {
+      targetId: "target-user",
+      url: "https://example.test/user",
+      title: "User page",
+      active: true,
+    });
+    const lifecycleCalls = [];
+    const task = taskForRound(fixture, "round-a", {
+      async completeTaskSpace() {
+        lifecycleCalls.push("finish");
+      },
+    });
+    const [{ page: userPage }] = await task.tabs();
+    const agentPage = await openTestPage(task, "https://example.test/agent");
+    assert.equal(agentPage.label, "p2");
+
+    await assert.rejects(
+      () => task.adopt(userPage, { as: "p2" }),
+      /cannot use \{ as: "p2" \}: it is a Page label/,
+    );
+    await assert.rejects(
+      () => task.adopt(userPage, { as: "p9" }),
+      /it is a Page label/,
+    );
+    assert.equal(await task.page("p2").url(), "https://example.test/agent");
+
+    const receipt = await task.finish({ keep: ["p1"] });
+    assert.deepEqual(receipt.closedManagedLabels, ["p2"]);
+    assert.equal(
+      fixture.tabs.has("target-user"),
+      true,
+      "the user Page stays open",
+    );
+    assert.equal(fixture.tabs.has(agentPage.targetId), false);
+  });
+});
+
 test("adopt rejects cross-space handles, closed tabs, and the SDK anchor", async () => {
   await withFixture(async (fixture) => {
     fixture.tabs.set("target-user", {
