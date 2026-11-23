@@ -2237,6 +2237,41 @@ test("takeover turns user-created tabs into unknown-origin Pages and captures th
   });
 });
 
+test("an anchor the user navigated during handoff becomes a Page that finish keeps", async () => {
+  await withFixture(async (fixture) => {
+    const lifecycleCalls = [];
+    const services = {
+      async handOffTaskSpace() {},
+      async completeTaskSpace() {
+        lifecycleCalls.push("finish");
+      },
+      async closeTaskSpace() {
+        lifecycleCalls.push("close");
+      },
+    };
+    const firstRound = taskForRound(fixture, "round-a", services);
+    const page = await openTestPage(firstRound, "https://example.test/agent");
+    await page.close();
+    const [anchor] = await firstRound.tabs();
+    assert.equal(anchor.label, undefined, "the anchor starts as an SDK tab");
+    await firstRound.handOff();
+    fixture.tabs.get(anchor.targetId).url = "https://example.test/user-site";
+
+    const afterTakeover = taskForRound(fixture, "round-b", services);
+    await captureTaskSpaceUserBoundary(afterTakeover);
+    const pages = await afterTakeover.pages();
+    assert.equal(pages.length, 1);
+    assert.equal(pages[0].targetId, anchor.targetId);
+    assert.equal(pages[0].openedBy, "unknown");
+
+    const receipt = await afterTakeover.finish({ keep: "all" });
+    assert.equal(receipt.closedSpace, false);
+    assert.deepEqual(receipt.keptManagedLabels, [pages[0].label]);
+    assert.deepEqual(lifecycleCalls, ["finish"]);
+    assert.equal(fixture.tabs.has(anchor.targetId), true);
+  });
+});
+
 test("failed native handoff removes the pending user-control boundary", async () => {
   await withFixture(async (fixture) => {
     const ledger = new PageLedgerStore({ rootDir: fixture.rootDir });

@@ -116,6 +116,12 @@ type ReconcileOptions = {
    */
   assignLabels?: boolean;
   afterUserControl?: boolean;
+  /**
+   * Live tabs still showing a blank document. At a user-control boundary an
+   * SDK anchor outside this set was navigated by the user and becomes an
+   * unknown-origin Page; without the set, anchors stay anchors.
+   */
+  blankTargetIds?: Iterable<string>;
 };
 
 /**
@@ -345,7 +351,16 @@ export class PageLedgerStore {
     const hasMissingUnmanaged = Object.keys(current.unmanagedTargets).some(
       (targetId) => !live.has(targetId),
     );
-    const unlabeled = unlabeledTargets(current, live);
+    const blank = options.blankTargetIds
+      ? new Set(options.blankTargetIds)
+      : undefined;
+    const atUserBoundary = (ledger: PageLedger) =>
+      !ledger.initialized ||
+      options.afterUserControl === true ||
+      ledger.userControlPending;
+    const usedAnchors = (ledger: PageLedger) =>
+      blank && atUserBoundary(ledger) ? blank : undefined;
+    const unlabeled = unlabeledTargets(current, live, usedAnchors(current));
     const needsLabels =
       options.assignLabels === true &&
       (unlabeled.length > 0 ||
@@ -371,13 +386,14 @@ export class PageLedgerStore {
       // A tab first seen without a ledger, or after the user had control, may
       // be the user's: record it as unknown origin so finish() leaves it open.
       // It is still a Page the agent can operate.
-      const fromUser =
-        !ledger.initialized ||
-        options.afterUserControl === true ||
-        ledger.userControlPending;
+      const fromUser = atUserBoundary(ledger);
       const retained = new Set(ledger.retainedTargets);
       const used = new Set(ledger.usedLabels);
-      for (const targetId of unlabeledTargets(ledger, live)) {
+      for (const targetId of unlabeledTargets(
+        ledger,
+        live,
+        usedAnchors(ledger),
+      )) {
         const legacyOrigin = ledger.unmanagedTargets[targetId];
         const openedBy: PageOrigin = retained.has(targetId)
           ? "agent"
@@ -728,9 +744,14 @@ function ledgerBrowserInstanceId(value: unknown): string | undefined {
 /**
  * Live tabs that are neither Pages nor SDK anchors. An agent-origin
  * unmanaged tab is an anchor unless an earlier runtime retained it for the
- * user.
+ * user, or (when `blankTargets` is given at a user-control boundary) the
+ * user navigated it away from its blank document.
  */
-function unlabeledTargets(ledger: PageLedger, live: Set<string>): string[] {
+function unlabeledTargets(
+  ledger: PageLedger,
+  live: Set<string>,
+  blankTargets?: Set<string>,
+): string[] {
   const managed = new Set(
     Object.values(ledger.pages).map((page) => page.targetId),
   );
@@ -738,7 +759,9 @@ function unlabeledTargets(ledger: PageLedger, live: Set<string>): string[] {
   return [...live].filter(
     (targetId) =>
       !managed.has(targetId) &&
-      (ledger.unmanagedTargets[targetId] !== "agent" || retained.has(targetId)),
+      (ledger.unmanagedTargets[targetId] !== "agent" ||
+        retained.has(targetId) ||
+        (blankTargets !== undefined && !blankTargets.has(targetId))),
   );
 }
 

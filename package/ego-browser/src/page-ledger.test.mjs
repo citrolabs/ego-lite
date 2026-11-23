@@ -834,6 +834,39 @@ test("tabs opened during handoff become unknown-origin Pages after takeover", as
   });
 });
 
+test("an anchor the user navigated becomes an unknown-origin Page at the control boundary", async () => {
+  await withTempLedger(async (rootDir) => {
+    const store = new PageLedgerStore({ rootDir });
+    await store.reconcile(10, [], { assignLabels: true });
+    await store.keepUnmanaged(10, "target-anchor", "agent");
+    await store.keepUnmanaged(10, "target-blank-anchor", "agent");
+
+    const ownRound = await store.reconcile(
+      10,
+      ["target-anchor", "target-blank-anchor"],
+      { assignLabels: true, blankTargetIds: [] },
+    );
+    assert.deepEqual(
+      ownRound.pages,
+      {},
+      "outside a boundary anchors stay anchors",
+    );
+
+    await store.beginUserControl(10);
+    const afterTakeover = await store.reconcile(
+      10,
+      ["target-anchor", "target-blank-anchor"],
+      { assignLabels: true, blankTargetIds: ["target-blank-anchor"] },
+    );
+    assert.deepEqual(afterTakeover.pages, {
+      p1: { targetId: "target-anchor", openedBy: "unknown" },
+    });
+    assert.deepEqual(afterTakeover.unmanagedTargets, {
+      "target-blank-anchor": "agent",
+    });
+  });
+});
+
 test("an explicitly unmanaged anchor is not adopted during reconciliation", async () => {
   await withTempLedger(async (rootDir) => {
     const store = new PageLedgerStore({ rootDir });

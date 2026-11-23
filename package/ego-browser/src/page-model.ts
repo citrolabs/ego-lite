@@ -476,7 +476,11 @@ type LedgerPort = {
   reconcile(
     spaceId: number,
     liveTargetIds: Iterable<string>,
-    options?: { assignLabels?: boolean; afterUserControl?: boolean },
+    options?: {
+      assignLabels?: boolean;
+      afterUserControl?: boolean;
+      blankTargetIds?: Iterable<string>;
+    },
   ): Promise<PageLedger>;
 };
 
@@ -1207,7 +1211,11 @@ class TaskSpace {
       const ledger = await this.#services.ledger.reconcile(
         this.id,
         tabs.map((tab) => tab.targetId),
-        { assignLabels: this.ownership === "agent", afterUserControl: true },
+        {
+          assignLabels: this.ownership === "agent",
+          afterUserControl: true,
+          blankTargetIds: blankTabIds(tabs),
+        },
       );
       const active = tabs.find((tab) => tab.active);
       this.#userPage = active
@@ -1649,7 +1657,10 @@ class TaskSpace {
     const ledger = await this.#services.ledger.reconcile(
       this.id,
       tabs.map((tab) => tab.targetId),
-      { assignLabels: this.ownership === "agent" },
+      {
+        assignLabels: this.ownership === "agent",
+        blankTargetIds: blankTabIds(tabs),
+      },
     );
     if (before) {
       const knownTargets = new Set(
@@ -4653,6 +4664,13 @@ function pageBudgetError(
       `Reuse: await task.page('${suggestion}').goto(url)`,
     ].join("\n"),
   );
+}
+
+/** Tabs still showing a blank document, such as an untouched SDK anchor. */
+function blankTabIds(tabs: RuntimeTab[]): string[] {
+  return tabs
+    .filter((tab) => !tab.url || tab.url === "about:blank")
+    .map((tab) => tab.targetId);
 }
 
 /** Pages that count against the budget: those the agent opened in this task. */
