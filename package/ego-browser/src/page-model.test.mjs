@@ -2272,6 +2272,28 @@ test("an anchor the user navigated during handoff becomes a Page that finish kee
   });
 });
 
+test("takeover on the blank SDK anchor returns it as an operable userPage", async () => {
+  await withFixture(async (fixture) => {
+    const firstRound = taskForRound(fixture, "round-a", {
+      async handOffTaskSpace() {},
+    });
+    const page = await openTestPage(firstRound, "https://example.test/agent");
+    await page.close();
+    const [anchor] = await firstRound.tabs();
+    fixture.tabs.get(anchor.targetId).active = true;
+    await firstRound.handOff();
+
+    const afterTakeover = taskForRound(fixture, "round-b");
+    await captureTaskSpaceUserBoundary(afterTakeover);
+    const userPage = afterTakeover.userPage();
+    assert.equal(userPage.targetId, anchor.targetId);
+    assert.equal(typeof userPage.label, "string");
+    assert.equal(userPage.openedBy, "agent");
+    await userPage.goto("https://example.test/after-takeover");
+    assert.equal(await userPage.url(), "https://example.test/after-takeover");
+  });
+});
+
 test("failed native handoff removes the pending user-control boundary", async () => {
   await withFixture(async (fixture) => {
     const ledger = new PageLedgerStore({ rootDir: fixture.rootDir });

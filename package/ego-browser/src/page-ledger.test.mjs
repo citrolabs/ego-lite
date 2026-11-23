@@ -141,6 +141,7 @@ test("a newly created space atomically replaces stale state with agent page p1",
       userControlPending: false,
       unmanagedTargets: {},
       retainedTargets: [],
+      budgetTracked: true,
       pages: {
         p1: {
           targetId: "target-initial",
@@ -281,6 +282,7 @@ test("a ledger from before instance ids is preserved and backfilled", async () =
       label: "p1",
       targetId: "target-live",
       openedBy: "agent",
+      createdInTask: true,
     });
     assert.equal(
       (await readLatest(rootDir, "space-7@browser-current")).browserInstanceId,
@@ -347,6 +349,7 @@ test("writes use a complete ledger document", async () => {
       userControlPending: false,
       unmanagedTargets: {},
       retainedTargets: [],
+      budgetTracked: true,
       pages: {
         p1: {
           targetId: "target-a",
@@ -598,6 +601,7 @@ test("old ledger metadata is accepted and removed on the next write", async () =
       label: "p1",
       targetId: "target-old",
       openedBy: "agent",
+      createdInTask: true,
     });
     await store.addPage(12, "target-new");
 
@@ -879,6 +883,40 @@ test("an explicitly unmanaged anchor is not adopted during reconciliation", asyn
 
     assert.deepEqual(reconciled.pages, {});
     assert.equal(reconciled.unmanagedTargets["target-anchor"], "agent");
+  });
+});
+
+test("agent Pages of an earlier runtime's active ledger keep counting against the budget", async () => {
+  await withTempLedger(async (rootDir) => {
+    await writeFile(
+      join(rootDir, "space-9.json"),
+      JSON.stringify({
+        spaceId: 9,
+        nextLabel: 3,
+        usedLabels: ["p1", "p2"],
+        releasedLabels: [],
+        initialized: true,
+        userControlPending: false,
+        unmanagedTargets: {},
+        pages: {
+          p1: { targetId: "target-a", openedBy: "agent" },
+          p2: { targetId: "target-user", openedBy: "unknown" },
+        },
+      }),
+    );
+    const store = new PageLedgerStore({ rootDir });
+    const migrated = await store.read(9);
+    assert.deepEqual(migrated.pages, {
+      p1: { targetId: "target-a", openedBy: "agent", createdInTask: true },
+      p2: { targetId: "target-user", openedBy: "unknown" },
+    });
+
+    // Pages kept by this runtime's finish() are not budgeted after a reload.
+    await store.retainForUser(9);
+    assert.deepEqual((await store.read(9)).pages.p1, {
+      targetId: "target-a",
+      openedBy: "agent",
+    });
   });
 });
 

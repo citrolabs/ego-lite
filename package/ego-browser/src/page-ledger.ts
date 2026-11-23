@@ -50,6 +50,12 @@ export type PageLedger = {
    * user. Read once and converted into agent-origin Pages.
    */
   retainedTargets: string[];
+  /**
+   * Written by runtimes that track `createdInTask`. Without it, the agent
+   * Pages of an earlier runtime's ledger belong to a task still in progress
+   * and are read as budgeted.
+   */
+  budgetTracked: true;
   pages: Record<string, PageLedgerEntry>;
 };
 
@@ -726,6 +732,7 @@ function emptyLedger(spaceId: number, browserInstanceId?: string): PageLedger {
     userControlPending: false,
     unmanagedTargets: {},
     retainedTargets: [],
+    budgetTracked: true,
     pages: {},
   };
 }
@@ -796,6 +803,10 @@ function validateLedger(
     (legacyHandoffBaseline !== undefined && legacyHandoffBaseline !== null);
   const unmanagedTargets = stored.unmanagedTargets ?? {};
   const retainedTargets = stored.retainedTargets ?? [];
+  // An earlier runtime discarded the ledger at finish(), so its agent Pages
+  // always belong to the task in progress.
+  const legacyBudget =
+    (stored as { budgetTracked?: unknown }).budgetTracked !== true;
   if (
     (stored.browserInstanceId !== undefined &&
       (typeof stored.browserInstanceId !== "string" ||
@@ -858,7 +869,10 @@ function validateLedger(
     pages[label] = {
       targetId: page.targetId,
       openedBy: normalizePageOrigin(page.openedBy),
-      ...(page.createdInTask ? { createdInTask: true } : {}),
+      ...(page.createdInTask ||
+      (legacyBudget && normalizePageOrigin(page.openedBy) === "agent")
+        ? { createdInTask: true }
+        : {}),
       ...(page.refs === undefined
         ? {}
         : { refs: validatePageRefState(page.refs) }),
@@ -882,6 +896,7 @@ function validateLedger(
     userControlPending,
     unmanagedTargets: normalizedUnmanagedTargets,
     retainedTargets: [...retainedTargets],
+    budgetTracked: true,
     pages,
   };
 }

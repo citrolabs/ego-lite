@@ -1208,7 +1208,7 @@ class TaskSpace {
         this.#userPage = undefined;
         return;
       }
-      const ledger = await this.#services.ledger.reconcile(
+      let ledger = await this.#services.ledger.reconcile(
         this.id,
         tabs.map((tab) => tab.targetId),
         {
@@ -1218,6 +1218,19 @@ class TaskSpace {
         },
       );
       const active = tabs.find((tab) => tab.active);
+      // The user left the SDK's blank anchor in front: make it an agent Page
+      // so userPage() can be navigated like any other Page.
+      if (
+        active &&
+        this.ownership === "agent" &&
+        ledger.unmanagedTargets[active.targetId] === "agent" &&
+        !labelForTarget(ledger, active.targetId)
+      ) {
+        await this.#services.ledger.addPage(this.id, active.targetId, {
+          openedBy: "agent",
+        });
+        ledger = await this.#services.ledger.read(this.id);
+      }
       this.#userPage = active
         ? tabInventory(this, this.#services, ledger, tabs).find(
             (item) => item.targetId === active.targetId,
