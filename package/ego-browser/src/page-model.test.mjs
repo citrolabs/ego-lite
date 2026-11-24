@@ -1861,56 +1861,73 @@ test("waitForControl after handOff reports the space ready again", async () => {
   });
 });
 
+/**
+ * A ledger and task whose Nth ledger read (after arming) waits until released,
+ * counting tab lists and reconciles so a test can see work after a timeout.
+ */
+function delayedReadTask(fixture) {
+  const store = new PageLedgerStore({ rootDir: fixture.rootDir });
+  const probe = { blockRead: 0, release: () => {}, reconciles: 0, tabLists: 0 };
+  const ledger = new Proxy(store, {
+    get(target, name) {
+      const value = Reflect.get(target, name, target);
+      if (name === "read") {
+        return async (...args) => {
+          if (probe.blockRead > 0 && --probe.blockRead === 0) {
+            await new Promise((resolve) => {
+              probe.release = resolve;
+            });
+          }
+          return value.apply(target, args);
+        };
+      }
+      if (name === "reconcile") {
+        return (...args) => {
+          probe.reconciles += 1;
+          return value.apply(target, args);
+        };
+      }
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const task = taskForRound(fixture, "round-a", {
+    ledger,
+    async listTabs() {
+      probe.tabLists += 1;
+      return fixture.services.listTabs();
+    },
+  });
+  return { task, probe };
+}
+
+async function expireRefreshDuringRead(probe, nthRead) {
+  probe.blockRead = nthRead;
+  probe.reconciles = 0;
+  probe.tabLists = 0;
+  await refreshRoundStatus(20);
+  probe.release();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(probe.tabLists, 0, "no tab list after the deadline");
+  assert.equal(probe.reconciles, 0, "no ledger write after the deadline");
+  assert.equal(await roundStatusLine(), '[7 "research" unknown(-)]');
+}
+
 test("a timed-out round status refresh starts no browser call or ledger write", async () => {
   await withFixture(async (fixture) => {
     resetSink();
-    const store = new PageLedgerStore({ rootDir: fixture.rootDir });
-    let blockRead = 0;
-    let releaseRead;
-    let reconciles = 0;
-    const ledger = new Proxy(store, {
-      get(target, name) {
-        const value = Reflect.get(target, name, target);
-        if (name === "read") {
-          return async (...args) => {
-            // Block the read inside reconciliation (the second one).
-            if (blockRead > 0 && --blockRead === 0) {
-              await new Promise((resolve) => {
-                releaseRead = resolve;
-              });
-            }
-            return value.apply(target, args);
-          };
-        }
-        if (name === "reconcile") {
-          return (...args) => {
-            reconciles += 1;
-            return value.apply(target, args);
-          };
-        }
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    });
-    let tabLists = 0;
-    const task = taskForRound(fixture, "round-a", {
-      ledger,
-      async listTabs() {
-        tabLists += 1;
-        return fixture.services.listTabs();
-      },
-    });
+    const { task, probe } = delayedReadTask(fixture);
     await openTestPage(task, "https://example.test/one");
-    blockRead = 2;
-    reconciles = 0;
-    tabLists = 0;
+    // The second read is the one inside reconciliation.
+    await expireRefreshDuringRead(probe, 2);
+  });
+});
 
-    await refreshRoundStatus(20);
-    releaseRead();
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    assert.equal(tabLists, 0, "no tab list after the deadline");
-    assert.equal(reconciles, 0, "no ledger write after the deadline");
-    assert.equal(await roundStatusLine(), '[7 "research" unknown(-)]');
+test("a timed-out refresh of a fresh ledger lists no tabs", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const { task, probe } = delayedReadTask(fixture);
+    task.userPage();
+    await expireRefreshDuringRead(probe, 1);
   });
 });
 

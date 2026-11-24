@@ -1180,6 +1180,9 @@ class TaskSpace {
         typeof this.#services.ledger.read === "function"
           ? await this.#services.ledger.read(this.id)
           : undefined;
+      // A slow read must not lead to a browser call or ledger write after
+      // the refresh has run out of time, on either branch below.
+      signal.throwIfAborted();
       if (before && !before.initialized) {
         // Reconciling would set the control baseline and turn tabs opened
         // later into agent Pages. Report the labeled Pages read-only instead.
@@ -1187,8 +1190,6 @@ class TaskSpace {
         signal.throwIfAborted();
         return readyRoundStatus(before, tabs);
       }
-      // Reconciling writes the ledger; do not start it once time is up.
-      signal.throwIfAborted();
       const { ledger, tabs } = await this.#reconcilePages(signal);
       return readyRoundStatus(ledger, tabs);
     });
