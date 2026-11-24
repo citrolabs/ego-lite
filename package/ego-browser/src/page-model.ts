@@ -490,6 +490,7 @@ type LedgerPort = {
       assignLabels?: boolean;
       afterUserControl?: boolean;
       blankTargetIds?: Iterable<string>;
+      signal?: AbortSignal;
     },
   ): Promise<PageLedger>;
 };
@@ -1775,6 +1776,7 @@ class TaskSpace {
       {
         assignLabels: this.ownership === "agent",
         blankTargetIds: blankTabIds(tabs),
+        signal,
       },
     );
     if (before) {

@@ -998,3 +998,38 @@ test("retainForUser keeps labels and origin, stops counting them, and marks the 
     assert.equal((await store.addPage(6, "target-c")).label, "p4");
   });
 });
+
+test("an aborted reconcile writes nothing once its read returns late", async () => {
+  await withTempLedger(async (rootDir) => {
+    const setup = new PageLedgerStore({ rootDir });
+    await setup.reconcile(7, ["target-a"], { assignLabels: true });
+
+    // The read inside reconcile is delayed past the caller's deadline.
+    let releaseRead;
+    class SlowReadStore extends PageLedgerStore {
+      async read(spaceId) {
+        await new Promise((resolve) => {
+          releaseRead = resolve;
+        });
+        return super.read(spaceId);
+      }
+    }
+    const store = new SlowReadStore({ rootDir });
+    const controller = new AbortController();
+    const reconciling = store.reconcile(7, ["target-b"], {
+      assignLabels: true,
+      signal: controller.signal,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    controller.abort();
+    releaseRead();
+
+    await assert.rejects(reconciling, { name: "AbortError" });
+    const after = await setup.read(7);
+    assert.deepEqual(
+      Object.values(after.pages).map((page) => page.targetId),
+      ["target-a"],
+      "the stale tab list did not replace the ledger",
+    );
+  });
+});
