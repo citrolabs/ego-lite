@@ -187,3 +187,165 @@ test("NativeOperationGate forwards the withPage session budget to ensureSession"
 
   assert.deepEqual(budgets, [undefined, 1_234]);
 });
+
+function recordingGate(log) {
+  return new NativeOperationGate({
+    async selectSpace(spaceId) {
+      log.push(`select:${spaceId}`);
+    },
+    async ensureSession(targetId) {
+      return `session:${targetId}`;
+    },
+  });
+}
+
+/** Start an operation that logs its start and waits until released. */
+function held(gate, log, name, spaceId, mode, page) {
+  const release = deferred();
+  const operation = async () => {
+    log.push(`start:${name}`);
+    await release.promise;
+    log.push(`end:${name}`);
+    return name;
+  };
+  const done = page
+    ? gate.withPage({ spaceId, targetId: page }, operation, { mode })
+    : gate.withSpace(spaceId, operation, { mode });
+  return { done, release: release.resolve };
+}
+
+test("shared operations in one space run together and select it once", async () => {
+  const log = [];
+  const gate = recordingGate(log);
+  const a = held(gate, log, "a", 1, "shared", "t-a");
+  const b = held(gate, log, "b", 1, "shared", "t-b");
+  const c = held(gate, log, "c", 1, "shared");
+  await turn();
+  await turn();
+  assert.equal(log[0], "select:1");
+  assert.deepEqual(log.slice(1).sort(), ["start:a", "start:b", "start:c"]);
+  a.release();
+  b.release();
+  c.release();
+  assert.deepEqual(await Promise.all([a.done, b.done, c.done]), [
+    "a",
+    "b",
+    "c",
+  ]);
+});
+
+test("switching spaces waits for every shared holder, and later shared work waits its turn", async () => {
+  const log = [];
+  const gate = recordingGate(log);
+  const a = held(gate, log, "a", 1, "shared");
+  const b = held(gate, log, "b", 1, "shared");
+  await turn();
+  const other = held(gate, log, "other", 2, "shared");
+  // Same space as the current lease, but queued behind the switch.
+  const late = held(gate, log, "late", 1, "shared");
+  await turn();
+  assert.deepEqual(log, ["select:1", "start:a", "start:b"]);
+
+  a.release();
+  await a.done;
+  await turn();
+  assert.equal(log.includes("start:other"), false, "b still holds space 1");
+
+  b.release();
+  await b.done;
+  await turn();
+  assert.deepEqual(log.slice(-2), ["select:2", "start:other"]);
+  assert.equal(log.includes("start:late"), false);
+
+  other.release();
+  await other.done;
+  await turn();
+  assert.deepEqual(log.slice(-2), ["select:1", "start:late"]);
+  late.release();
+  await late.done;
+});
+
+test("an exclusive operation waits for shared work and holds the space alone", async () => {
+  const log = [];
+  const gate = recordingGate(log);
+  const read = held(gate, log, "read", 1, "shared", "t-a");
+  await turn();
+  const input = held(gate, log, "input", 1, "exclusive", "t-b");
+  const laterRead = held(gate, log, "laterRead", 1, "shared", "t-c");
+  await turn();
+  assert.deepEqual(log, ["select:1", "start:read"]);
+
+  read.release();
+  await read.done;
+  await turn();
+  await turn();
+  assert.deepEqual(log.slice(-2), ["select:1", "start:input"]);
+  assert.equal(log.includes("start:laterRead"), false);
+
+  input.release();
+  await input.done;
+  await turn();
+  await turn();
+  assert.equal(log.at(-1), "start:laterRead");
+  laterRead.release();
+  await laterRead.done;
+});
+
+test("operations on the same Page run one at a time even when shared", async () => {
+  const log = [];
+  const gate = recordingGate(log);
+  const first = held(gate, log, "first", 1, "shared", "t-a");
+  const second = held(gate, log, "second", 1, "shared", "t-a");
+  const elsewhere = held(gate, log, "elsewhere", 1, "shared", "t-b");
+  await turn();
+  await turn();
+  assert.deepEqual(log, ["select:1", "start:first", "start:elsewhere"]);
+
+  first.release();
+  await first.done;
+  await turn();
+  await turn();
+  assert.equal(log.at(-1), "start:second");
+  second.release();
+  elsewhere.release();
+  await Promise.all([second.done, elsewhere.done]);
+});
+
+test("a queued operation that aborts never selects its space", async () => {
+  const log = [];
+  const gate = recordingGate(log);
+  const busy = held(gate, log, "busy", 1, "exclusive");
+  await turn();
+  const controller = new AbortController();
+  const queued = gate.withSpace(
+    2,
+    async () => {
+      log.push("start:queued");
+    },
+    { mode: "shared", signal: controller.signal },
+  );
+  controller.abort();
+  await assert.rejects(queued, { name: "AbortError" });
+
+  busy.release();
+  await busy.done;
+  await turn();
+  assert.deepEqual(log, ["select:1", "start:busy", "end:busy"]);
+});
+
+test("nested Page work inside a shared operation does not wait for itself", async () => {
+  const log = [];
+  const gate = recordingGate(log);
+  const result = await gate.withPage(
+    { spaceId: 1, targetId: "t-a" },
+    () =>
+      gate.withPage(
+        { spaceId: 1, targetId: "t-a" },
+        ({ sessionId }) => sessionId,
+        { mode: "exclusive" },
+      ),
+    { mode: "shared" },
+  );
+  assert.equal(result, "session:t-a");
+  assert.deepEqual(log, ["select:1"]);
+});
