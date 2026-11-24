@@ -1722,7 +1722,9 @@ class TaskSpace {
       throw new TypeError("task.newPage does not accept arguments");
     }
     this[touchRoundToken]();
-    return this.#sharedSpace(async () => {
+    // Exclusive: the budget check and tab creation must not interleave with
+    // another newPage(), or two calls could both take the last free slot.
+    return this.#services.gate.withSpace(this.id, async () => {
       const { ledger, tabs } = await this.#reconcilePages();
       if (budgetedPageCount(ledger) >= this.#services.pageBudget) {
         throw pageBudgetError(this, this.#services.pageBudget, ledger, tabs);
@@ -1911,6 +1913,11 @@ class TaskSpace {
     this.#stopBrowserEvents?.();
     this.#stopBrowserEvents = undefined;
   }
+}
+
+/** Whether a new tab is known to come from a Page other than `opener`. */
+function openedElsewhere(openerId: unknown, opener: string): boolean {
+  return typeof openerId === "string" && openerId !== opener;
 }
 
 /** The ready status of a space from one reconciled ledger and tab list. */
@@ -2218,7 +2225,9 @@ class Page {
       );
     }
     const page = await this.#resolve();
-    return this.#withSharedPage(page, async ({ sessionId }) => {
+    // Exclusive: the native snapshot reads whichever tab is in front, so no
+    // other Page may be activated between #activate() and the capture.
+    return this.#withPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId);
       let root: number | undefined;
       let rootFrameId: string | undefined;
@@ -3488,7 +3497,7 @@ class Page {
                 cancel: true,
               })
             : undefined;
-        const popupWatch = await this.#watchPopups(inputAction);
+        const popupWatch = await this.#watchPopups(inputAction, page.targetId);
         try {
           await fileChooserGuard?.ready;
           const fileInputProbe = fileChooserGuard
@@ -3563,18 +3572,27 @@ class Page {
    * records Target.targetCreated events and costs nothing when no popup
    * opens; without it the watch falls back to diffing the tab list.
    */
-  async #watchPopups(inputAction: boolean): Promise<PopupWatch> {
+  /**
+   * Pages of one space may act in parallel, so only tabs this Page opened
+   * belong to its receipt. A tab whose opener is unknown is still reported,
+   * as before.
+   */
+  async #watchPopups(
+    inputAction: boolean,
+    openerTargetId: string,
+  ): Promise<PopupWatch> {
     const discovering = await this.#services.ensureTargetDiscovery(
       this.spaceId,
     );
-    if (!discovering) return this.#pollingPopupWatch();
+    if (!discovering) return this.#pollingPopupWatch(openerTargetId);
     const created = new Map<string, string>();
     const stop = this.#services.subscribeBrowserEvents((event) => {
       const info = event?.params?.targetInfo;
       if (
         event?.method !== "Target.targetCreated" ||
         info?.type !== "page" ||
-        typeof info.targetId !== "string"
+        typeof info.targetId !== "string" ||
+        openedElsewhere(info.openerId, openerTargetId)
       ) {
         return;
       }
@@ -3590,12 +3608,12 @@ class Page {
           await this.#syncWithPage(sessionId);
         }
         if (created.size === 0) return [];
-        return this.#adoptCreatedPopups(created);
+        return this.#adoptCreatedPopups(created, openerTargetId);
       },
     };
   }
 
-  async #pollingPopupWatch(): Promise<PopupWatch> {
+  async #pollingPopupWatch(openerTargetId: string): Promise<PopupWatch> {
     const before = new Set(
       (await this.#services.listTabs()).map((tab) => tab.targetId),
     );
@@ -3608,10 +3626,15 @@ class Page {
         await this.#services.sleep(POPUP_POLL_SETTLE_MS);
         const created = new Map<string, string>();
         for (const tab of await this.#services.listTabs()) {
-          if (!before.has(tab.targetId)) created.set(tab.targetId, tab.url);
+          if (
+            !before.has(tab.targetId) &&
+            !openedElsewhere(tab.openerId, openerTargetId)
+          ) {
+            created.set(tab.targetId, tab.url);
+          }
         }
         if (created.size === 0) return [];
-        return this.#adoptCreatedPopups(created);
+        return this.#adoptCreatedPopups(created, openerTargetId);
       },
     };
   }
@@ -3663,6 +3686,7 @@ class Page {
 
   async #adoptCreatedPopups(
     created: Map<string, string>,
+    openerTargetId: string,
   ): Promise<PopupReceiptEntry[]> {
     // Target discovery is browser-wide; the tab list scopes it to this space.
     let tabs = await this.#services.listTabs();
@@ -3675,7 +3699,7 @@ class Page {
     const popups: PopupReceiptEntry[] = [];
     for (const [targetId, eventUrl] of created) {
       const tab = tabs.find((candidate) => candidate.targetId === targetId);
-      if (!tab) continue;
+      if (!tab || openedElsewhere(tab.openerId, openerTargetId)) continue;
       const url = tab.url || eventUrl;
       try {
         const managed = await this.#services.ledger.addPage(
