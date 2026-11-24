@@ -8952,3 +8952,59 @@ test("snapshot describes a Page that stops answering after the first document ch
     assert.equal(calls, 2, "the second frame discovery is the one that failed");
   });
 });
+
+test("concurrent newPage calls cannot both take the last budget slot", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a", { pageBudget: 2 });
+    await openTestPage(task, "https://example.test/one");
+
+    const results = await Promise.allSettled([task.newPage(), task.newPage()]);
+
+    assert.deepEqual(results.map((result) => result.status).sort(), [
+      "fulfilled",
+      "rejected",
+    ]);
+    assert.match(
+      String(results.find((result) => result.status === "rejected").reason),
+      /Page budget reached/,
+    );
+  });
+});
+
+test("a navigation's receipt leaves out tabs another Page opened meanwhile", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const source = await openTestPage(task, "https://example.test/source");
+    const other = await openTestPage(task, "https://example.test/other");
+    const navigate = fixture.services.cdp;
+    const navigating = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        if (method === "Page.navigate" && params.url.includes("next")) {
+          // While p1 navigates, p2 opens a popup.
+          fixture.addExternalTab(
+            "target-from-other",
+            "https://example.test/pop",
+            {
+              openerId: other.targetId,
+            },
+          );
+          fixture.emitBrowserEvent("Target.targetCreated", {
+            targetInfo: {
+              targetId: "target-from-other",
+              type: "page",
+              url: "https://example.test/pop",
+              openerId: other.targetId,
+            },
+          });
+        }
+        return navigate(method, params, sessionId, timeoutMs);
+      },
+    });
+
+    const receipt = await navigating
+      .page(source.label)
+      .goto("https://example.test/next");
+
+    assert.equal(receipt.popups, undefined, "p2's popup is not p1's");
+  });
+});

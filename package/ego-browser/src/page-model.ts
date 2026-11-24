@@ -93,6 +93,7 @@ import {
   withSpace as defaultWithSpace,
   type PageExecutionContext,
   type WithPageOptions,
+  type WithSpaceOptions,
 } from "./native-gate.js";
 import {
   PageLedgerStore,
@@ -447,7 +448,7 @@ type OperationGate = {
   withSpace<T>(
     spaceId: number,
     operation: (scope: SpaceScope) => T | Promise<T>,
-    options?: { signal?: AbortSignal },
+    options?: WithSpaceOptions,
   ): Promise<T>;
   withPage<T>(
     page: PageTarget,
@@ -918,6 +919,8 @@ const rollbackCreatedTaskSpaceToken = Symbol("rollbackCreatedTaskSpace");
 const describeMissingPageToken = Symbol("describeMissingPage");
 const finishedTaskToken = Symbol("finishedTask");
 const touchRoundToken = Symbol("touchRound");
+/** Gate mode for work that may run alongside other Pages of the same space. */
+const SHARED = { mode: "shared" } as const;
 
 /** Print a compatibility notice once per round. */
 function deprecationNotice(key: string, message: string): void {
@@ -1144,6 +1147,15 @@ class TaskSpace {
     );
   }
 
+  /**
+   * Run work that may overlap other shared work in this space: reads,
+   * reconciliation and tab creation. Input and lifecycle changes stay
+   * exclusive.
+   */
+  #sharedSpace<T>(operation: () => T | Promise<T>): Promise<T> {
+    return this.#services.gate.withSpace(this.id, operation, SHARED);
+  }
+
   /** Whether finish() ended this handle's task. Internal. */
   get [finishedTaskToken](): boolean {
     return this.#finished;
@@ -1197,6 +1209,8 @@ class TaskSpace {
         const { ledger, tabs } = await this.#reconcilePages(signal);
         return readyRoundStatus(ledger, tabs);
       },
+      // Exclusive: reconciling with a tab list read before a parallel
+      // navigation registered its popup would delete that popup's label.
       { signal },
     );
   }
@@ -1344,6 +1358,8 @@ class TaskSpace {
    */
   async tabs(): Promise<TabInventoryItem[]> {
     this[touchRoundToken]();
+    // Exclusive: reconciling with a tab list read before a parallel
+    // navigation registered its popup would delete that popup's label.
     return this.#services.gate.withSpace(this.id, async () => {
       const { ledger, tabs } = await this.#reconcilePages();
       return tabInventory(this, this.#services, ledger, tabs);
@@ -1358,7 +1374,7 @@ class TaskSpace {
     const deadline = this.#services.now() + timeoutMs;
 
     while (true) {
-      const available = await this.#services.gate.withSpace(this.id, () =>
+      const available = await this.#sharedSpace(() =>
         this.#services.probeAgentControl(),
       );
       if (available) {
@@ -1601,7 +1617,7 @@ class TaskSpace {
         "task.cdp only supports Target. and Browser. commands",
       );
     }
-    return this.#services.gate.withSpace(this.id, () =>
+    return this.#sharedSpace(() =>
       this.#services.cdp(method, params, undefined, options.timeout),
     );
   }
@@ -1710,6 +1726,8 @@ class TaskSpace {
       throw new TypeError("task.newPage does not accept arguments");
     }
     this[touchRoundToken]();
+    // Exclusive: the budget check and tab creation must not interleave with
+    // another newPage(), or two calls could both take the last free slot.
     return this.#services.gate.withSpace(this.id, async () => {
       const { ledger, tabs } = await this.#reconcilePages();
       if (budgetedPageCount(ledger) >= this.#services.pageBudget) {
@@ -1865,19 +1883,23 @@ class TaskSpace {
     }
 
     void this.#services.gate
-      .withSpace(this.id, async () => {
-        const before = await this.#services.ledger.read(this.id);
-        const tabs = await this.#services.listTabs();
-        const tab = tabs.find(
-          (candidate) => candidate.targetId === info.targetId,
-        );
-        if (!tab) return;
-        await this.#adoptDiscoveredChildPage(before, {
-          ...tab,
-          openerId: info.openerId,
-          url: tab.url || info.url,
-        });
-      })
+      .withSpace(
+        this.id,
+        async () => {
+          const before = await this.#services.ledger.read(this.id);
+          const tabs = await this.#services.listTabs();
+          const tab = tabs.find(
+            (candidate) => candidate.targetId === info.targetId,
+          );
+          if (!tab) return;
+          await this.#adoptDiscoveredChildPage(before, {
+            ...tab,
+            openerId: info.openerId,
+            url: tab.url || info.url,
+          });
+        },
+        SHARED,
+      )
       .catch(() => {
         // The next task.tabs() reconciliation remains the fallback.
       });
@@ -1895,6 +1917,11 @@ class TaskSpace {
     this.#stopBrowserEvents?.();
     this.#stopBrowserEvents = undefined;
   }
+}
+
+/** Whether a new tab is known to come from a Page other than `opener`. */
+function openedElsewhere(openerId: unknown, opener: string): boolean {
+  return typeof openerId === "string" && openerId !== opener;
 }
 
 /** The ready status of a space from one reconciled ledger and tab list. */
@@ -2202,6 +2229,8 @@ class Page {
       );
     }
     const page = await this.#resolve();
+    // Exclusive: the native snapshot reads whichever tab is in front, so no
+    // other Page may be activated between #activate() and the capture.
     return this.#withPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId);
       let root: number | undefined;
@@ -2368,7 +2397,7 @@ class Page {
   ): Promise<void> {
     validatePublicApiOptions("Page.waitForURL", options);
     const page = await this.#resolve();
-    return this.#services.gate.withPage(page, ({ sessionId }) =>
+    return this.#sharedPage(page, ({ sessionId }) =>
       waitForURLInPage(this.#services, sessionId, expected, options, {
         interrupt: (lastUrl, matches) =>
           matchingPopupWaitError(this.spaceId, this.label, lastUrl, matches),
@@ -2503,7 +2532,7 @@ class Page {
 
   async info(): Promise<Record<string, unknown>> {
     const page = await this.#resolve();
-    return this.#withPage(page, async ({ sessionId }) => {
+    return this.#withSharedPage(page, async ({ sessionId }) => {
       const dialog = this.#services.pendingDialog(sessionId);
       if (dialog) return { dialog };
       return evaluateInSession(
@@ -2576,7 +2605,7 @@ class Page {
     );
     const page = await this.#resolve();
 
-    return this.#services.gate.withPage(page, async ({ sessionId }) => {
+    return this.#sharedPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId);
       const deadline = this.#services.now() + timeoutMs;
       let lastUrl = "";
@@ -2668,7 +2697,7 @@ class Page {
     assertUrl(url);
     const { payload, saveAs } = pageFetchPayload(url, options);
     const page = await this.#resolve();
-    return this.#withPage(page, async ({ sessionId }) => {
+    return this.#withSharedPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId);
       const response = await evaluateInSession<PageFetchResult>(
         this.#services,
@@ -2700,26 +2729,31 @@ class Page {
   ): Promise<any> {
     assertCdpCall("Page.cdp", method, params, options);
     const page = await this.#resolve();
-    return this.#services.gate.withPage(page, async ({ sessionId }) => {
-      // A modal dialog already belongs to the active Page. Re-activating it
-      // can hand browser control to the user before CDP gets a chance to close
-      // the dialog, so send this one command directly to its existing session.
-      if (method !== "Page.handleJavaScriptDialog") {
-        await this.#activate(page.targetId);
-      }
-      try {
-        return await this.#services.cdp(
-          method,
-          params,
-          sessionId,
-          options.timeout,
-        );
-      } finally {
-        // Raw CDP can navigate or mutate the document, so existing refs are no
-        // longer safe even when the command looked observational.
-        await this.#invalidateRefs(page);
-      }
-    });
+    return this.#services.gate.withPage(
+      page,
+      async ({ sessionId }) => {
+        // A modal dialog already belongs to the active Page. Re-activating it
+        // can hand browser control to the user before CDP gets a chance to close
+        // the dialog, so send this one command directly to its existing session.
+        if (method !== "Page.handleJavaScriptDialog") {
+          await this.#activate(page.targetId);
+        }
+        try {
+          return await this.#services.cdp(
+            method,
+            params,
+            sessionId,
+            options.timeout,
+          );
+        } finally {
+          // Raw CDP can navigate or mutate the document, so existing refs are no
+          // longer safe even when the command looked observational.
+          await this.#invalidateRefs(page);
+        }
+      },
+      // Raw input events need the space to themselves like other input.
+      { mode: method.startsWith("Input.") ? "exclusive" : "shared" },
+    );
   }
 
   async waitForSelector(
@@ -2728,7 +2762,7 @@ class Page {
   ): Promise<true> {
     validatePublicApiOptions("Page.waitForSelector", options);
     const page = await this.#resolve();
-    return this.#services.gate.withPage(page, async ({ sessionId }) => {
+    return this.#sharedPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId);
       const refMap = await this.#refMapForAction(page, sessionId, selector);
       return waitForSelectorInPage(
@@ -2748,7 +2782,7 @@ class Page {
   ): Promise<void> {
     validatePublicApiOptions("Page.waitForLoadState", options);
     const page = await this.#resolve();
-    return this.#services.gate.withPage(page, async ({ sessionId }) => {
+    return this.#sharedPage(page, async ({ sessionId }) => {
       await this.#activate(page.targetId);
       try {
         await waitForLoadStateInPage(this.#services, sessionId, state, options);
@@ -2761,7 +2795,7 @@ class Page {
   /** Drain only CDP events routed to this Page session. */
   async events(): Promise<any[]> {
     const page = await this.#resolve();
-    return this.#services.gate.withPage(page, ({ sessionId }) =>
+    return this.#sharedPage(page, ({ sessionId }) =>
       this.#services.drainEvents(sessionId),
     );
   }
@@ -3123,7 +3157,7 @@ class Page {
       argument,
     );
     const page = await this.#resolve();
-    return this.#services.gate.withPage(page, async ({ sessionId }) => {
+    return this.#sharedPage(page, async ({ sessionId }) => {
       if (activate) await this.#activate(page.targetId);
       try {
         return await evaluateInSession<T>(
@@ -3467,7 +3501,7 @@ class Page {
                 cancel: true,
               })
             : undefined;
-        const popupWatch = await this.#watchPopups(inputAction);
+        const popupWatch = await this.#watchPopups(inputAction, page.targetId);
         try {
           await fileChooserGuard?.ready;
           const fileInputProbe = fileChooserGuard
@@ -3531,7 +3565,9 @@ class Page {
           await fileChooserGuard?.dispose();
         }
       },
-      { sessionTimeoutMs },
+      // Navigation only waits on the page: other Pages of the space may load
+      // at the same time. Input needs the space to itself.
+      { sessionTimeoutMs, mode: inputAction ? "exclusive" : "shared" },
     );
   }
 
@@ -3540,18 +3576,27 @@ class Page {
    * records Target.targetCreated events and costs nothing when no popup
    * opens; without it the watch falls back to diffing the tab list.
    */
-  async #watchPopups(inputAction: boolean): Promise<PopupWatch> {
+  /**
+   * Pages of one space may act in parallel, so only tabs this Page opened
+   * belong to its receipt. A tab whose opener is unknown is still reported,
+   * as before.
+   */
+  async #watchPopups(
+    inputAction: boolean,
+    openerTargetId: string,
+  ): Promise<PopupWatch> {
     const discovering = await this.#services.ensureTargetDiscovery(
       this.spaceId,
     );
-    if (!discovering) return this.#pollingPopupWatch();
+    if (!discovering) return this.#pollingPopupWatch(openerTargetId);
     const created = new Map<string, string>();
     const stop = this.#services.subscribeBrowserEvents((event) => {
       const info = event?.params?.targetInfo;
       if (
         event?.method !== "Target.targetCreated" ||
         info?.type !== "page" ||
-        typeof info.targetId !== "string"
+        typeof info.targetId !== "string" ||
+        openedElsewhere(info.openerId, openerTargetId)
       ) {
         return;
       }
@@ -3567,12 +3612,12 @@ class Page {
           await this.#syncWithPage(sessionId);
         }
         if (created.size === 0) return [];
-        return this.#adoptCreatedPopups(created);
+        return this.#adoptCreatedPopups(created, openerTargetId);
       },
     };
   }
 
-  async #pollingPopupWatch(): Promise<PopupWatch> {
+  async #pollingPopupWatch(openerTargetId: string): Promise<PopupWatch> {
     const before = new Set(
       (await this.#services.listTabs()).map((tab) => tab.targetId),
     );
@@ -3585,10 +3630,15 @@ class Page {
         await this.#services.sleep(POPUP_POLL_SETTLE_MS);
         const created = new Map<string, string>();
         for (const tab of await this.#services.listTabs()) {
-          if (!before.has(tab.targetId)) created.set(tab.targetId, tab.url);
+          if (
+            !before.has(tab.targetId) &&
+            !openedElsewhere(tab.openerId, openerTargetId)
+          ) {
+            created.set(tab.targetId, tab.url);
+          }
         }
         if (created.size === 0) return [];
-        return this.#adoptCreatedPopups(created);
+        return this.#adoptCreatedPopups(created, openerTargetId);
       },
     };
   }
@@ -3640,6 +3690,7 @@ class Page {
 
   async #adoptCreatedPopups(
     created: Map<string, string>,
+    openerTargetId: string,
   ): Promise<PopupReceiptEntry[]> {
     // Target discovery is browser-wide; the tab list scopes it to this space.
     let tabs = await this.#services.listTabs();
@@ -3652,7 +3703,7 @@ class Page {
     const popups: PopupReceiptEntry[] = [];
     for (const [targetId, eventUrl] of created) {
       const tab = tabs.find((candidate) => candidate.targetId === targetId);
-      if (!tab) continue;
+      if (!tab || openedElsewhere(tab.openerId, openerTargetId)) continue;
       const url = tab.url || eventUrl;
       try {
         const managed = await this.#services.ledger.addPage(
@@ -3689,6 +3740,21 @@ class Page {
    * unresponsive Page, so it is described the same way: the pending
    * navigation is stopped and the error names the Page and what it shows.
    */
+  /** Page work that may overlap shared work on other Pages of the space. */
+  #sharedPage<T>(
+    page: PageTarget,
+    operation: (context: PageExecutionContext) => T | Promise<T>,
+  ): Promise<T> {
+    return this.#services.gate.withPage(page, operation, SHARED);
+  }
+
+  #withSharedPage<T>(
+    page: PageTarget,
+    operation: (context: PageExecutionContext) => T | Promise<T>,
+  ): Promise<T> {
+    return this.#withPage(page, operation, SHARED);
+  }
+
   async #withPage<T>(
     page: PageTarget,
     operation: (context: PageExecutionContext) => T | Promise<T>,

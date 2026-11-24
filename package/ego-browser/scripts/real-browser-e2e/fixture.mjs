@@ -15,6 +15,8 @@ export async function closeFixtureServer(fixtureServer) {
 }
 
 export async function startFixtureServer(taskName) {
+  const slowPageInFlight = new Map();
+  const slowPagePeak = new Map();
   // Source: https://cdn.openai.com/papers/gpt-4-system-card.pdf
   const pdfFixture = await readFile(
     new URL("./fixtures/openai-gpt-4-system-card.pdf", import.meta.url),
@@ -515,9 +517,27 @@ export async function startFixtureServer(taskName) {
       res.end(mediaWorkbenchHtml());
       return;
     }
+    if (url.pathname === "/api/slow-page-peak") {
+      // The most /slow-page requests of one group that were in flight at
+      // once, as the server saw them: the parallel-load cases assert on it.
+      const group = url.searchParams.get("group") || "";
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ peak: slowPagePeak.get(group) || 0 }));
+      return;
+    }
     if (url.pathname === "/slow-page") {
       const delayMs = Number(url.searchParams.get("ms") || 250);
+      const group = url.searchParams.get("group");
+      if (group) {
+        const inFlight = (slowPageInFlight.get(group) || 0) + 1;
+        slowPageInFlight.set(group, inFlight);
+        slowPagePeak.set(
+          group,
+          Math.max(slowPagePeak.get(group) || 0, inFlight),
+        );
+      }
       setTimeout(() => {
+        if (group) slowPageInFlight.set(group, slowPageInFlight.get(group) - 1);
         res.writeHead(200, { "content-type": "text/html" });
         res.end(
           "<!doctype html><html><head><title>slow page</title></head>" +

@@ -82,6 +82,7 @@ import {
   pageDelayedPopupScheduleCase,
 } from "./page-delayed-popup.mjs";
 import { runtimeCase } from "./runtime.mjs";
+import { pageParallelLoadCase } from "./page-parallel.mjs";
 import { runtimeRegressionCase } from "./runtime-regression.mjs";
 import { eventIsolationCase } from "./event-isolation.mjs";
 import {
@@ -147,6 +148,11 @@ export const e2eCases = [
     body: pageClaimContinuationCase,
   },
   { name: "finish leaves user Pages open", body: pageUserTabsProtectedCase },
+  {
+    name: "Pages of one space load in parallel",
+    body: pageParallelLoadCase,
+    timeoutMs: 60_000,
+  },
   {
     name: "round status: finish keeps a Page",
     body: roundStatusFinishCase,
