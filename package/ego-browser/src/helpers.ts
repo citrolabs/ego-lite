@@ -20,6 +20,7 @@ import {
   captureTaskSpaceUserBoundary,
   createTaskSpaceHandle,
   initializeTaskSpaceHandle,
+  touchTaskSpaceForRound,
   rollbackCreatedTaskSpace,
 } from "./page-model.js";
 import {
@@ -505,6 +506,7 @@ export async function takeOverTaskSpace(nameOrId?: string | number) {
     // Repeatedly ensuring control over an already agent-controlled space is a
     // no-op, not a user interaction boundary. Only delegated spaces can have
     // gained tabs through user activity since the Agent last controlled them.
+    touchTaskSpaceForRound(task);
     if (descriptor.ownership === "agentDelegatedToUser") {
       await captureTaskSpaceUserBoundary(task);
     }

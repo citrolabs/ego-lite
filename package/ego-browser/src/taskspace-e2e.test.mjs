@@ -217,7 +217,12 @@ test("taskspace e2e claims and selects an existing user-owned task space", async
     ["useTaskSpace", 7],
     ["useTaskSpace", 7],
     ["listTabs"],
+    // Round-end status: ownership first, then the Page list.
+    ["listTaskSpaces"],
+    ["useTaskSpace", 7],
+    ["listTabs"],
   ]);
+  assert.match(result.stdout, /\n\[7 "checkout-flow" ready(: [^\]]*)?\]\n$/);
 });
 
 test("taskspace e2e useOrCreateTaskSpace reports a user-owned name as in use without selecting or claiming it", async () => {

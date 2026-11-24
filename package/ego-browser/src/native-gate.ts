@@ -54,6 +54,7 @@ export class NativeOperationGate {
   withSpace<T>(
     spaceId: number,
     operation: (scope: SpaceScope) => T | Promise<T>,
+    options: { signal?: AbortSignal } = {},
   ): Promise<T> {
     assertSpaceId(spaceId);
     if (typeof operation !== "function") {
@@ -76,6 +77,9 @@ export class NativeOperationGate {
     }
 
     const run = async () => {
+      // A caller that gave up while queued (the round-end status refresh)
+      // must not change the selected space once it reaches the front.
+      options.signal?.throwIfAborted();
       await this.#services.selectSpace(spaceId);
       const acquired: GateOwnership = { spaceId, active: true };
       return this.#ownership.run(acquired, async () => {
@@ -150,8 +154,9 @@ const defaultGate = new NativeOperationGate({
 export function withSpace<T>(
   spaceId: number,
   operation: (scope: SpaceScope) => T | Promise<T>,
+  options: { signal?: AbortSignal } = {},
 ): Promise<T> {
-  return defaultGate.withSpace(spaceId, operation);
+  return defaultGate.withSpace(spaceId, operation, options);
 }
 
 export function withPage<T>(

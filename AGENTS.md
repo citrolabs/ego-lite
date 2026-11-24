@@ -37,6 +37,10 @@ Task spaces are isolated browsing contexts with an ownership model (`agent` / `u
   `finish()` only closes the agent's own Pages. `task.pages()` returns the
   Pages; `task.tabs()` adds origin, active state and the SDK's blank anchor.
 - Control handoff uses `task.handOff()` and `takeOverTaskSpace(spaceId)`.
+- Each round's output ends with a status line for the spaces the script
+  operated (`src/round-status.ts`): `ready` / `user_control` / `finished` /
+  `closed` / `unknown`, with Page labels and titles. It is refreshed after the
+  script settles and replaces the old unhandled-Page and `finish()` notices.
 - The old global helpers remain available only for v1 script compatibility.
 
 ## Key Directories

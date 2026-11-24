@@ -128,6 +128,12 @@ type ReconcileOptions = {
    * unknown-origin Page; without the set, anchors stay anchors.
    */
   blankTargetIds?: Iterable<string>;
+  /**
+   * Aborts a reconcile the caller no longer waits for (the round-end status
+   * refresh after its deadline): it is checked after each read and before
+   * the write, so a late result never replaces newer ledger state.
+   */
+  signal?: AbortSignal;
 };
 
 /**
@@ -351,6 +357,7 @@ export class PageLedgerStore {
   ): Promise<PageLedger> {
     const live = new Set(liveTargetIds);
     const current = await this.read(spaceId);
+    options.signal?.throwIfAborted();
     const hasMissingPage = Object.values(current.pages).some(
       (page) => !live.has(page.targetId),
     );
@@ -377,60 +384,67 @@ export class PageLedgerStore {
       return current;
     }
 
-    return this.#update(spaceId, (ledger) => {
-      for (const [label, page] of Object.entries(ledger.pages)) {
-        if (!live.has(page.targetId)) delete ledger.pages[label];
-      }
-      for (const targetId of Object.keys(ledger.unmanagedTargets)) {
-        if (!live.has(targetId)) delete ledger.unmanagedTargets[targetId];
-      }
-      ledger.retainedTargets = ledger.retainedTargets.filter((targetId) =>
-        live.has(targetId),
-      );
-      if (!options.assignLabels) return;
+    return this.#update(
+      spaceId,
+      (ledger) => {
+        for (const [label, page] of Object.entries(ledger.pages)) {
+          if (!live.has(page.targetId)) delete ledger.pages[label];
+        }
+        for (const targetId of Object.keys(ledger.unmanagedTargets)) {
+          if (!live.has(targetId)) delete ledger.unmanagedTargets[targetId];
+        }
+        ledger.retainedTargets = ledger.retainedTargets.filter((targetId) =>
+          live.has(targetId),
+        );
+        if (!options.assignLabels) return;
 
-      // A tab first seen without a ledger, or after the user had control, may
-      // be the user's: record it as unknown origin so finish() leaves it open.
-      // It is still a Page the agent can operate.
-      const fromUser = atUserBoundary(ledger);
-      const retained = new Set(ledger.retainedTargets);
-      const used = new Set(ledger.usedLabels);
-      for (const targetId of unlabeledTargets(
-        ledger,
-        live,
-        usedAnchors(ledger),
-      )) {
-        const legacyOrigin = ledger.unmanagedTargets[targetId];
-        const openedBy: PageOrigin = retained.has(targetId)
-          ? "agent"
-          : legacyOrigin === "unknown" || fromUser
-            ? "unknown"
-            : "agent";
-        const createdInTask =
-          openedBy === "agent" && !retained.has(targetId) && !fromUser;
-        const label = nextAutomaticLabel(ledger, used);
-        used.add(label);
-        ledger.usedLabels.push(label);
-        ledger.pages[label] = {
-          targetId,
-          openedBy,
-          ...(createdInTask ? { createdInTask: true } : {}),
-        };
-        delete ledger.unmanagedTargets[targetId];
-      }
-      ledger.retainedTargets = [];
-      ledger.initialized = true;
-      ledger.userControlPending = false;
-    });
+        // A tab first seen without a ledger, or after the user had control, may
+        // be the user's: record it as unknown origin so finish() leaves it open.
+        // It is still a Page the agent can operate.
+        const fromUser = atUserBoundary(ledger);
+        const retained = new Set(ledger.retainedTargets);
+        const used = new Set(ledger.usedLabels);
+        for (const targetId of unlabeledTargets(
+          ledger,
+          live,
+          usedAnchors(ledger),
+        )) {
+          const legacyOrigin = ledger.unmanagedTargets[targetId];
+          const openedBy: PageOrigin = retained.has(targetId)
+            ? "agent"
+            : legacyOrigin === "unknown" || fromUser
+              ? "unknown"
+              : "agent";
+          const createdInTask =
+            openedBy === "agent" && !retained.has(targetId) && !fromUser;
+          const label = nextAutomaticLabel(ledger, used);
+          used.add(label);
+          ledger.usedLabels.push(label);
+          ledger.pages[label] = {
+            targetId,
+            openedBy,
+            ...(createdInTask ? { createdInTask: true } : {}),
+          };
+          delete ledger.unmanagedTargets[targetId];
+        }
+        ledger.retainedTargets = [];
+        ledger.initialized = true;
+        ledger.userControlPending = false;
+      },
+      options.signal,
+    );
   }
 
   async #update(
     spaceId: number,
     mutate: (ledger: PageLedger) => void,
+    signal?: AbortSignal,
   ): Promise<PageLedger> {
     assertSpaceId(spaceId);
     for (let conflicts = 0; ; conflicts++) {
       const { ledger, files } = await this.#load(spaceId);
+      // Loading may wait on a locked version; do not write once aborted.
+      signal?.throwIfAborted();
       mutate(ledger);
       try {
         await this.#write(spaceId, ledger, files);
