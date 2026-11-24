@@ -1183,11 +1183,13 @@ class TaskSpace {
       if (before && !before.initialized) {
         // Reconciling would set the control baseline and turn tabs opened
         // later into agent Pages. Report the labeled Pages read-only instead.
-        return readyRoundStatus(before, await this.#services.listTabs());
+        const tabs = await this.#services.listTabs();
+        signal.throwIfAborted();
+        return readyRoundStatus(before, tabs);
       }
       // Reconciling writes the ledger; do not start it once time is up.
       signal.throwIfAborted();
-      const { ledger, tabs } = await this.#reconcilePages();
+      const { ledger, tabs } = await this.#reconcilePages(signal);
       return readyRoundStatus(ledger, tabs);
     });
   }
@@ -1746,7 +1748,7 @@ class TaskSpace {
     });
   }
 
-  async #reconcilePages(): Promise<{
+  async #reconcilePages(signal?: AbortSignal): Promise<{
     ledger: PageLedger;
     tabs: RuntimeTab[];
   }> {
@@ -1756,7 +1758,11 @@ class TaskSpace {
       typeof this.#services.ledger.read === "function"
         ? await this.#services.ledger.read(this.id)
         : undefined;
+    // The round-end refresh passes a signal: once it fires, start no further
+    // browser call or ledger write.
+    signal?.throwIfAborted();
     const tabs = await this.#services.listTabs();
+    signal?.throwIfAborted();
     const ledger = await this.#services.ledger.reconcile(
       this.id,
       tabs.map((tab) => tab.targetId),

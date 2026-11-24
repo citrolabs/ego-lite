@@ -23,6 +23,7 @@ import {
   flushSink,
   resetSink,
 } from "../dist/src/output-sink.js";
+import { refreshRoundStatus } from "../dist/src/round-status.js";
 import {
   captureTaskSpaceUserBoundary,
   createTaskSpaceHandle,
@@ -1857,6 +1858,59 @@ test("waitForControl after handOff reports the space ready again", async () => {
     await task.waitForControl();
 
     assert.match(await roundStatusLine(), /^\[7 "research" ready\(/);
+  });
+});
+
+test("a timed-out round status refresh starts no browser call or ledger write", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const store = new PageLedgerStore({ rootDir: fixture.rootDir });
+    let blockRead = 0;
+    let releaseRead;
+    let reconciles = 0;
+    const ledger = new Proxy(store, {
+      get(target, name) {
+        const value = Reflect.get(target, name, target);
+        if (name === "read") {
+          return async (...args) => {
+            // Block the read inside reconciliation (the second one).
+            if (blockRead > 0 && --blockRead === 0) {
+              await new Promise((resolve) => {
+                releaseRead = resolve;
+              });
+            }
+            return value.apply(target, args);
+          };
+        }
+        if (name === "reconcile") {
+          return (...args) => {
+            reconciles += 1;
+            return value.apply(target, args);
+          };
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    let tabLists = 0;
+    const task = taskForRound(fixture, "round-a", {
+      ledger,
+      async listTabs() {
+        tabLists += 1;
+        return fixture.services.listTabs();
+      },
+    });
+    await openTestPage(task, "https://example.test/one");
+    blockRead = 2;
+    reconciles = 0;
+    tabLists = 0;
+
+    await refreshRoundStatus(20);
+    releaseRead();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(tabLists, 0, "no tab list after the deadline");
+    assert.equal(reconciles, 0, "no ledger write after the deadline");
+    assert.equal(await roundStatusLine(), '[7 "research" unknown(-)]');
   });
 });
 
