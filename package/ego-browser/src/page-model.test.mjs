@@ -27,6 +27,7 @@ import {
   captureTaskSpaceUserBoundary,
   createTaskSpaceHandle,
   initializeTaskSpaceHandle,
+  touchTaskSpaceForRound,
 } from "../dist/src/page-model.js";
 import { PageRefRegistry } from "../dist/src/page-ref-registry.js";
 import {
@@ -1815,6 +1816,30 @@ test("the round status does not read a space handed off to the user", async () =
       false,
       "the user's tabs are not read",
     );
+  });
+});
+
+test("regaining control after handOff in the same round reports ready again", async () => {
+  await withFixture(async (fixture) => {
+    for (const regain of [
+      (task) => touchTaskSpaceForRound(task),
+      (task) => captureTaskSpaceUserBoundary(task),
+    ]) {
+      resetSink();
+      const task = taskForRound(fixture, "round-a", {
+        async handOffTaskSpace() {},
+      });
+      const page = await openTestPage(task, "https://example.test/one");
+      await task.handOff();
+
+      const resumed = taskForRound(fixture, "round-a");
+      await regain(resumed);
+      // A Page operation alone, with no task.pages() call in between.
+      await resumed.page(page.label).url();
+
+      assert.match(await roundStatusLine(), /^\[7 "research" ready\(/);
+      await page.close();
+    }
   });
 });
 

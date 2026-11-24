@@ -62,6 +62,15 @@ export function recordRoundSpaceStatus(
   statuses.set(spaceId, status);
 }
 
+/**
+ * Drop the cached status at a control boundary (claim, takeover): a terminal
+ * state recorded earlier in the round, such as `user_control` after
+ * `handOff()`, no longer holds and the round-end refresh must read the space.
+ */
+export function forgetRoundSpaceStatus(spaceId: number): void {
+  statuses.delete(spaceId);
+}
+
 /** Update a cached ready Page list after a Page was opened in this round. */
 export function addRoundStatusPage(spaceId: number, page: RoundStatusPage) {
   const status = statuses.get(spaceId);

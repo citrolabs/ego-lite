@@ -124,6 +124,7 @@ import {
 import { bufferOutput } from "./output-sink.js";
 import {
   addRoundStatusPage,
+  forgetRoundSpaceStatus,
   recordRoundSpaceStatus,
   removeRoundStatusPage,
   sortPages,
@@ -1094,6 +1095,7 @@ export async function initializeTaskSpaceHandle(
  * this round's status line, even when the script does nothing else with it.
  */
 export function touchTaskSpaceForRound(task: TaskSpace): void {
+  forgetRoundSpaceStatus(task.spaceId);
   task[touchRoundToken]();
 }
 
@@ -1268,6 +1270,8 @@ class TaskSpace {
         "the user-page boundary is captured automatically by claim/takeover",
       );
     }
+    // Control came back to the agent: an earlier terminal status is stale.
+    forgetRoundSpaceStatus(this.id);
     this[touchRoundToken]();
     await this.#services.gate.withSpace(this.id, async () => {
       const tabs = await this.#services.listTabs();
