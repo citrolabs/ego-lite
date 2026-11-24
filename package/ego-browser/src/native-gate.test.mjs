@@ -294,21 +294,24 @@ test("an exclusive operation waits for shared work and holds the space alone", a
 test("operations on the same Page run one at a time even when shared", async () => {
   const log = [];
   const gate = recordingGate(log);
+  const elsewhere = held(gate, log, "elsewhere", 1, "shared", "t-b");
   const first = held(gate, log, "first", 1, "shared", "t-a");
   const second = held(gate, log, "second", 1, "shared", "t-a");
-  const elsewhere = held(gate, log, "elsewhere", 1, "shared", "t-b");
+  // Requests keep their arrival order: work behind a busy Page waits too.
+  const later = held(gate, log, "later", 1, "shared", "t-c");
   await turn();
   await turn();
-  assert.deepEqual(log, ["select:1", "start:first", "start:elsewhere"]);
+  assert.deepEqual(log, ["select:1", "start:elsewhere", "start:first"]);
 
   first.release();
   await first.done;
   await turn();
   await turn();
-  assert.equal(log.at(-1), "start:second");
+  assert.deepEqual(log.slice(-2), ["start:second", "start:later"]);
   second.release();
   elsewhere.release();
-  await Promise.all([second.done, elsewhere.done]);
+  later.release();
+  await Promise.all([second.done, elsewhere.done, later.done]);
 });
 
 test("a queued operation that aborts never selects its space", async () => {
@@ -348,4 +351,29 @@ test("nested Page work inside a shared operation does not wait for itself", asyn
   );
   assert.equal(result, "session:t-a");
   assert.deepEqual(log, ["select:1"]);
+});
+
+test("a lifecycle operation does not overtake a Page request made before it", async () => {
+  const log = [];
+  const gate = recordingGate(log);
+  const a1 = held(gate, log, "a1", 1, "shared", "t-a");
+  await turn();
+  const a2 = held(gate, log, "a2", 1, "shared", "t-a");
+  const finish = held(gate, log, "finish", 1, "exclusive");
+  await turn();
+  assert.deepEqual(log, ["select:1", "start:a1"]);
+
+  a1.release();
+  await a1.done;
+  await turn();
+  await turn();
+  assert.equal(log.at(-1), "start:a2", "a2 was requested before finish");
+
+  a2.release();
+  await a2.done;
+  await turn();
+  await turn();
+  assert.deepEqual(log.slice(-2), ["select:1", "start:finish"]);
+  finish.release();
+  await finish.done;
 });

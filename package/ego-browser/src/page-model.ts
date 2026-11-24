@@ -1209,7 +1209,9 @@ class TaskSpace {
         const { ledger, tabs } = await this.#reconcilePages(signal);
         return readyRoundStatus(ledger, tabs);
       },
-      { signal, mode: "shared" },
+      // Exclusive: reconciling with a tab list read before a parallel
+      // navigation registered its popup would delete that popup's label.
+      { signal },
     );
   }
 
@@ -1356,7 +1358,9 @@ class TaskSpace {
    */
   async tabs(): Promise<TabInventoryItem[]> {
     this[touchRoundToken]();
-    return this.#sharedSpace(async () => {
+    // Exclusive: reconciling with a tab list read before a parallel
+    // navigation registered its popup would delete that popup's label.
+    return this.#services.gate.withSpace(this.id, async () => {
       const { ledger, tabs } = await this.#reconcilePages();
       return tabInventory(this, this.#services, ledger, tabs);
     });

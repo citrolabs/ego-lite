@@ -48,6 +48,8 @@ type Lease = {
   spaceId: number;
   mode: GateMode;
   holders: number;
+  /** Pages with an operation in progress under this lease. */
+  busyPages: Map<string, number>;
   /** Settles once the space is selected for this lease. */
   ready: Promise<void>;
 };
@@ -55,6 +57,7 @@ type Lease = {
 type Waiter = {
   spaceId: number;
   mode: GateMode;
+  targetId?: string;
   signal?: AbortSignal;
   admit(lease: Lease): void;
   reject(reason: unknown): void;
@@ -70,14 +73,14 @@ type Waiter = {
  * lease together, so Pages load in parallel; `exclusive` operations (input,
  * lifecycle changes) hold it alone. Requests are admitted in arrival order, so
  * a waiting exclusive operation or space switch is not starved by later
- * shared work. Operations on the same Page always run one at a time.
+ * shared work, and nothing overtakes a request made before it. Operations on
+ * the same Page always run one at a time.
  */
 export class NativeOperationGate {
   readonly #services: NativeGateServices;
   readonly #ownership = new AsyncLocalStorage<GateOwnership>();
   #lease: Lease | null = null;
   readonly #queue: Waiter[] = [];
-  readonly #pageTails = new Map<string, Promise<void>>();
 
   constructor(services: NativeGateServices) {
     if (!services || typeof services.selectSpace !== "function") {
@@ -100,7 +103,9 @@ export class NativeOperationGate {
     }
     const nested = this.#nested(spaceId);
     if (nested) return nested.then(() => operation({ spaceId }));
-    return this.#runInSpace(spaceId, options, () => operation({ spaceId }));
+    return this.#runInSpace(spaceId, undefined, options, () =>
+      operation({ spaceId }),
+    );
   }
 
   withPage<T>(
@@ -134,20 +139,7 @@ export class NativeOperationGate {
     const nested = this.#nested(page.spaceId);
     if (nested) return nested.then(inPage);
 
-    const key = `${page.spaceId}:${page.targetId}`;
-    const previous = this.#pageTails.get(key) ?? Promise.resolve();
-    const result = previous.then(() =>
-      this.#runInSpace(page.spaceId, options, inPage),
-    );
-    const tail = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    this.#pageTails.set(key, tail);
-    void tail.then(() => {
-      if (this.#pageTails.get(key) === tail) this.#pageTails.delete(key);
-    });
-    return result;
+    return this.#runInSpace(page.spaceId, page.targetId, options, inPage);
   }
 
   /**
@@ -170,12 +162,14 @@ export class NativeOperationGate {
 
   async #runInSpace<T>(
     spaceId: number,
+    targetId: string | undefined,
     options: WithSpaceOptions,
     operation: () => T | Promise<T>,
   ): Promise<T> {
     const lease = await this.#acquire(
       spaceId,
       options.mode ?? "exclusive",
+      targetId,
       options.signal,
     );
     try {
@@ -192,21 +186,29 @@ export class NativeOperationGate {
         }
       });
     } finally {
-      this.#release(lease);
+      this.#release(lease, targetId);
     }
   }
 
   #acquire(
     spaceId: number,
     mode: GateMode,
+    targetId: string | undefined,
     signal: AbortSignal | undefined,
   ): Promise<Lease> {
     if (signal?.aborted) return Promise.reject(signal.reason);
-    if (this.#queue.length === 0 && this.#admits(spaceId, mode)) {
-      return Promise.resolve(this.#join(spaceId, mode));
+    if (this.#queue.length === 0 && this.#admits(spaceId, mode, targetId)) {
+      return Promise.resolve(this.#join(spaceId, mode, targetId));
     }
     return new Promise<Lease>((resolve, reject) => {
-      const waiter: Waiter = { spaceId, mode, signal, admit: resolve, reject };
+      const waiter: Waiter = {
+        spaceId,
+        mode,
+        targetId,
+        signal,
+        admit: resolve,
+        reject,
+      };
       if (signal) {
         waiter.onAbort = () => {
           const index = this.#queue.indexOf(waiter);
@@ -222,15 +224,22 @@ export class NativeOperationGate {
   }
 
   /** Whether a request can hold the current lease (or start a new one). */
-  #admits(spaceId: number, mode: GateMode): boolean {
+  #admits(
+    spaceId: number,
+    mode: GateMode,
+    targetId: string | undefined,
+  ): boolean {
     const lease = this.#lease;
     if (!lease) return true;
     return (
-      mode === "shared" && lease.mode === "shared" && lease.spaceId === spaceId
+      mode === "shared" &&
+      lease.mode === "shared" &&
+      lease.spaceId === spaceId &&
+      (targetId === undefined || !lease.busyPages.has(targetId))
     );
   }
 
-  #join(spaceId: number, mode: GateMode): Lease {
+  #join(spaceId: number, mode: GateMode, targetId: string | undefined): Lease {
     if (!this.#lease) {
       const ready = Promise.resolve().then(() =>
         this.#services.selectSpace(spaceId),
@@ -238,16 +247,25 @@ export class NativeOperationGate {
       // Each holder awaits `ready` itself; this only keeps a failed selection
       // from also surfacing as an unhandled rejection.
       ready.catch(() => {});
-      this.#lease = { spaceId, mode, holders: 0, ready };
+      this.#lease = { spaceId, mode, holders: 0, busyPages: new Map(), ready };
     }
-    this.#lease.holders += 1;
-    return this.#lease;
+    const lease = this.#lease;
+    lease.holders += 1;
+    if (targetId !== undefined) {
+      lease.busyPages.set(targetId, (lease.busyPages.get(targetId) ?? 0) + 1);
+    }
+    return lease;
   }
 
-  #release(lease: Lease): void {
+  #release(lease: Lease, targetId: string | undefined): void {
     lease.holders -= 1;
-    if (lease.holders > 0) return;
-    if (this.#lease === lease) this.#lease = null;
+    if (targetId !== undefined) {
+      const busy = (lease.busyPages.get(targetId) ?? 1) - 1;
+      if (busy > 0) lease.busyPages.set(targetId, busy);
+      else lease.busyPages.delete(targetId);
+    }
+    if (lease.holders === 0 && this.#lease === lease) this.#lease = null;
+    // A freed Page may let the next waiter in even while the lease lives on.
     this.#drain();
   }
 
@@ -255,10 +273,10 @@ export class NativeOperationGate {
   #drain(): void {
     while (this.#queue.length > 0) {
       const head = this.#queue[0];
-      if (!this.#admits(head.spaceId, head.mode)) return;
+      if (!this.#admits(head.spaceId, head.mode, head.targetId)) return;
       this.#queue.shift();
       if (head.onAbort) head.signal?.removeEventListener("abort", head.onAbort);
-      head.admit(this.#join(head.spaceId, head.mode));
+      head.admit(this.#join(head.spaceId, head.mode, head.targetId));
       if (head.mode === "exclusive") return;
     }
   }
