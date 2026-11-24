@@ -138,14 +138,14 @@ use `help("profiles")` for the exact workflow.
 Supported TaskSpace API:
 
 - State: `spaceId`, `name`, `ownership`, `page(label)`, `userPage()`
-- Pages: `await task.pages()`, `await task.tabs()`, `newPage()`,
-  `adopt(page, { as? })`, `release(label)`
+- Pages: `await task.pages()`, `await task.tabs()`, `newPage()`
 - Control: `waitForControl(options)`, `handOff()`, `finish({ keep })`
 - Advanced: `cdp(method, params, options)`
 
-Pages receive permanent labels such as `p1`, `p2`, and `p3`. Prefer these labels
-to custom `{ as }` values. Reuse or close Pages as the task proceeds; the runtime
-reports the configured Page budget when it is reached.
+Pages receive permanent labels such as `p1`, `p2`, and `p3`; a closed label is
+never reused. Reuse or close Pages as the task proceeds; the runtime reports the
+configured Page budget when it is reached. Only Pages you opened in the current
+task count against it.
 
 `task.page(label)` only refers to a Page that already exists; it never creates
 one, and its handle is always truthy, so `task.page("p2") || await task.newPage()`
@@ -153,21 +153,13 @@ and `if (!page)` do not detect a missing label. Use labels printed by earlier
 output or by `await task.pages()`. When multiple Pages must stay open, call
 `await task.newPage()` for another blank Page and navigate it with `goto()`.
 
-`await task.pages()` returns managed Pages. `await task.tabs()` returns every tab in the
-space as `{ label?, page, targetId, title, url, active, openedBy }`. A tab
-without a label is unmanaged; adopt it before operating:
-
-```js
-const active = (await task.tabs()).find((item) => item.active);
-if (active && !active.label) {
-  const page = await task.adopt(active.page);
-  console.log({ page: page.label, url: await page.url() });
-}
-```
-
-`release(label)` returns an unknown-origin Page to the user without closing its
-tab. Close Agent-created Pages with `page.close()`. Treat `openedBy: "unknown"`
-as user-owned when deciding whether a Page may be closed.
+While you control a space, every tab in it is a Page you can operate directly,
+including tabs the user opened. `await task.pages()` returns them;
+`await task.tabs()` returns every tab as
+`{ label?, page, targetId, title, url, active, openedBy }`. Only the blank tab
+that `page.close()` leaves after closing the last Page has no label. Pages with
+`openedBy: "unknown"` are the user's: `finish()` leaves them open, so do not
+close them yourself unless the user asks.
 
 ## Page operations
 
@@ -500,9 +492,7 @@ const task = !entry
     : entry.ownership === "agentDelegatedToUser"
       ? await takeOverTaskSpace(SPACE_ID) // control is with the user
       : await taskSpace(SPACE_ID); // still in your control
-// After a claim, no tab has a label yet: adopt the tab you kept.
-const page =
-  (await task.pages())[0] ?? (await task.adopt((await task.tabs())[0].page));
+const page = (await task.pages())[0];
 console.log({
   taskSpaceId: task.spaceId,
   page: page.label,
@@ -510,10 +500,10 @@ console.log({
 });
 ```
 
-`finish()` ends all Page labels, kept Pages included. Until you claim a space
-you finished with kept Pages, neither `taskSpace()` nor `takeOverTaskSpace()`
-can resume it. After the claim, adopt each tab you kept and use the label
-`adopt()` returns.
+Until you claim a space you finished with kept Pages, neither `taskSpace()` nor
+`takeOverTaskSpace()` can resume it. After the claim, the Pages you kept have
+the same labels, and tabs the user opened meanwhile are new Pages with
+`openedBy: "unknown"`.
 
 End each reply's browser work with one `finish()` in a separate last script,
 run after earlier output has shown that the request is done, and wait for it
@@ -522,7 +512,7 @@ reply:
 
 ```js
 const task = await taskSpace(7); // the taskSpaceId printed earlier in this reply
-// Default: close the space, including tabs you kept in an earlier reply.
+// Default: close your Pages, including ones kept in an earlier reply.
 await task.finish({ keep: [] });
 
 // Exception, instead of the default: keep only the result Page for the user.
@@ -553,20 +543,18 @@ const task = await takeOverTaskSpace(7);
 const userPage = task.userPage();
 ```
 
-Adopt `userPage` if it is unmanaged. Use `waitForControl()` only when the current
-script must wait in place.
+`userPage` is the Page the user was viewing; operate it directly. Use
+`waitForControl()` only when the current script must wait in place.
 
 Claim any other user-owned or inactive space only when the user explicitly
 asks; the space you finished for the current goal is claimed as in "Starting
 and ending a reply".
 
-User-created and unknown-origin tabs are protected; if any remain, `keep: []`
-does not close the whole space, and the script output says so. Tabs you kept in
-an earlier reply stay yours after a claim and do not block closing. The blank
-tab that `page.close()` leaves when it closes the last Page is SDK-owned and
-never blocks closing. Do not close unwanted Pages one by one at completion; list
-the Pages to keep instead. Do not call `finish()` when the task stops for user
-control or an error.
+`finish()` closes only your own Pages. While Pages of unknown origin remain,
+`keep: []` closes yours and gives the space to the user instead of closing it,
+and the script output says so. Do not close unwanted Pages one by one at
+completion; list the Pages to keep instead. Do not call `finish()` when the
+task stops for user control or an error.
 
 If the final output contains `[ego-browser:notice]`, finish the current browser
 task, tell the user an Ego Lite update is available, and run

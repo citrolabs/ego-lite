@@ -112,6 +112,7 @@ import {
 } from "./snapshot-result.js";
 import {
   clearSpacePageNotices,
+  firstNoticeThisRound,
   forgetPageNotice,
   markPageObserved,
   peekUnhandledPageNotices,
@@ -448,7 +449,7 @@ type OperationGate = {
 type LedgerPort = {
   read(spaceId: number): Promise<PageLedger>;
   discard(spaceId: number): Promise<void>;
-  retainForUser(spaceId: number, targetIds: string[]): Promise<void>;
+  retainForUser(spaceId: number): Promise<void>;
   initializeCreatedSpace(
     spaceId: number,
     targetId: string,
@@ -456,7 +457,7 @@ type LedgerPort = {
   addPage(
     spaceId: number,
     targetId: string,
-    options?: { as?: string; openedBy?: PageOrigin },
+    options?: { openedBy?: PageOrigin },
   ): Promise<ManagedPage>;
   getPage(spaceId: number, label: string): Promise<ManagedPage>;
   setPageRefs(
@@ -465,7 +466,6 @@ type LedgerPort = {
     refs: PageRefState,
   ): Promise<void>;
   closePage(spaceId: number, label: string): Promise<ManagedPage>;
-  releasePage(spaceId: number, label: string): Promise<ManagedPage>;
   keepUnmanaged(
     spaceId: number,
     targetId: string,
@@ -476,7 +476,11 @@ type LedgerPort = {
   reconcile(
     spaceId: number,
     liveTargetIds: Iterable<string>,
-    options?: { autoAdoptNew?: boolean; afterUserControl?: boolean },
+    options?: {
+      assignLabels?: boolean;
+      afterUserControl?: boolean;
+      blankTargetIds?: Iterable<string>;
+    },
   ): Promise<PageLedger>;
 };
 
@@ -896,6 +900,13 @@ const initializeTaskSpaceToken = Symbol("initializeTaskSpace");
 const initializeCreatedSpaceToken = Symbol("initializeCreatedSpace");
 const rollbackCreatedTaskSpaceToken = Symbol("rollbackCreatedTaskSpace");
 const describeMissingPageToken = Symbol("describeMissingPage");
+const finishedTaskToken = Symbol("finishedTask");
+
+/** Print a compatibility notice once per round. */
+function deprecationNotice(key: string, message: string): void {
+  if (!firstNoticeThisRound(`deprecated:${key}`)) return;
+  bufferOutput(`[ego-browser] ${message}\n`);
+}
 
 const defaultGate: OperationGate = {
   withSpace: defaultWithSpace,
@@ -1069,6 +1080,8 @@ class TaskSpace {
   readonly recentTabTitles?: string[];
   readonly #services: PageModelServices;
   #userPage?: Page | UnmanagedPage;
+  /** Labels requested through the legacy adopt(page, { as }) in this process. */
+  readonly #legacyLabels = new Map<string, string>();
   #stopBrowserEvents?: () => void;
   #backgroundDiscoveryInitialized = false;
   #finished = false;
@@ -1089,7 +1102,16 @@ class TaskSpace {
   }
 
   page(label: string): Page {
-    return new Page(this, label, this.#services);
+    return new Page(
+      this,
+      this.#legacyLabels.get(label) ?? label,
+      this.#services,
+    );
+  }
+
+  /** Whether finish() ended this handle's task. Internal. */
+  get [finishedTaskToken](): boolean {
+    return this.#finished;
   }
 
   /** The tab active at the most recent claim/takeover boundary, if any. */
@@ -1186,12 +1208,29 @@ class TaskSpace {
         this.#userPage = undefined;
         return;
       }
-      const ledger = await this.#services.ledger.reconcile(
+      let ledger = await this.#services.ledger.reconcile(
         this.id,
         tabs.map((tab) => tab.targetId),
-        { autoAdoptNew: false, afterUserControl: true },
+        {
+          assignLabels: this.ownership === "agent",
+          afterUserControl: true,
+          blankTargetIds: blankTabIds(tabs),
+        },
       );
       const active = tabs.find((tab) => tab.active);
+      // The user left the SDK's blank anchor in front: make it an agent Page
+      // so userPage() can be navigated like any other Page.
+      if (
+        active &&
+        this.ownership === "agent" &&
+        ledger.unmanagedTargets[active.targetId] === "agent" &&
+        !labelForTarget(ledger, active.targetId)
+      ) {
+        await this.#services.ledger.addPage(this.id, active.targetId, {
+          openedBy: "agent",
+        });
+        ledger = await this.#services.ledger.read(this.id);
+      }
       this.#userPage = active
         ? tabInventory(this, this.#services, ledger, tabs).find(
             (item) => item.targetId === active.targetId,
@@ -1200,7 +1239,11 @@ class TaskSpace {
     });
   }
 
-  /** Return managed Page handles after reconciling the browser tab list. */
+  /**
+   * Return every Page in this space after reconciling the browser tab list.
+   * While the agent controls the space, every tab except the SDK's blank
+   * anchor is a Page, including tabs the user opened.
+   */
   async pages(): Promise<Page[]> {
     const tabs = await this.tabs();
     return tabs
@@ -1208,7 +1251,11 @@ class TaskSpace {
       .map((item) => item.page as Page);
   }
 
-  /** Return managed and unmanaged tabs after reconciling browser state. */
+  /**
+   * Return the full tab list after reconciling browser state: every Page with
+   * its origin and active state, plus tabs that are not Pages (the SDK's
+   * blank anchor, or new tabs while the user controls the space).
+   */
   async tabs(): Promise<TabInventoryItem[]> {
     return this.#services.gate.withSpace(this.id, async () => {
       const { ledger, tabs } = await this.#reconcilePages();
@@ -1277,6 +1324,9 @@ class TaskSpace {
       const managedByTarget = new Map(
         Object.values(ledger.pages).map((page) => [page.targetId, page]),
       );
+      // Only the agent's own Pages close. Pages of unknown origin (tabs the
+      // user opened, or that were open before the agent took control) stay
+      // open whatever keep says.
       const labelsToClose = Object.entries(ledger.pages)
         .filter(
           ([label, page]) =>
@@ -1286,6 +1336,9 @@ class TaskSpace {
       const closedManagedLabelSet = new Set(labelsToClose);
       const keptManagedLabels = Object.keys(ledger.pages).filter(
         (label) => !closedManagedLabelSet.has(label),
+      );
+      const userLabels = keptManagedLabels.filter(
+        (label) => ledger.pages[label].openedBy !== "agent",
       );
       // Unmanaged tabs the SDK opened itself (the blank anchor page.close()
       // leaves behind) belong to the agent: they are closed, not protected.
@@ -1302,14 +1355,12 @@ class TaskSpace {
           !managedByTarget.has(tab.targetId) &&
           !agentUnmanagedSet.has(tab.targetId),
       ).length;
-      const protectedTabCount = tabs.filter((tab) => {
-        const managed = managedByTarget.get(tab.targetId);
-        if (managed) return managed.openedBy === "unknown";
-        return !agentUnmanagedSet.has(tab.targetId);
-      }).length;
+      const protectedTabCount = userLabels.length + preservedUnmanagedCount;
       const keepsNothing = options.keep !== "all" && options.keep.length === 0;
 
-      if (keepsNothing && protectedTabCount === 0) {
+      const nothingLeft =
+        keepsNothing || Object.keys(ledger.pages).length === 0;
+      if (nothingLeft && protectedTabCount === 0) {
         await this.#services.closeTaskSpace();
         await this.#discardTerminalState();
         return {
@@ -1322,30 +1373,21 @@ class TaskSpace {
       }
 
       for (const label of labelsToClose) {
-        await this.page(label).close();
+        // Canonical labels only: a legacy adopt alias must not redirect this.
+        await new Page(this, label, this.#services).close();
       }
-      // Tabs an earlier finish() left for the user go only when this finish
-      // keeps nothing; a keep list can only name labels, so it cannot cover them.
-      const retainedEarlier = new Set(
-        keepsNothing ? [] : ledger.retainedTargets,
-      );
-      const anchorsLeftOpen = await this.#closeAgentUnmanagedTabs(
-        agentUnmanagedTargets.filter((id) => !retainedEarlier.has(id)),
-      );
+      await this.#closeAgentUnmanagedTabs(agentUnmanagedTargets);
       await this.#services.completeTaskSpace();
-      await this.#discardTerminalState([
-        ...keptManagedLabels
-          .map((label) => ledger.pages[label])
-          .filter((page) => page.openedBy === "agent")
-          .map((page) => page.targetId),
-        ...agentUnmanagedTargets.filter((id) => retainedEarlier.has(id)),
-        ...anchorsLeftOpen,
-      ]);
+      await this.#discardTerminalState({ retain: true });
       if (keepsNothing) {
+        const closed =
+          labelsToClose.length > 0
+            ? `closed ${labelsToClose.join(", ")} and `
+            : "";
         bufferOutput(
-          `[ego-browser] finish({ keep: [] }) did not close task space ${this.spaceId}: ` +
-            `${protectedTabCount} tab(s) of user or unknown origin stayed open, ` +
-            "and the space now belongs to the user.\n",
+          `[ego-browser] finish({ keep: [] }) ${closed}left ${protectedTabCount} tab(s) of user or unknown origin open` +
+            `${userLabels.length > 0 ? ` (${userLabels.join(", ")})` : ""}; ` +
+            `task space ${this.spaceId} now belongs to the user.\n`,
         );
       }
       return {
@@ -1407,10 +1449,12 @@ class TaskSpace {
     });
   }
 
-  async #discardTerminalState(retainedTargets: string[] = []): Promise<void> {
+  async #discardTerminalState(
+    options: { retain?: boolean } = {},
+  ): Promise<void> {
     this.#finished = true;
-    if (retainedTargets.length > 0) {
-      await this.#services.ledger.retainForUser(this.spaceId, retainedTargets);
+    if (options.retain) {
+      await this.#services.ledger.retainForUser(this.spaceId);
     } else {
       await this.#services.ledger.discard(this.spaceId);
     }
@@ -1440,7 +1484,7 @@ class TaskSpace {
     }
     if (this.ownership !== "agent") {
       return new Error(
-        `${error.message}. Task space ${this.id} is owned by the user, so labels from a finished Agent task no longer exist; stop operating it unless the user asks you to continue`,
+        `${error.message}. Task space ${this.id} is owned by the user; claim it with claimTaskSpace(${this.id}) before using its Pages, and only when the user continues this task`,
         { cause: error },
       );
     }
@@ -1471,69 +1515,101 @@ class TaskSpace {
   }
 
   /**
-   * Bring an untracked browser tab under the durable Page lifecycle.
-   * Untracked handles intentionally cannot operate on the tab before adoption.
+   * Compatibility for scripts written before every tab became a Page:
+   * returns the Page for an existing tab. `as` names a label alias that
+   * task.page() resolves in this process only.
    */
   async adopt(
-    page: UnmanagedPage,
+    page: Page | UnmanagedPage,
     options: AdoptPageOptions = {},
   ): Promise<Page> {
-    validatePublicApiOptions("TaskSpace.adopt", options);
-    assertUnmanagedPage(page);
+    if (
+      !options ||
+      typeof options !== "object" ||
+      Array.isArray(options) ||
+      Object.keys(options).some((key) => key !== "as") ||
+      (options.as !== undefined && typeof options.as !== "string")
+    ) {
+      throw new TypeError(
+        "task.adopt expects (page, { as? }); adopt is no longer needed: every tab in a space you control is already a Page",
+      );
+    }
+    if (isThenable(page)) {
+      throw new TypeError("await the page before adopting");
+    }
+    if (!(page instanceof UnmanagedPage) && !(page instanceof Page)) {
+      throw new TypeError(
+        "task.adopt expects a Page from task.pages() or task.tabs()",
+      );
+    }
     if (page.spaceId !== this.id) {
       throw new Error(
-        `untracked page ${page.targetId} belongs to space ${page.spaceId}, not space ${this.id}`,
+        `page ${page.targetId ?? (page as Page).label} belongs to space ${page.spaceId}, not space ${this.id}`,
       );
     }
     return this.#services.gate.withSpace(this.id, async () => {
       const { ledger, tabs } = await this.#reconcilePages();
-      const live = tabs.some((tab) => tab.targetId === page.targetId);
-      if (!live) {
-        throw new Error(`untracked page ${page.targetId} is no longer open`);
-      }
-      const existing = Object.entries(ledger.pages).find(
-        ([, entry]) => entry.targetId === page.targetId,
-      );
-      if (existing) {
+      const targetId =
+        page instanceof Page
+          ? (ledger.pages[page.label]?.targetId ?? page.targetId)
+          : page.targetId;
+      if (!targetId || !tabs.some((tab) => tab.targetId === targetId)) {
         throw new Error(
-          `target ${page.targetId} is already page ${existing[0]}`,
+          `page ${targetId ?? (page as Page).label} is no longer open`,
         );
       }
-      if (Object.keys(ledger.pages).length >= this.#services.pageBudget) {
-        throw pageBudgetError(this, this.#services.pageBudget, ledger, tabs);
+      const label = labelForTarget(ledger, targetId);
+      if (!label) {
+        throw new Error(
+          this.ownership === "agent"
+            ? `tab ${targetId} is the SDK's blank anchor tab, not a Page; create one with await task.newPage()`
+            : `task space ${this.id} is not under Agent control, so its tabs are not Pages yet`,
+        );
       }
-      const entry = await this.#services.ledger.addPage(
-        this.id,
-        page.targetId,
-        {
-          as: options.as,
-          openedBy: page.openedBy,
-        },
+      if (options.as !== undefined && options.as !== label) {
+        // An alias must never shadow a real label: finish() and task.page()
+        // would otherwise reach a different Page than the label names.
+        if (
+          /^p\d+$/.test(options.as) ||
+          ledger.usedLabels.includes(options.as)
+        ) {
+          throw new Error(
+            `task.adopt cannot use { as: ${JSON.stringify(options.as)} }: it is a Page label. Use ${label} instead`,
+          );
+        }
+        this.#legacyLabels.set(options.as, label);
+      }
+      deprecationNotice(
+        "adopt",
+        `task.adopt() is no longer needed: every tab in a space you control is already a Page (this one is ${label}). Use task.pages() or task.page("${label}").`,
       );
-      return new Page(this, entry.label, this.#services, entry);
+      return new Page(this, label, this.#services, {
+        label,
+        ...ledger.pages[label],
+      });
     });
   }
 
   /**
-   * Stop managing an unknown-origin page without closing its browser tab.
-   * Agent-created pages must be closed so they cannot become untracked orphans.
+   * Compatibility for scripts written before every tab became a Page:
+   * finish() never closes Pages of unknown origin, so there is nothing to
+   * release. Returns the same Page.
    */
-  async release(label: string): Promise<UnmanagedPage> {
+  async release(label: string): Promise<Page> {
     return this.#services.gate.withSpace(this.id, async () => {
       await this.#reconcilePages();
-      const entry = await this.#services.ledger.getPage(this.id, label);
+      const resolved = this.#legacyLabels.get(label) ?? label;
+      const entry = await this.#services.ledger.getPage(this.id, resolved);
       if (entry.openedBy === "agent") {
         throw new Error(
           `page ${label} was created by the agent; close it instead of releasing it`,
         );
       }
-      const released = await this.#services.ledger.releasePage(this.id, label);
-      return new UnmanagedPage(
-        this,
-        released.targetId,
-        released.openedBy,
-        unmanagedPageConstructorToken,
+      deprecationNotice(
+        "release",
+        "task.release() is no longer needed: finish() leaves Pages of user or unknown origin open.",
       );
+      return new Page(this, entry.label, this.#services, entry);
     });
   }
 
@@ -1543,8 +1619,7 @@ class TaskSpace {
     }
     return this.#services.gate.withSpace(this.id, async () => {
       const { ledger, tabs } = await this.#reconcilePages();
-      const managedCount = Object.keys(ledger.pages).length;
-      if (managedCount >= this.#services.pageBudget) {
+      if (budgetedPageCount(ledger) >= this.#services.pageBudget) {
         throw pageBudgetError(this, this.#services.pageBudget, ledger, tabs);
       }
       const targetId = await this.#services.createTab("about:blank");
@@ -1595,14 +1670,19 @@ class TaskSpace {
     const ledger = await this.#services.ledger.reconcile(
       this.id,
       tabs.map((tab) => tab.targetId),
-      { autoAdoptNew: this.ownership === "agent" },
+      {
+        assignLabels: this.ownership === "agent",
+        blankTargetIds: blankTabIds(tabs),
+      },
     );
     if (before) {
       const knownTargets = new Set(
         Object.values(before.pages).map((page) => page.targetId),
       );
       for (const [label, page] of Object.entries(ledger.pages)) {
-        if (knownTargets.has(page.targetId)) continue;
+        // Tabs that became Pages at a control boundary were not opened by
+        // the agent's actions, so they are not reported as new popups.
+        if (knownTargets.has(page.targetId) || !page.createdInTask) continue;
         const tab = tabs.find(
           (candidate) => candidate.targetId === page.targetId,
         );
@@ -1736,9 +1816,9 @@ function recordDiscoveredPage(
 }
 
 /**
- * A read-only identity for a live tab that is not managed by the Page model.
- * Obtain one from TaskSpace.tabs(), then call TaskSpace.adopt() before
- * navigating, observing, or closing the tab.
+ * A read-only identity for a live tab that is not a Page: the SDK's blank
+ * anchor tab, or a tab in a space the agent does not control. It cannot be
+ * navigated, observed, or closed.
  */
 class UnmanagedPage {
   readonly spaceId: number;
@@ -2884,6 +2964,11 @@ class Page {
   }
 
   async #resolve(): Promise<PageTarget> {
+    if (this.#task[finishedTaskToken]) {
+      throw new Error(
+        `page ${this.label}: task space ${this.spaceId} already finished; do not use Pages after task.finish(). To continue, claim the space again and use the same label`,
+      );
+    }
     const entry = await this.#services.ledger
       .getPage(this.spaceId, this.label)
       .catch(async (error) => {
@@ -3832,9 +3917,10 @@ function snapshotSourceHeader(input: {
     (tab) => !managedTargets.has(tab.targetId),
   ).length;
   const managed = pages.length;
+  const budgeted = budgetedPageCount(input.ledger);
   const budget =
-    managed >= input.pageBudget - 1
-      ? ` | budget ${managed}/${input.pageBudget}`
+    budgeted >= input.pageBudget - 1
+      ? ` | budget ${budgeted}/${input.pageBudget}`
       : "";
   const inventory = pages.length > 0 ? ` — ${pages.join(", ")}` : "";
   return `[${input.currentLabel} ${JSON.stringify(currentTitle)} | space ${JSON.stringify(input.spaceName)}(${input.spaceId}): ${managed} managed, ${untracked} untracked${inventory}${budget}]`;
@@ -4555,12 +4641,12 @@ function tabInventory(
   });
 }
 
-function assertUnmanagedPage(page: unknown): asserts page is UnmanagedPage {
-  if (!(page instanceof UnmanagedPage)) {
-    throw new TypeError(
-      "task.adopt requires an untracked page returned by task.tabs()",
-    );
-  }
+function isThenable(value: unknown): boolean {
+  return (
+    value !== null &&
+    (typeof value === "object" || typeof value === "function") &&
+    typeof (value as { then?: unknown }).then === "function"
+  );
 }
 
 function pageBudgetError(
@@ -4570,7 +4656,9 @@ function pageBudgetError(
   tabs: RuntimeTab[],
 ): PageBudgetError {
   const tabsByTarget = new Map(tabs.map((tab) => [tab.targetId, tab]));
-  const entries = Object.entries(ledger.pages);
+  const entries = Object.entries(ledger.pages).filter(
+    ([, page]) => page.createdInTask,
+  );
   const lines = entries.map(([label, page]) => {
     const tab = tabsByTarget.get(page.targetId);
     const title = compactPageTitle(tab?.title || tab?.url || "untitled");
@@ -4589,6 +4677,19 @@ function pageBudgetError(
       `Reuse: await task.page('${suggestion}').goto(url)`,
     ].join("\n"),
   );
+}
+
+/** Tabs still showing a blank document, such as an untouched SDK anchor. */
+function blankTabIds(tabs: RuntimeTab[]): string[] {
+  return tabs
+    .filter((tab) => !tab.url || tab.url === "about:blank")
+    .map((tab) => tab.targetId);
+}
+
+/** Pages that count against the budget: those the agent opened in this task. */
+function budgetedPageCount(ledger: PageLedger): number {
+  return Object.values(ledger.pages).filter((page) => page.createdInTask)
+    .length;
 }
 
 function compactPageTitle(value: string): string {

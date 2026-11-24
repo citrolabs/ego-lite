@@ -32,8 +32,10 @@ Task spaces are isolated browsing contexts with an ownership model (`agent` / `u
 
 - New scripts use `taskSpace(nameOrId)` and operate through the returned
   `TaskSpace` and labeled `Page` objects.
-- `task.pages()` returns managed Page handles; `task.tabs()` returns the full
-  managed and unmanaged tab inventory.
+- While the agent controls a space, every tab is a labeled Page (no
+  `adopt()` step); each Page records `openedBy` (`agent` / `unknown`), and
+  `finish()` only closes the agent's own Pages. `task.pages()` returns the
+  Pages; `task.tabs()` adds origin, active state and the SDK's blank anchor.
 - Control handoff uses `task.handOff()` and `takeOverTaskSpace(spaceId)`.
 - The old global helpers remain available only for v1 script compatibility.
 

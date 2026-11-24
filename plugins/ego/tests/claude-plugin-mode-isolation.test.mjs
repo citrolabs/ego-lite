@@ -163,7 +163,11 @@ test("versioned guide restores v2 Pages across script rounds", () => {
     skill,
     /Every invocation starts a new Node\.js process[\s\S]*Page labels\s+persist; JavaScript variables do not/i,
   );
-  assert.match(skill, /await taskSpace\(SPACE_ID\);[\s\S]*task\.adopt\(/);
+  assert.match(
+    skill,
+    /await taskSpace\(SPACE_ID\);[\s\S]*const page = \(await task\.pages\(\)\)\[0\];/,
+  );
+  assert.doesNotMatch(skill, /task\.adopt\(|task\.release\(/);
   assert.match(skill, /After the page changes, take a new snapshot/);
   assert.doesNotMatch(
     skill,

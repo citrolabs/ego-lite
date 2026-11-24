@@ -116,33 +116,24 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     name: "TaskSpace.userPage",
     signature: "task.userPage()",
     summary:
-      "Return the tab active at the claim/takeover boundary, when one was captured.",
+      "Return the Page active at the claim/takeover boundary, when one was captured.",
   },
   {
     name: "TaskSpace.pages",
     signature: "await task.pages()",
-    summary: "List the managed Page handles in this space.",
+    summary:
+      "List the Pages in this space. While you control it, every tab is a Page, including tabs the user opened.",
   },
   {
     name: "TaskSpace.tabs",
     signature: "await task.tabs()",
-    summary: "List managed Pages and unmanaged tabs in this space.",
+    summary:
+      "List every tab with its Page, origin (agent or unknown) and active state; the SDK's blank anchor tab has no label.",
   },
   {
     name: "TaskSpace.newPage",
     signature: "await task.newPage()",
     summary: "Create and durably label a blank Page.",
-  },
-  {
-    name: "TaskSpace.adopt",
-    signature: "await task.adopt(unmanagedPage, { as? })",
-    summary: "Bring an unmanaged tab under the Page lifecycle.",
-    options: { as: option("string", "Permanent Page label.") },
-  },
-  {
-    name: "TaskSpace.release",
-    signature: "await task.release(label)",
-    summary: "Stop managing an unknown-origin Page without closing it.",
   },
   {
     name: "TaskSpace.waitForControl",
@@ -165,7 +156,7 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     name: "TaskSpace.finish",
     signature: "await task.finish({ keep })",
     summary:
-      "Finish the task and return a receipt with retained and closed managed Page labels; an empty list closes the space when no protected tabs remain.",
+      "Finish the task: close the agent's Pages not listed in keep and give the space to the user, or close it when nothing is left open. Pages of unknown origin always stay open.",
     options: {
       keep: option(
         "pageRetention",

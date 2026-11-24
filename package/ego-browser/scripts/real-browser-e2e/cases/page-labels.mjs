@@ -2,8 +2,17 @@ export function pageLabelCreateCase() {
   return `
     const task = await taskSpace(taskName);
     await openOrReuseTab(baseUrl + "/?inventory=unknown", { wait: true, timeout: 10 });
-    const page = await newPageAt(task, baseUrl + "/?managed=p1");
-    assertEqual(page.label, "p1", "first managed page receives p1");
+    const baseline = await task.pages();
+    assert(baseline.length > 0, "tabs from before the first Page call become Pages");
+    assert(
+      baseline.every((item) => item.openedBy === "unknown"),
+      "tabs from before the control boundary have unknown origin"
+    );
+    const page = await newPageAt(task, baseUrl + "/?managed=first");
+    assert(
+      !baseline.some((item) => item.label === page.label),
+      "a new Page receives a fresh label"
+    );
     assertEqual(page.spaceId, task.id, "page carries its task-space id");
     assertEqual(typeof page.targetId, "string", "new page exposes its target id");
     const snapshot = await page.snapshot();
@@ -16,13 +25,21 @@ export function pageLabelCreateCase() {
     const managedPages = await task.pages();
     assertEqual(managed.page.targetId, page.targetId, "tabs returns the managed Page handle");
     assertEqual(managed.openedBy, "agent", "tabs identifies managed page origin");
-    assertEqual(managedPages.length, 1, "pages excludes unmanaged tabs");
-    assertEqual(managedPages[0].label, page.label, "pages returns the managed Page directly");
+    assertEqual(managedPages.length, baseline.length + 1, "pages includes every tab");
+    assert(
+      managedPages.some((item) => item.label === page.label),
+      "pages returns the new Page directly"
+    );
     assertEqual(typeof managedPages[0].url, "function", "pages returns Page methods");
     assertEqual(typeof task.listPages, "undefined", "the replaced listPages method is absent");
-    assert(
-      inventory.some((item) => item.label === undefined && item.openedBy === "unknown"),
-      "tabs preserves untracked browser tabs as unknown"
+    const unknownItem = inventory.find(
+      (item) => item.openedBy === "unknown" && item.url.startsWith(baseUrl)
+    );
+    assert(Boolean(unknownItem?.label), "tabs labels the unknown-origin tabs");
+    assertIncludes(
+      await unknownItem.page.url(),
+      baseUrl,
+      "an unknown-origin Page is usable without adopt"
     );
     await writeFile(
       join(tempDir, "managed-page.json"),
@@ -103,12 +120,16 @@ export function pageLabelCloseCase() {
     );
     await assertRejects(
       () => task.page(saved.label).goto(baseUrl + "/closed"),
-      "page p1 was closed",
+      "page " + saved.label + " was closed",
       "a closed label fails closed"
     );
 
-    const next = await newPageAt(task, baseUrl + "/secondary?managed=p2");
-    assertEqual(next.label, "p2", "closed labels are never reused");
+    const next = await newPageAt(task, baseUrl + "/secondary?managed=next");
+    const labelNumber = (label) => Number(label.slice(1));
+    assert(
+      labelNumber(next.label) > labelNumber(saved.label),
+      "closed labels are never reused"
+    );
     await closeTab(next.targetId);
     for (let attempt = 0; attempt < 20; attempt += 1) {
       if (!(await listTabs()).some((tab) => tab.targetId === next.targetId)) break;
@@ -116,16 +137,19 @@ export function pageLabelCloseCase() {
     }
     const reconciled = await task.tabs();
     assert(
-      !reconciled.some((item) => item.label === "p2"),
+      !reconciled.some((item) => item.label === next.label),
       "tabs removes a managed page closed outside the object API"
     );
     await assertRejects(
-      () => task.page("p2").snapshot(),
-      "page p2 was closed",
+      () => task.page(next.label).snapshot(),
+      "page " + next.label + " was closed",
       "reconciliation permanently retires an externally closed label"
     );
-    const afterExternalClose = await newPageAt(task, baseUrl + "/secondary?managed=p3");
-    assertEqual(afterExternalClose.label, "p3", "reconciliation frees budget without reusing labels");
+    const afterExternalClose = await newPageAt(task, baseUrl + "/secondary?managed=after-external");
+    assert(
+      labelNumber(afterExternalClose.label) > labelNumber(next.label),
+      "reconciliation frees budget without reusing labels"
+    );
     await afterExternalClose.close();
   `;
 }
@@ -158,14 +182,16 @@ export function pageBudgetCase() {
   return `
     assertEqual(process.env.EGO_BROWSER_PAGE_BUDGET, "3", "budget configuration reaches the SDK process");
     const task = await taskSpace(taskName);
+    const unknownPages = (await task.pages()).filter((page) => page.openedBy === "unknown");
+    const baselineCount = (await task.pages()).length;
     const managed = [];
     for (let index = 0; index < 3; index += 1) {
       managed.push(await newPageAt(task, baseUrl + "/secondary?budget=" + index));
       const inventory = await task.tabs();
       assertEqual(
         inventory.filter((item) => item.label !== undefined).length,
-        index + 1,
-        "each newPage is visible to managed-page inventory"
+        baselineCount + index + 1,
+        "each newPage is visible to the Page inventory"
       );
     }
     const beforeReject = await listTabs();
@@ -179,59 +205,131 @@ export function pageBudgetCase() {
     const inventory = await task.tabs();
     assertEqual(
       inventory.filter((item) => item.label !== undefined).length,
-      3,
-      "tabs reports every managed page at the budget limit"
+      baselineCount + 3,
+      "tabs reports every Page at the budget limit"
+    );
+    assert(
+      unknownPages.length > 0,
+      "unknown-origin Pages were open and did not count against the budget"
     );
     for (const page of managed) await page.close();
   `;
 }
 
-export function pageAdoptionCase() {
+export function pageAdoptionCompatibilityCase() {
   return `
     const task = await taskSpace(taskName);
-    const beforeAdopt = await task.tabs();
-    const untracked = beforeAdopt.find((item) => item.label === undefined);
-    assert(Boolean(untracked), "tabs preserves a tab from before the control boundary");
-    const source = untracked.page;
-    assertEqual(untracked.page.targetId, source.targetId, "untracked handle keeps the target id");
-    assertEqual(untracked.page.snapshot, undefined, "untracked handle cannot snapshot directly");
-    assertEqual(untracked.page.goto, undefined, "untracked handle cannot navigate directly");
-    assertEqual(untracked.page.close, undefined, "untracked handle cannot close directly");
+    const existing = (await task.pages()).find((page) => page.openedBy === "unknown");
+    assert(Boolean(existing), "a tab from before the control boundary is a Page");
+    await existing.goto(baseUrl + "/?adopt=source");
+    assertIncludes(await existing.snapshot(), "Helper e2e fixture", "an unknown-origin Page works without adopt");
 
-    const adopted = await task.adopt(untracked.page, { as: "borrowed" });
-    assertEqual(adopted.label, "borrowed", "adopt assigns the requested durable label");
-    assertEqual(adopted.openedBy, "unknown", "adopt preserves conservative origin attribution");
-    await adopted.goto(baseUrl + "/?adopt=source");
-    assertIncludes(await adopted.snapshot(), "Helper e2e fixture", "adopted page supports Page operations");
-
-    const released = await task.release(adopted.label);
-    assertEqual(released.targetId, source.targetId, "release returns the same untracked target");
+    const adopted = await task.adopt(existing, { as: "borrowed" });
+    assertEqual(adopted.label, existing.label, "adopt returns the existing Page for old scripts");
+    assertIncludes(
+      await task.page("borrowed").url(),
+      "adopt=source",
+      "an old adopt label resolves within the same process"
+    );
+    const released = await task.release("borrowed");
+    assertEqual(released.targetId, existing.targetId, "release returns the same Page for old scripts");
     assert(
-      (await listTabs()).some((tab) => tab.targetId === source.targetId),
-      "release leaves the browser tab open"
+      (await task.tabs()).some((item) => item.targetId === existing.targetId && item.label === existing.label),
+      "release keeps the tab and its label"
     );
-    assertEqual(
-      (await task.tabs()).find((item) => item.targetId === source.targetId).label,
-      undefined,
-      "release removes the durable label"
-    );
-    await assertRejects(
-      () => adopted.snapshot(),
-      "page borrowed was released",
-      "the released label fails closed"
-    );
-
-    const adoptedAgain = await task.adopt(released, { as: "borrowed-again" });
-    assertEqual(adoptedAgain.targetId, source.targetId, "a released tab can be adopted again");
-    await task.release(adoptedAgain.label);
 
     const agentPage = await newPageAt(task, baseUrl + "/secondary?release=agent");
     await assertRejects(
       () => task.release(agentPage.label),
       "was created by the agent; close it instead",
-      "agent-created pages cannot become untracked orphans"
+      "agent-created pages still cannot be released"
     );
     await agentPage.close();
+  `;
+}
+
+export function pageClaimContinuationCase() {
+  return `
+    const task = await taskSpace(taskName + " claim continuation");
+    const spaceId = task.spaceId;
+    const first = task.page("p1");
+    await first.goto(baseUrl + "/?claim=compare-a");
+    const second = await newPageAt(task, baseUrl + "/secondary?claim=compare-b");
+    assertEqual(second.label, "p2", "the second Page is p2");
+    const kept = await task.finish({ keep: "all" });
+    assertEqual(kept.closedSpace, false, "keep all leaves the space for the user");
+    assertEqual(
+      JSON.stringify(kept.keptManagedLabels),
+      JSON.stringify(["p1", "p2"]),
+      "keep all keeps both Pages"
+    );
+
+    const followUp = await claimTaskSpace(spaceId);
+    assertEqual(
+      JSON.stringify((await followUp.pages()).map((page) => page.label)),
+      JSON.stringify(["p1", "p2"]),
+      "a claim continues with the kept labels"
+    );
+    assertIncludes(await followUp.page("p1").url(), "claim=compare-a", "p1 is the same Page after the claim");
+    assertIncludes(await followUp.page("p2").url(), "claim=compare-b", "p2 is the same Page after the claim");
+    assertIncludes(await followUp.page("p2").snapshot(), "Secondary", "a kept Page works without adopt");
+    assertEqual(
+      (await followUp.tabs()).find((item) => item.label === "p2").openedBy,
+      "agent",
+      "a kept Page keeps its agent origin"
+    );
+    const third = await newPageAt(followUp, baseUrl + "/secondary?claim=third");
+    assertEqual(third.label, "p3", "label numbering continues after a claim");
+    const keepSecond = await followUp.finish({ keep: ["p2"] });
+    assertEqual(
+      JSON.stringify([...keepSecond.closedManagedLabels].sort()),
+      JSON.stringify(["p1", "p3"]),
+      "keep closes the earlier kept Page it does not name"
+    );
+
+    const summary = await claimTaskSpace(spaceId);
+    assertEqual(
+      JSON.stringify((await summary.pages()).map((page) => page.label)),
+      JSON.stringify(["p2"]),
+      "the second claim sees the Page kept by name"
+    );
+    const closing = await summary.finish({ keep: [] });
+    assertEqual(closing.closedSpace, true, "keep: [] closes a claimed space that holds only agent Pages");
+  `;
+}
+
+export function pageUserTabsProtectedCase() {
+  return `
+    // A space with tabs opened before any Page call stands in for a space the
+    // user already had open: its tabs have unknown origin.
+    const spaceName = taskName + " user tabs";
+    await useOrCreateTaskSpace(spaceName);
+    const userTab = await openOrReuseTab(baseUrl + "/nav-target?user-tab=1", { wait: true, timeout: 10 });
+
+    const task = await taskSpace(spaceName);
+    const spaceId = task.spaceId;
+    const userPage = (await task.pages()).find((page) => page.targetId === userTab.targetId);
+    assert(Boolean(userPage), "the user's tab is a Page");
+    assertEqual(userPage.openedBy, "unknown", "the user's tab has unknown origin");
+    assertIncludes(await userPage.snapshot(), "Navigation target", "the user's Page works without adopt");
+    const userLabels = (await task.pages()).map((page) => page.label);
+
+    const agentPage = await newPageAt(task, baseUrl + "/secondary?user-tab=agent");
+    const receipt = await task.finish({ keep: [] });
+    assertEqual(receipt.closedSpace, false, "keep: [] leaves a space with user tabs open");
+    assertEqual(
+      JSON.stringify(receipt.closedManagedLabels),
+      JSON.stringify([agentPage.label]),
+      "keep: [] closes only the agent's Page"
+    );
+    assertEqual(
+      JSON.stringify([...receipt.keptManagedLabels].sort()),
+      JSON.stringify([...userLabels].sort()),
+      "keep: [] keeps every Page of unknown origin"
+    );
+    const remaining = (await listTaskSpaces()).find((space) => space.id === spaceId);
+    assertEqual(remaining?.ownership, "user", "the space now belongs to the user");
+    await completeTaskSpace(spaceId, { keep: false });
   `;
 }
 
@@ -486,9 +584,9 @@ export function pageActionsAndPopupCase() {
   return `
     const task = await taskSpace(taskName);
     const unknownBefore = (await task.tabs())
-      .filter((item) => item.label === undefined)
+      .filter((item) => item.openedBy === "unknown")
       .map((item) => item.targetId);
-    assert(unknownBefore.length > 0, "the control-boundary inventory keeps pre-existing tabs untracked");
+    assert(unknownBefore.length > 0, "pre-existing tabs keep their unknown origin");
     const source = await newPageAt(task, baseUrl + "/?page-actions=source");
     const comparison = await newPageAt(task, baseUrl + "/secondary?page-actions=comparison");
     const budgetFiller = await newPageAt(task, baseUrl + "/secondary?page-actions=budget");
@@ -945,9 +1043,9 @@ export function pageActionsAndPopupCase() {
     assertEqual(reconciledPopup.openedBy, "agent", "the reconciled popup keeps Agent origin");
     assert(
       unknownBefore.every(
-        (targetId) => inventory.find((item) => item.targetId === targetId)?.label === undefined
+        (targetId) => inventory.find((item) => item.targetId === targetId)?.openedBy === "unknown"
       ),
-      "tabs that existed before the action remain untracked"
+      "tabs that existed before the action keep their unknown origin"
     );
     await assertRejects(
       () => newPageAt(task, baseUrl + "/secondary?page-actions=blocked"),

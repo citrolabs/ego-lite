@@ -85,7 +85,9 @@ import { runtimeCase } from "./runtime.mjs";
 import { runtimeRegressionCase } from "./runtime-regression.mjs";
 import { eventIsolationCase } from "./event-isolation.mjs";
 import {
-  pageAdoptionCase,
+  pageAdoptionCompatibilityCase,
+  pageClaimContinuationCase,
+  pageUserTabsProtectedCase,
   pageActionsAndPopupCase,
   pageBasicOperationsCase,
   pageComplexEvaluateCase,
@@ -133,7 +135,15 @@ export const e2eCases = [
     body: pageLabelHardStopRestoreCase,
   },
   { name: "page inventory and budget", body: pageBudgetCase },
-  { name: "page adoption and release", body: pageAdoptionCase },
+  {
+    name: "page adopt and release compatibility",
+    body: pageAdoptionCompatibilityCase,
+  },
+  {
+    name: "page labels continue after a claim",
+    body: pageClaimContinuationCase,
+  },
+  { name: "finish leaves user Pages open", body: pageUserTabsProtectedCase },
   { name: "page basic operations", body: pageBasicOperationsCase },
   { name: "page complex evaluate", body: pageComplexEvaluateCase },
   { name: "page fetch", body: pageFetchCase },
