@@ -88,6 +88,9 @@ import {
   pageAdoptionCompatibilityCase,
   pageClaimContinuationCase,
   pageUserTabsProtectedCase,
+  roundStatusFinishCase,
+  roundStatusClaimCase,
+  roundStatusCleanupCase,
   pageActionsAndPopupCase,
   pageBasicOperationsCase,
   pageComplexEvaluateCase,
@@ -144,6 +147,22 @@ export const e2eCases = [
     body: pageClaimContinuationCase,
   },
   { name: "finish leaves user Pages open", body: pageUserTabsProtectedCase },
+  {
+    name: "round status: finish keeps a Page",
+    body: roundStatusFinishCase,
+    expectedOutput: ' round status" finished(p2:"ego-lite secondary")]',
+  },
+  {
+    name: "round status: claim continues",
+    body: roundStatusClaimCase,
+    expectedOutput:
+      ' round status" ready(p2:"ego-lite secondary",p3:"ego-lite nav target")]',
+  },
+  {
+    name: "round status: v1 cleanup is not reported",
+    body: roundStatusCleanupCase,
+    forbiddenOutput: ' round status" ',
+  },
   { name: "page basic operations", body: pageBasicOperationsCase },
   { name: "page complex evaluate", body: pageComplexEvaluateCase },
   { name: "page fetch", body: pageFetchCase },

@@ -505,6 +505,12 @@ Until you claim a space you finished with kept Pages, neither `taskSpace()` nor
 the same labels, and tabs the user opened meanwhile are new Pages with
 `openedBy: "unknown"`.
 
+Script output ends with the state of each task space the script used, such as
+`[7 "trip" ready(p1:"Flights",p2 user:"Sign in") | 9 "notes" closed()]`. Use
+`ready` labels directly in the next script; claim a `finished` space first, and
+wait for the user on `user_control`. `user` marks a Page the user opened; `new`
+marks one your actions opened that you have not used yet.
+
 End each reply's browser work with one `finish()` in a separate last script,
 run after earlier output has shown that the request is done, and wait for it
 before you report. A space finished too early must not take more work in this

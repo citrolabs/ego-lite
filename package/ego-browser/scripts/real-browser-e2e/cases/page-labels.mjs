@@ -298,6 +298,48 @@ export function pageClaimContinuationCase() {
   `;
 }
 
+// The round status line is printed after the script settles, so each step
+// is its own case and the runner checks the line through expectedOutput.
+export function roundStatusFinishCase() {
+  return `
+    const task = await taskSpace(taskName + " round status");
+    await task.page("p1").goto(baseUrl + "/?round-status=first");
+    const second = await newPageAt(task, baseUrl + "/secondary?round-status=second");
+    assertEqual(second.label, "p2", "the second Page is p2");
+    await task.page("p1").close();
+    const receipt = await task.finish({ keep: ["p2"] });
+    assertEqual(receipt.closedSpace, false, "keeping p2 leaves the space for the user");
+  `;
+}
+
+export function roundStatusClaimCase() {
+  return `
+    const space = (await listTaskSpaces()).find(
+      (item) => item.name === taskName + " round status"
+    );
+    assert(Boolean(space), "the space finished by the previous case still exists");
+    const task = await claimTaskSpace(space.id);
+    assertEqual(
+      JSON.stringify((await task.pages()).map((page) => page.label)),
+      JSON.stringify(["p2"]),
+      "the claim continues with the kept label"
+    );
+    const third = await newPageAt(task, baseUrl + "/nav-target?round-status=third");
+    assertEqual(third.label, "p3", "numbering continues after the claim");
+  `;
+}
+
+export function roundStatusCleanupCase() {
+  return `
+    const space = (await listTaskSpaces()).find(
+      (item) => item.name === taskName + " round status"
+    );
+    assert(Boolean(space), "the claimed space still exists");
+    // v1 helpers do not report round status.
+    await completeTaskSpace(space.id, { keep: false });
+  `;
+}
+
 export function pageUserTabsProtectedCase() {
   return `
     // A space with tabs opened before any Page call stands in for a space the

@@ -6,6 +6,12 @@ import {
   resetPageNotices,
   type UnhandledPageNotice,
 } from "./page-discovery.js";
+import {
+  formatRoundStatus,
+  refreshRoundStatus,
+  resetRoundStatus,
+  roundStatusNeedsRefresh,
+} from "./round-status.js";
 
 /**
  * Round output stays buffered until completion because bytes written before a hard
@@ -25,6 +31,8 @@ let buffer: string[] = [];
 let hardStopMessage: string | null = null;
 let flushed = false;
 let lifecycleHooked = false;
+let finalizing = false;
+let hardStopsSuppressed = 0;
 
 /** Buffer one already-formatted cliLog chunk (the trailing newline is included). */
 export function bufferOutput(chunk: string): void {
@@ -53,6 +61,7 @@ export function createRoundConsole(
  * the guidance exactly once.
  */
 export function markHardStop(message: string): void {
+  if (hardStopsSuppressed > 0) return;
   if (hardStopMessage === null) {
     hardStopMessage = message;
   }
@@ -83,11 +92,29 @@ export function flushSink(stream: WritableLike, thrown: boolean): void {
     }
   } else {
     for (const chunk of buffer) stream.write(chunk);
-    if (pageNotices.length > 0) {
-      stream.write(formatPageNotices(pageNotices));
+    const status = formatRoundStatus(pageNotices);
+    if (status.remainingNotices.length > 0) {
+      stream.write(formatPageNotices(status.remainingNotices));
     }
+    if (status.line) stream.write(status.line);
   }
   buffer = [];
+}
+
+/**
+ * Re-read the task spaces this round operated before the status line is
+ * printed. The script has already settled, so a space the user took back in
+ * the meantime must not turn its output into a hard stop: errors from this
+ * read only mark that space `unknown(-)`. Never rejects.
+ */
+export async function finalizeRoundStatus(): Promise<void> {
+  if (hardStopMessage !== null) return;
+  hardStopsSuppressed += 1;
+  try {
+    await refreshRoundStatus();
+  } finally {
+    hardStopsSuppressed -= 1;
+  }
 }
 
 /** Clear sink state. Real runs get a fresh process; this is only for in-process tests. */
@@ -95,7 +122,9 @@ export function resetSink(): void {
   buffer = [];
   hardStopMessage = null;
   flushed = false;
+  finalizing = false;
   resetPageNotices();
+  resetRoundStatus();
 }
 
 function formatPageNotices(notices: UnhandledPageNotice[]): string {
@@ -135,6 +164,17 @@ export function installLifecycleFlush(
         },
       }
     : stream;
-  lifecycle.on("beforeExit", () => flushSink(writer, false));
+  lifecycle.on("beforeExit", () => {
+    if (flushed || finalizing) return;
+    if (hardStopMessage !== null || !roundStatusNeedsRefresh()) {
+      flushSink(writer, false);
+      return;
+    }
+    // `beforeExit` may schedule more work: the refresh keeps the loop alive,
+    // and the flush runs once it settles. An `exit` in the meantime still
+    // flushes with the last cached status.
+    finalizing = true;
+    void finalizeRoundStatus().then(() => flushSink(writer, false));
+  });
   lifecycle.on("exit", () => flushSink(writer, true));
 }

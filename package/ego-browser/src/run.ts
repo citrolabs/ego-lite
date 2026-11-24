@@ -11,6 +11,7 @@ import { addPageContextHint } from "./page-context-guard.js";
 import {
   bufferOutput,
   createRoundConsole,
+  finalizeRoundStatus,
   flushSink,
   resetSink,
 } from "./output-sink.js";
@@ -107,10 +108,13 @@ async function execute(code: string, stdout: WritableLike) {
     await fn(...values);
   } catch (error) {
     // The thrown Error surfaces the hard-stop message on its own, so flush as a thrown
-    // completion (drop the buffer, stay silent) and let it propagate.
+    // completion (drop the buffer, stay silent) and let it propagate. A script that
+    // failed for another reason still reports where its task spaces were left.
+    await finalizeRoundStatus();
     flushSink(stdout, true);
     throw addPageContextHint(error);
   }
+  await finalizeRoundStatus();
   flushSink(stdout, false);
 }
 

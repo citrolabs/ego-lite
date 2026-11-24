@@ -18,7 +18,11 @@ import {
   PageUnresponsiveError,
 } from "../dist/src/browser-runtime.js";
 import { PageLedgerStore } from "../dist/src/page-ledger.js";
-import { flushSink, resetSink } from "../dist/src/output-sink.js";
+import {
+  finalizeRoundStatus,
+  flushSink,
+  resetSink,
+} from "../dist/src/output-sink.js";
 import {
   captureTaskSpaceUserBoundary,
   createTaskSpaceHandle,
@@ -1732,6 +1736,169 @@ function capturedRoundOutput() {
   return output;
 }
 
+/** The round's final status line, after the round-end refresh. */
+async function roundStatusLine() {
+  await finalizeRoundStatus();
+  const lines = capturedRoundOutput().trimEnd().split("\n");
+  return lines.at(-1);
+}
+
+test("the round status lists open Pages and follows newPage and close", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const task = taskForRound(fixture, "round-a");
+    const p1 = await openTestPage(task, "https://example.test/one");
+    await openTestPage(task, "https://example.test/two");
+    assert.equal(
+      await roundStatusLine(),
+      '[7 "research" ready(p1:"https://example.test/one",p2:"https://example.test/two")]',
+    );
+
+    await p1.close();
+    assert.equal(
+      await roundStatusLine(),
+      '[7 "research" ready(p2:"https://example.test/two")]',
+    );
+  });
+});
+
+test("the round status shows ready() when only the blank anchor is left", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const task = taskForRound(fixture, "round-a");
+    const p1 = await openTestPage(task, "https://example.test/one");
+    await p1.close();
+    assert.equal(await roundStatusLine(), '[7 "research" ready()]');
+  });
+});
+
+test("a TaskSpace handle that was never operated is not listed", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const task = taskForRound(fixture, "round-a");
+    await initializeTaskSpaceHandle(task);
+    await finalizeRoundStatus();
+    assert.equal(capturedRoundOutput(), "");
+  });
+});
+
+test("the round status does not set the control baseline of a fresh ledger", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const ledger = new PageLedgerStore({ rootDir: fixture.rootDir });
+    const task = taskForRound(fixture, "round-a", { ledger });
+    fixture.addExternalTab("target-existing", "https://example.test/existing");
+    task.userPage();
+
+    assert.equal(await roundStatusLine(), '[7 "research" ready()]');
+    assert.equal(
+      (await ledger.read(7)).initialized,
+      false,
+      "tabs from before the first Page call keep their unknown origin",
+    );
+  });
+});
+
+test("the round status does not read a space handed off to the user", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const task = taskForRound(fixture, "round-a", {
+      async handOffTaskSpace() {},
+    });
+    await openTestPage(task, "https://example.test/one");
+    await task.handOff();
+    fixture.calls.length = 0;
+
+    assert.equal(await roundStatusLine(), '[7 "research" user_control(-)]');
+    assert.equal(
+      fixture.calls.some(([name]) => name === "selectSpace"),
+      false,
+      "the user's tabs are not read",
+    );
+  });
+});
+
+test("the round status checks ownership before reading tabs", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    let ownership = "agent";
+    const task = taskForRound(fixture, "round-a", {
+      async taskSpaceOwnership(spaceId) {
+        assert.equal(spaceId, 7);
+        return ownership;
+      },
+    });
+    await openTestPage(task, "https://example.test/one");
+    ownership = "agentDelegatedToUser";
+    assert.equal(await roundStatusLine(), '[7 "research" user_control(-)]');
+
+    await task.tabs();
+    ownership = null;
+    assert.equal(await roundStatusLine(), '[7 "research" closed()]');
+  });
+});
+
+test("the round status reports finish results without reading the space again", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const lifecycleCalls = [];
+    const { task } = finishFixtureTask(fixture, lifecycleCalls);
+    const p1 = await openTestPage(task, "https://example.test/one");
+    await openTestPage(task, "https://example.test/two");
+    await task.finish({ keep: [p1.label] });
+    assert.equal(
+      await roundStatusLine(),
+      '[7 "research" finished(p1:"https://example.test/one")]',
+    );
+
+    const { task: claimed } = finishFixtureTask(fixture, lifecycleCalls);
+    fixture.addExternalTab("target-user", "https://example.test/user");
+    await claimed.pages();
+    assert.equal(
+      await roundStatusLine(),
+      '[7 "research" ready(p1:"https://example.test/one",p3 user:"https://example.test/user")]',
+      "kept labels continue after a claim and the user's tab is marked",
+    );
+
+    await claimed.finish({ keep: [] });
+    assert.equal(
+      await roundStatusLine(),
+      '[7 "research" finished(p3 user:"https://example.test/user")]',
+    );
+  });
+});
+
+test("the round status reports a closed space", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const { task } = finishFixtureTask(fixture, []);
+    await openTestPage(task, "https://example.test/one");
+    await task.finish({ keep: [] });
+    assert.equal(await roundStatusLine(), '[7 "research" closed()]');
+  });
+});
+
+test("an unhandled popup is reported in the status line instead of a separate block", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const task = taskForRound(fixture, "round-a");
+    await initializeTaskSpaceHandle(task);
+    const source = await openTestPage(task, "https://example.test/source");
+    fixture.addExternalTab("target-popup", "https://example.test/popup", {
+      openerId: source.targetId,
+    });
+    await task.tabs();
+
+    await finalizeRoundStatus();
+    const output = capturedRoundOutput();
+    assert.doesNotMatch(output, /\[ego-browser:pages\]/);
+    assert.match(
+      output,
+      /\[7 "research" ready\(p1:"https:\/\/example\.test\/source",p2 new from p1:"https:\/\/example\.test\/popup"\)\]\n$/,
+    );
+  });
+});
+
 test("a claimed space continues with the kept Page label and closes with keep: []", async () => {
   await withFixture(async (fixture) => {
     resetSink();
@@ -1883,14 +2050,13 @@ test("a kept tab of unknown origin stays protected after a claim", async () => {
     assert.deepEqual(lifecycleCalls, ["finish"]);
     assert.equal(fixture.tabs.has(agentPage.targetId), false);
     assert.equal(fixture.tabs.has("target-user"), true);
-    assert.match(
-      capturedRoundOutput(),
-      /left 1 tab\(s\) of user or unknown origin open \(p2\); task space 7 now belongs to the user/,
-    );
+    // The status line replaces finish()'s own notice: the space stays open
+    // for the user with their Page marked.
+    assert.match(capturedRoundOutput(), / finished\(p2 user:"[^"]*"\)\]\n$/);
   });
 });
 
-test("finish reports an unclosed space only when it was asked to keep nothing", async () => {
+test("finish keep all reports every kept Page in the status line", async () => {
   await withFixture(async (fixture) => {
     resetSink();
     const lifecycleCalls = [];
@@ -1903,7 +2069,10 @@ test("finish reports an unclosed space only when it was asked to keep nothing", 
     assert.equal(receipt.closedSpace, false);
     assert.deepEqual(receipt.keptManagedLabels, ["p1", "p2"]);
     assert.equal(receipt.preservedUnmanagedCount, 0);
-    assert.doesNotMatch(capturedRoundOutput(), /now belongs to the user/);
+    assert.match(
+      capturedRoundOutput(),
+      / finished\(p1:"[^"]*",p2 user:"[^"]*"\)\]\n$/,
+    );
   });
 });
 
@@ -1940,10 +2109,7 @@ test("TaskSpace finish protects a tab opened while the user owned the space", as
     assert.deepEqual(lifecycleCalls, ["finish"]);
     assert.equal(fixture.tabs.has(keptTarget), false, "the kept tab is closed");
     assert.equal(fixture.tabs.has("target-user"), true, "the user tab remains");
-    assert.match(
-      capturedRoundOutput(),
-      /finish\(\{ keep: \[\] \}\) closed p1 and left 1 tab\(s\) of user or unknown origin open \(p2\)/,
-    );
+    assert.match(capturedRoundOutput(), / finished\(p2 user:"[^"]*"\)\]\n$/);
     resetSink();
   });
 });
