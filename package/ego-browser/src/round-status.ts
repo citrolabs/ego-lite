@@ -5,11 +5,12 @@ import type { UnhandledPageNotice } from "./page-discovery.js";
  * operated, so the next script knows which Pages it can use directly and which
  * spaces must be claimed or taken over first.
  *
- *   [7 "research" ready(p1:"Product",p2 user:"Sign in") | 12 "quotes" closed()]
+ *   [7 "research" ready: p1 "Product", p2 "Sign in" (user); 12 "quotes" closed]
  *
- * Spaces are listed in the order the script first operated them. `(-)` means
- * the Page list was not read: the user controls the space, or reading failed.
- * Like the rest of the round output, this state is per process.
+ * Spaces are listed in the order the script first operated them and joined
+ * with `; `. A `ready` or `finished` space lists its open Pages after a colon;
+ * the other states list none (the user's tabs are not read). Like the rest of
+ * the round output, this state is per process.
  */
 
 export type RoundSpaceState =
@@ -28,7 +29,7 @@ export type RoundStatusPage = {
 
 export type RoundSpaceStatus = {
   state: RoundSpaceState;
-  /** `null` prints as `(-)`: the Page list was not read. */
+  /** `null`: the Page list was not read. */
   pages: RoundStatusPage[] | null;
 };
 
@@ -50,7 +51,7 @@ const REFRESH_TIMEOUT_MS = 1_500;
 
 const touched = new Map<number, TouchedSpace>();
 const statuses = new Map<number, RoundSpaceStatus>();
-/** Spaces whose refresh timed out: their status stays `unknown(-)`. */
+/** Spaces whose refresh timed out: their status stays `unknown`. */
 const expired = new Set<number>();
 
 /**
@@ -105,7 +106,7 @@ export function removeRoundStatusPage(spaceId: number, label: string) {
  * Re-read spaces whose last known state still lets the agent operate them.
  * Terminal states recorded by finish(), handOff() or a close are kept as they
  * are, so the user's Pages are never read. Never rejects; a space that cannot
- * be read in time reports `unknown(-)`.
+ * be read in time reports `unknown`.
  */
 export async function refreshRoundStatus(
   timeoutMs = REFRESH_TIMEOUT_MS,
@@ -163,22 +164,17 @@ export function formatRoundStatus(notices: UnhandledPageNotice[]): {
   const folded = new Set<UnhandledPageNotice>();
   const parts = [...touched].map(([spaceId, space]) => {
     const status = statuses.get(spaceId) ?? { state: "unknown", pages: null };
-    const pages =
-      status.pages === null
-        ? "-"
-        : status.pages
-            .map((page) => {
-              const notice = noticeByTarget.get(
-                noticeKey(spaceId, page.targetId),
-              );
-              if (notice) folded.add(notice);
-              return `${page.label}${pageFlags(page, notice)}:${JSON.stringify(page.title)}`;
-            })
-            .join(",");
-    return `${spaceId} ${JSON.stringify(space.name)} ${status.state}(${pages})`;
+    const pages = (status.pages ?? []).map((page) => {
+      const notice = noticeByTarget.get(noticeKey(spaceId, page.targetId));
+      if (notice) folded.add(notice);
+      const tags = pageTags(page, notice);
+      return `${page.label} ${JSON.stringify(page.title)}${tags.length > 0 ? ` (${tags.join(", ")})` : ""}`;
+    });
+    const head = `${spaceId} ${JSON.stringify(space.name)} ${status.state}`;
+    return pages.length > 0 ? `${head}: ${pages.join(", ")}` : head;
   });
   return {
-    line: `[${parts.join(" | ")}]\n`,
+    line: `[${parts.join("; ")}]\n`,
     remainingNotices: notices.filter((notice) => !folded.has(notice)),
   };
 }
@@ -195,17 +191,16 @@ export function sortPages(pages: RoundStatusPage[]): RoundStatusPage[] {
   return [...pages].sort((a, b) => labelNumber(a.label) - labelNumber(b.label));
 }
 
-function pageFlags(
+function pageTags(
   page: RoundStatusPage,
   notice: UnhandledPageNotice | undefined,
-): string {
-  let flags = "";
-  if (page.openedBy !== "agent") flags += " user";
+): string[] {
+  const tags: string[] = [];
+  if (page.openedBy !== "agent") tags.push("user");
   if (notice) {
-    flags += " new";
-    if (notice.openerLabel) flags += ` from ${notice.openerLabel}`;
+    tags.push(notice.openerLabel ? `new from ${notice.openerLabel}` : "new");
   }
-  return flags;
+  return tags;
 }
 
 function labelNumber(label: string): number {

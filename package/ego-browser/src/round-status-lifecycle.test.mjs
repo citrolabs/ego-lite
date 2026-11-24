@@ -54,5 +54,5 @@ test("beforeExit refreshes the round status before the SDK path flushes", async 
   lifecycle.emit("beforeExit");
   lifecycle.emit("exit");
 
-  assert.equal(chunks.join(""), 'result\n[7 "research" ready(p1:"Done")]\n');
+  assert.equal(chunks.join(""), 'result\n[7 "research" ready: p1 "Done"]\n');
 });

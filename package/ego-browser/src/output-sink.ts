@@ -105,7 +105,7 @@ export function flushSink(stream: WritableLike, thrown: boolean): void {
  * Re-read the task spaces this round operated before the status line is
  * printed. The script has already settled, so a space the user took back in
  * the meantime must not turn its output into a hard stop: errors from this
- * read only mark that space `unknown(-)`. Never rejects.
+ * read only mark that space `unknown`. Never rejects.
  */
 export async function finalizeRoundStatus(): Promise<void> {
   if (hardStopMessage !== null) return;

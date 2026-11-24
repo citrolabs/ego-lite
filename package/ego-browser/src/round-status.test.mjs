@@ -29,7 +29,7 @@ test("a ready space lists its Pages with JSON-quoted titles", () => {
     state: "ready",
     pages: [page("p1", "商品详情"), page("p2", "规格对比")],
   });
-  assert.equal(line(), '[7 "采购调研" ready(p1:"商品详情",p2:"规格对比")]\n');
+  assert.equal(line(), '[7 "采购调研" ready: p1 "商品详情", p2 "规格对比"]\n');
 });
 
 test("spaces are listed in first-operated order with their final state", () => {
@@ -44,25 +44,25 @@ test("spaces are listed in first-operated order with their final state", () => {
   recordRoundSpaceStatus(12, { state: "closed", pages: [] });
   assert.equal(
     line(),
-    '[12 "报价整理" closed() | 7 "采购调研" ready(p2:"规格对比")]\n',
+    '[12 "报价整理" closed; 7 "采购调研" ready: p2 "规格对比"]\n',
   );
 });
 
-test("each state prints its own Page list form", () => {
+test("only ready and finished spaces list Pages", () => {
   resetRoundStatus();
   const cases = [
-    [1, { state: "ready", pages: [] }, "ready()"],
-    [2, { state: "ready", pages: [page("p2", "")] }, 'ready(p2:"")'],
-    [3, { state: "user_control", pages: null }, "user_control(-)"],
+    [1, { state: "ready", pages: [] }, "ready"],
+    [2, { state: "ready", pages: [page("p2", "")] }, 'ready: p2 ""'],
+    [3, { state: "user_control", pages: null }, "user_control"],
     [
       4,
       {
         state: "finished",
         pages: [page("p1", "商品详情"), page("p2", "登录", "unknown")],
       },
-      'finished(p1:"商品详情",p2 user:"登录")',
+      'finished: p1 "商品详情", p2 "登录" (user)',
     ],
-    [5, { state: "closed", pages: [] }, "closed()"],
+    [5, { state: "closed", pages: [] }, "closed"],
   ];
   for (const [spaceId, status] of cases) {
     touchRoundSpace(spaceId, "");
@@ -71,7 +71,7 @@ test("each state prints its own Page list form", () => {
   touchRoundSpace(6, "");
   assert.equal(
     line(),
-    `[${[...cases.map(([id, , text]) => `${id} "" ${text}`), '6 "" unknown(-)'].join(" | ")}]\n`,
+    `[${[...cases.map(([id, , text]) => `${id} "" ${text}`), '6 "" unknown'].join("; ")}]\n`,
   );
 });
 
@@ -80,9 +80,9 @@ test("titles keep separators as text and escape line breaks", () => {
   touchRoundSpace(7, 'a "b"');
   recordRoundSpaceStatus(7, {
     state: "ready",
-    pages: [page("p1", "x, y | (z)\nnext")],
+    pages: [page("p1", "x, y; (z)\nnext")],
   });
-  assert.equal(line(), '[7 "a \\"b\\"" ready(p1:"x, y | (z)\\nnext")]\n');
+  assert.equal(line(), '[7 "a \\"b\\"" ready: p1 "x, y; (z)\\nnext"]\n');
 });
 
 test("unhandled Pages of listed spaces fold into the status line", () => {
@@ -105,7 +105,7 @@ test("unhandled Pages of listed spaces fold into the status line", () => {
 
   assert.equal(
     status.line,
-    '[7 "research" ready(p1:"Source",p2 new from p1:"Popup")]\n',
+    '[7 "research" ready: p1 "Source", p2 "Popup" (new from p1)]\n',
   );
   assert.deepEqual(status.remainingNotices, [elsewhere]);
 });
@@ -127,10 +127,7 @@ test("refresh reads only spaces the agent may still operate", async () => {
   await refreshRoundStatus();
 
   assert.deepEqual(reads, [1]);
-  assert.match(
-    line(),
-    /^\[1 "" ready\(p1:"fresh 1"\) \| 2 "" user_control\(-\)/,
-  );
+  assert.match(line(), /^\[1 "" ready: p1 "fresh 1"; 2 "" user_control;/);
 });
 
 test("a refresh that fails or runs out of time reports unknown(-)", async () => {
@@ -143,7 +140,7 @@ test("a refresh that fails or runs out of time reports unknown(-)", async () => 
 
   await refreshRoundStatus(20);
 
-  assert.equal(line(), '[1 "" unknown(-) | 2 "" unknown(-)]\n');
+  assert.equal(line(), '[1 "" unknown; 2 "" unknown]\n');
 });
 
 test("a timed-out refresh is aborted and its late cache writes are ignored", async () => {
@@ -158,5 +155,5 @@ test("a timed-out refresh is aborted and its late cache writes are ignored", asy
   assert.equal(seenSignal.aborted, true, "the refresher is told to stop");
 
   recordRoundSpaceStatus(7, { state: "ready", pages: [page("p1", "late")] });
-  assert.equal(line(), '[7 "" unknown(-)]\n');
+  assert.equal(line(), '[7 "" unknown]\n');
 });

@@ -447,6 +447,7 @@ type OperationGate = {
   withSpace<T>(
     spaceId: number,
     operation: (scope: SpaceScope) => T | Promise<T>,
+    options?: { signal?: AbortSignal },
   ): Promise<T>;
   withPage<T>(
     page: PageTarget,
@@ -1174,25 +1175,29 @@ class TaskSpace {
     }
     if (ownership === "user") return { state: "finished", pages: null };
     signal.throwIfAborted();
-    return this.#services.gate.withSpace(this.id, async () => {
-      signal.throwIfAborted();
-      const before =
-        typeof this.#services.ledger.read === "function"
-          ? await this.#services.ledger.read(this.id)
-          : undefined;
-      // A slow read must not lead to a browser call or ledger write after
-      // the refresh has run out of time, on either branch below.
-      signal.throwIfAborted();
-      if (before && !before.initialized) {
-        // Reconciling would set the control baseline and turn tabs opened
-        // later into agent Pages. Report the labeled Pages read-only instead.
-        const tabs = await this.#services.listTabs();
+    return this.#services.gate.withSpace(
+      this.id,
+      async () => {
         signal.throwIfAborted();
-        return readyRoundStatus(before, tabs);
-      }
-      const { ledger, tabs } = await this.#reconcilePages(signal);
-      return readyRoundStatus(ledger, tabs);
-    });
+        const before =
+          typeof this.#services.ledger.read === "function"
+            ? await this.#services.ledger.read(this.id)
+            : undefined;
+        // A slow read must not lead to a browser call or ledger write after
+        // the refresh has run out of time, on either branch below.
+        signal.throwIfAborted();
+        if (before && !before.initialized) {
+          // Reconciling would set the control baseline and turn tabs opened
+          // later into agent Pages. Report the labeled Pages read-only instead.
+          const tabs = await this.#services.listTabs();
+          signal.throwIfAborted();
+          return readyRoundStatus(before, tabs);
+        }
+        const { ledger, tabs } = await this.#reconcilePages(signal);
+        return readyRoundStatus(ledger, tabs);
+      },
+      { signal },
+    );
   }
 
   async initializeCreatedSpace(token: symbol): Promise<void> {

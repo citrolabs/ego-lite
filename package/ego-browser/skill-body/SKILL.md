@@ -505,11 +505,21 @@ Until you claim a space you finished with kept Pages, neither `taskSpace()` nor
 the same labels, and tabs the user opened meanwhile are new Pages with
 `openedBy: "unknown"`.
 
-Script output ends with the state of each task space the script used, such as
-`[7 "trip" ready(p1:"Flights",p3 new from p1:"Seat map") | 9 "notes" finished(p2 user:"Sign in")]`.
-Use `ready` labels directly in the next script; claim a `finished` space first,
-and wait for the user on `user_control`. `user` marks a Page the user opened;
-`new` marks one your actions opened that you have not used yet.
+The last line of each script's output reports every task space the script
+used, with its state and open Pages:
+
+```text
+[7 "trip" ready: p1 "Flights", p3 "Seat map" (new from p1); 9 "notes" finished: p2 "Sign in" (user)]
+```
+
+- `ready`: use the listed labels directly.
+- `finished`: claim the space first; the labels stay the same.
+- `user_control`: wait until the user hands the space back.
+- `closed`: nothing is left; start a new space if needed.
+
+`(user)` marks a Page the user opened: use it, but leave it open.
+`(new from p1)` marks a Page your action on p1 opened that this script has not
+used yet; it often holds the result you were waiting for.
 
 End each reply's browser work with one `finish()` in a separate last script,
 run after earlier output has shown that the request is done, and wait for it

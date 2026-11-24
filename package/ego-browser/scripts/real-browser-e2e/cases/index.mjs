@@ -150,13 +150,13 @@ export const e2eCases = [
   {
     name: "round status: finish keeps a Page",
     body: roundStatusFinishCase,
-    expectedOutput: ' round status" finished(p2:"ego-lite secondary")]',
+    expectedOutput: ' round status" finished: p2 "ego-lite secondary"]',
   },
   {
     name: "round status: claim continues",
     body: roundStatusClaimCase,
     expectedOutput:
-      ' round status" ready(p2:"ego-lite secondary",p3:"ego-lite nav target")]',
+      ' round status" ready: p2 "ego-lite secondary", p3 "ego-lite nav target"]',
   },
   {
     name: "round status: v1 cleanup is not reported",

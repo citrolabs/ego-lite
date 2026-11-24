@@ -1753,24 +1753,24 @@ test("the round status lists open Pages and follows newPage and close", async ()
     await openTestPage(task, "https://example.test/two");
     assert.equal(
       await roundStatusLine(),
-      '[7 "research" ready(p1:"https://example.test/one",p2:"https://example.test/two")]',
+      '[7 "research" ready: p1 "https://example.test/one", p2 "https://example.test/two"]',
     );
 
     await p1.close();
     assert.equal(
       await roundStatusLine(),
-      '[7 "research" ready(p2:"https://example.test/two")]',
+      '[7 "research" ready: p2 "https://example.test/two"]',
     );
   });
 });
 
-test("the round status shows ready() when only the blank anchor is left", async () => {
+test("the round status shows a bare ready when only the blank anchor is left", async () => {
   await withFixture(async (fixture) => {
     resetSink();
     const task = taskForRound(fixture, "round-a");
     const p1 = await openTestPage(task, "https://example.test/one");
     await p1.close();
-    assert.equal(await roundStatusLine(), '[7 "research" ready()]');
+    assert.equal(await roundStatusLine(), '[7 "research" ready]');
   });
 });
 
@@ -1792,7 +1792,7 @@ test("the round status does not set the control baseline of a fresh ledger", asy
     fixture.addExternalTab("target-existing", "https://example.test/existing");
     task.userPage();
 
-    assert.equal(await roundStatusLine(), '[7 "research" ready()]');
+    assert.equal(await roundStatusLine(), '[7 "research" ready]');
     assert.equal(
       (await ledger.read(7)).initialized,
       false,
@@ -1811,7 +1811,7 @@ test("the round status does not read a space handed off to the user", async () =
     await task.handOff();
     fixture.calls.length = 0;
 
-    assert.equal(await roundStatusLine(), '[7 "research" user_control(-)]');
+    assert.equal(await roundStatusLine(), '[7 "research" user_control]');
     assert.equal(
       fixture.calls.some(([name]) => name === "selectSpace"),
       false,
@@ -1838,7 +1838,7 @@ test("regaining control after handOff in the same round reports ready again", as
       // A Page operation alone, with no task.pages() call in between.
       await resumed.page(page.label).url();
 
-      assert.match(await roundStatusLine(), /^\[7 "research" ready\(/);
+      assert.match(await roundStatusLine(), /^\[7 "research" ready: /);
       await page.close();
     }
   });
@@ -1857,7 +1857,7 @@ test("waitForControl after handOff reports the space ready again", async () => {
     await task.handOff();
     await task.waitForControl();
 
-    assert.match(await roundStatusLine(), /^\[7 "research" ready\(/);
+    assert.match(await roundStatusLine(), /^\[7 "research" ready: /);
   });
 });
 
@@ -1909,7 +1909,7 @@ async function expireRefreshDuringRead(probe, nthRead) {
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(probe.tabLists, 0, "no tab list after the deadline");
   assert.equal(probe.reconciles, 0, "no ledger write after the deadline");
-  assert.equal(await roundStatusLine(), '[7 "research" unknown(-)]');
+  assert.equal(await roundStatusLine(), '[7 "research" unknown]');
 }
 
 test("a timed-out round status refresh starts no browser call or ledger write", async () => {
@@ -1919,6 +1919,36 @@ test("a timed-out round status refresh starts no browser call or ledger write", 
     await openTestPage(task, "https://example.test/one");
     // The second read is the one inside reconciliation.
     await expireRefreshDuringRead(probe, 2);
+  });
+});
+
+test("a refresh queued behind a busy gate does not select the space after its deadline", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const task = taskForRound(fixture, "round-a");
+    await openTestPage(task, "https://example.test/one");
+    let releaseGate;
+    const busy = fixture.services.gate.withSpace(
+      7,
+      () =>
+        new Promise((resolve) => {
+          releaseGate = resolve;
+        }),
+    );
+    await new Promise((resolve) => setImmediate(resolve));
+    fixture.calls.length = 0;
+
+    await refreshRoundStatus(20);
+    releaseGate();
+    await busy;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    assert.equal(
+      fixture.calls.some(([name]) => name === "selectSpace"),
+      false,
+      "the expired refresh never selects the space",
+    );
+    assert.equal(await roundStatusLine(), '[7 "research" unknown]');
   });
 });
 
@@ -1943,11 +1973,11 @@ test("the round status checks ownership before reading tabs", async () => {
     });
     await openTestPage(task, "https://example.test/one");
     ownership = "agentDelegatedToUser";
-    assert.equal(await roundStatusLine(), '[7 "research" user_control(-)]');
+    assert.equal(await roundStatusLine(), '[7 "research" user_control]');
 
     await task.tabs();
     ownership = null;
-    assert.equal(await roundStatusLine(), '[7 "research" closed()]');
+    assert.equal(await roundStatusLine(), '[7 "research" closed]');
   });
 });
 
@@ -1961,7 +1991,7 @@ test("the round status reports finish results without reading the space again", 
     await task.finish({ keep: [p1.label] });
     assert.equal(
       await roundStatusLine(),
-      '[7 "research" finished(p1:"https://example.test/one")]',
+      '[7 "research" finished: p1 "https://example.test/one"]',
     );
 
     const { task: claimed } = finishFixtureTask(fixture, lifecycleCalls);
@@ -1969,14 +1999,14 @@ test("the round status reports finish results without reading the space again", 
     await claimed.pages();
     assert.equal(
       await roundStatusLine(),
-      '[7 "research" ready(p1:"https://example.test/one",p3 user:"https://example.test/user")]',
+      '[7 "research" ready: p1 "https://example.test/one", p3 "https://example.test/user" (user)]',
       "kept labels continue after a claim and the user's tab is marked",
     );
 
     await claimed.finish({ keep: [] });
     assert.equal(
       await roundStatusLine(),
-      '[7 "research" finished(p3 user:"https://example.test/user")]',
+      '[7 "research" finished: p3 "https://example.test/user" (user)]',
     );
   });
 });
@@ -1987,7 +2017,7 @@ test("the round status reports a closed space", async () => {
     const { task } = finishFixtureTask(fixture, []);
     await openTestPage(task, "https://example.test/one");
     await task.finish({ keep: [] });
-    assert.equal(await roundStatusLine(), '[7 "research" closed()]');
+    assert.equal(await roundStatusLine(), '[7 "research" closed]');
   });
 });
 
@@ -2007,7 +2037,7 @@ test("an unhandled popup is reported in the status line instead of a separate bl
     assert.doesNotMatch(output, /\[ego-browser:pages\]/);
     assert.match(
       output,
-      /\[7 "research" ready\(p1:"https:\/\/example\.test\/source",p2 new from p1:"https:\/\/example\.test\/popup"\)\]\n$/,
+      /\[7 "research" ready: p1 "https:\/\/example\.test\/source", p2 "https:\/\/example\.test\/popup" \(new from p1\)\]\n$/,
     );
   });
 });
@@ -2165,7 +2195,7 @@ test("a kept tab of unknown origin stays protected after a claim", async () => {
     assert.equal(fixture.tabs.has("target-user"), true);
     // The status line replaces finish()'s own notice: the space stays open
     // for the user with their Page marked.
-    assert.match(capturedRoundOutput(), / finished\(p2 user:"[^"]*"\)\]\n$/);
+    assert.match(capturedRoundOutput(), / finished: p2 "[^"]*" \(user\)\]\n$/);
   });
 });
 
@@ -2184,7 +2214,7 @@ test("finish keep all reports every kept Page in the status line", async () => {
     assert.equal(receipt.preservedUnmanagedCount, 0);
     assert.match(
       capturedRoundOutput(),
-      / finished\(p1:"[^"]*",p2 user:"[^"]*"\)\]\n$/,
+      / finished: p1 "[^"]*", p2 "[^"]*" \(user\)\]\n$/,
     );
   });
 });
@@ -2222,7 +2252,7 @@ test("TaskSpace finish protects a tab opened while the user owned the space", as
     assert.deepEqual(lifecycleCalls, ["finish"]);
     assert.equal(fixture.tabs.has(keptTarget), false, "the kept tab is closed");
     assert.equal(fixture.tabs.has("target-user"), true, "the user tab remains");
-    assert.match(capturedRoundOutput(), / finished\(p2 user:"[^"]*"\)\]\n$/);
+    assert.match(capturedRoundOutput(), / finished: p2 "[^"]*" \(user\)\]\n$/);
     resetSink();
   });
 });
