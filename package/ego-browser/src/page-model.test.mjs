@@ -1843,6 +1843,23 @@ test("regaining control after handOff in the same round reports ready again", as
   });
 });
 
+test("waitForControl after handOff reports the space ready again", async () => {
+  await withFixture(async (fixture) => {
+    resetSink();
+    const task = taskForRound(fixture, "round-a", {
+      async handOffTaskSpace() {},
+      async probeAgentControl() {
+        return true;
+      },
+    });
+    await openTestPage(task, "https://example.test/one");
+    await task.handOff();
+    await task.waitForControl();
+
+    assert.match(await roundStatusLine(), /^\[7 "research" ready\(/);
+  });
+});
+
 test("the round status checks ownership before reading tabs", async () => {
   await withFixture(async (fixture) => {
     resetSink();

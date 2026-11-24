@@ -34,13 +34,24 @@ export type RoundSpaceStatus = {
 
 type TouchedSpace = {
   name: string;
-  refresh?: () => Promise<RoundSpaceStatus>;
+  refresh?: RoundStatusRefresher;
 };
+
+/**
+ * Reads one space at the end of the round. The signal aborts when the refresh
+ * runs out of time: the refresher must not start further browser operations
+ * after that, and its late cache writes are ignored.
+ */
+export type RoundStatusRefresher = (
+  signal: AbortSignal,
+) => Promise<RoundSpaceStatus>;
 
 const REFRESH_TIMEOUT_MS = 1_500;
 
 const touched = new Map<number, TouchedSpace>();
 const statuses = new Map<number, RoundSpaceStatus>();
+/** Spaces whose refresh timed out: their status stays `unknown(-)`. */
+const expired = new Set<number>();
 
 /**
  * Record that the script operated this space. The latest handle's refresher
@@ -49,7 +60,7 @@ const statuses = new Map<number, RoundSpaceStatus>();
 export function touchRoundSpace(
   spaceId: number,
   name: string,
-  refresh?: () => Promise<RoundSpaceStatus>,
+  refresh?: RoundStatusRefresher,
 ): void {
   touched.set(spaceId, { name, refresh });
 }
@@ -59,6 +70,7 @@ export function recordRoundSpaceStatus(
   spaceId: number,
   status: RoundSpaceStatus,
 ): void {
+  if (expired.has(spaceId)) return;
   statuses.set(spaceId, status);
 }
 
@@ -69,6 +81,7 @@ export function recordRoundSpaceStatus(
  */
 export function forgetRoundSpaceStatus(spaceId: number): void {
   statuses.delete(spaceId);
+  expired.delete(spaceId);
 }
 
 /** Update a cached ready Page list after a Page was opened in this round. */
@@ -105,11 +118,20 @@ export async function refreshRoundStatus(
   const deadline = Date.now() + timeoutMs;
   for (const [spaceId, space] of pending) {
     const remaining = deadline - Date.now();
-    let status: RoundSpaceStatus = { state: "unknown", pages: null };
+    const unknown: RoundSpaceStatus = { state: "unknown", pages: null };
+    const controller = new AbortController();
+    let status = unknown;
     if (remaining > 0) {
-      status = await withTimeout(space.refresh!(), remaining).catch(
-        () => status,
-      );
+      status = await withTimeout(
+        space.refresh!(controller.signal),
+        remaining,
+      ).catch(() => unknown);
+    }
+    if (status === unknown) {
+      // Stop the refresher between operations and keep any late result from
+      // replacing what the output already reported.
+      controller.abort();
+      expired.add(spaceId);
     }
     statuses.set(spaceId, status);
   }
@@ -165,6 +187,7 @@ export function formatRoundStatus(notices: UnhandledPageNotice[]): {
 export function resetRoundStatus(): void {
   touched.clear();
   statuses.clear();
+  expired.clear();
 }
 
 /** Ledger-label order: p2 before p10. */

@@ -145,3 +145,18 @@ test("a refresh that fails or runs out of time reports unknown(-)", async () => 
 
   assert.equal(line(), '[1 "" unknown(-) | 2 "" unknown(-)]\n');
 });
+
+test("a timed-out refresh is aborted and its late cache writes are ignored", async () => {
+  resetRoundStatus();
+  let seenSignal;
+  touchRoundSpace(7, "", (signal) => {
+    seenSignal = signal;
+    return new Promise(() => {});
+  });
+
+  await refreshRoundStatus(20);
+  assert.equal(seenSignal.aborted, true, "the refresher is told to stop");
+
+  recordRoundSpaceStatus(7, { state: "ready", pages: [page("p1", "late")] });
+  assert.equal(line(), '[7 "" unknown(-)]\n');
+});

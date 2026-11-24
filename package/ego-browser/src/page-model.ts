@@ -1149,7 +1149,9 @@ class TaskSpace {
 
   /** List this space in the round-end status line. Internal. */
   [touchRoundToken](): void {
-    touchRoundSpace(this.id, this.name ?? "", () => this.#roundStatus());
+    touchRoundSpace(this.id, this.name ?? "", (signal) =>
+      this.#roundStatus(signal),
+    );
   }
 
   /** The tab active at the most recent claim/takeover boundary, if any. */
@@ -1162,7 +1164,7 @@ class TaskSpace {
    * Read this space's status at the end of the round. Ownership is checked
    * first so a space the user controls is reported without reading its tabs.
    */
-  async #roundStatus(): Promise<RoundSpaceStatus> {
+  async #roundStatus(signal: AbortSignal): Promise<RoundSpaceStatus> {
     const ownership = this.#services.taskSpaceOwnership
       ? await this.#services.taskSpaceOwnership(this.id).catch(() => undefined)
       : undefined;
@@ -1171,7 +1173,9 @@ class TaskSpace {
       return { state: "user_control", pages: null };
     }
     if (ownership === "user") return { state: "finished", pages: null };
+    signal.throwIfAborted();
     return this.#services.gate.withSpace(this.id, async () => {
+      signal.throwIfAborted();
       const before =
         typeof this.#services.ledger.read === "function"
           ? await this.#services.ledger.read(this.id)
@@ -1181,6 +1185,8 @@ class TaskSpace {
         // later into agent Pages. Report the labeled Pages read-only instead.
         return readyRoundStatus(before, await this.#services.listTabs());
       }
+      // Reconciling writes the ledger; do not start it once time is up.
+      signal.throwIfAborted();
       const { ledger, tabs } = await this.#reconcilePages();
       return readyRoundStatus(ledger, tabs);
     });
@@ -1346,7 +1352,12 @@ class TaskSpace {
       const available = await this.#services.gate.withSpace(this.id, () =>
         this.#services.probeAgentControl(),
       );
-      if (available) return;
+      if (available) {
+        // Control is back: an earlier user_control status no longer holds.
+        forgetRoundSpaceStatus(this.id);
+        this[touchRoundToken]();
+        return;
+      }
 
       const remainingMs = deadline - this.#services.now();
       if (remainingMs <= 0) {
