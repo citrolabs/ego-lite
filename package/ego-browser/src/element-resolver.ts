@@ -1284,6 +1284,24 @@ async function findUniqueLocatorContext(
   return matches[0];
 }
 
+/**
+ * An OOPIF session's default AX tree can include the nodes of its
+ * same-process child frames, which are also searched in their own
+ * frame-scoped context. Keeps one match per session and backend node,
+ * preferring the frame-scoped one so the child's frame provenance survives.
+ */
+function dedupeFrameMatches(matches) {
+  const byKey = new Map();
+  for (const match of matches) {
+    const key = `${match.sessionId}\u0000${match.backendNodeId}`;
+    const existing = byKey.get(key);
+    if (!existing || (!existing.frameId && match.frameId)) {
+      byKey.set(key, match);
+    }
+  }
+  return [...byKey.values()];
+}
+
 async function findUniqueRoleMatch(
   cdp,
   contexts,
@@ -1332,7 +1350,9 @@ async function findUniqueRoleMatch(
   const rawMainMatches = await matchesIn(contexts.slice(0, 1));
   let cachedFrameMatches;
   const matchesWithFrameProvenance = async () => {
-    cachedFrameMatches ||= matchesIn(contexts.slice(1));
+    cachedFrameMatches ||= matchesIn(contexts.slice(1)).then(
+      dedupeFrameMatches,
+    );
     const frames = await cachedFrameMatches;
     const framedNodeKeys = new Set(
       frames

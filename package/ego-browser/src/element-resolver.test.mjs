@@ -1196,6 +1196,45 @@ test("role locators search an OOPIF root once alongside its same-process child f
   );
 });
 
+test("role locators count a same-process child's node once when the OOPIF root AX tree also lists it", async () => {
+  const leafButton = {
+    role: { value: "button" },
+    name: { value: "Leaf" },
+    backendDOMNodeId: 401,
+  };
+  const cdp = new FakeCDP(async (method, params, sessionId) => {
+    if (method === "Accessibility.getFullAXTree") {
+      if (sessionId !== "session:middle") return { nodes: [] };
+      // The OOPIF root's default AX tree and the child's frame-scoped tree
+      // both contain the same button.
+      return { nodes: [leafButton] };
+    }
+    if (method === "DOM.resolveNode") {
+      assert.equal(sessionId, "session:middle");
+      return { object: { objectId: `node-${params.backendNodeId}` } };
+    }
+    return {};
+  });
+
+  for (const options of [undefined, { strict: true }]) {
+    assert.deepEqual(
+      await resolveElementObjectId(
+        cdp,
+        "session:page",
+        new RefMap(),
+        'loc=role:button[name="Leaf"]',
+        nestedOopifSessions(),
+        options,
+      ),
+      {
+        objectId: "node-401",
+        sessionId: "session:middle",
+        frameId: "frame-leaf",
+      },
+    );
+  }
+});
+
 test("CSS locators search an OOPIF root once alongside its same-process child frame", async () => {
   const cdp = new FakeCDP(async (method, params, sessionId) => {
     if (method === "Page.createIsolatedWorld") {
