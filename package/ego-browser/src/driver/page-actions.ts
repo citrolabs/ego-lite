@@ -227,6 +227,9 @@ const INPUT_EVENT_DELAY_MS = 25;
 const FILL_VERIFICATION_ATTEMPTS = 5;
 const FILL_VERIFICATION_INTERVAL_MS = 50;
 const AUTO_SCROLL_ATTEMPTS = 6;
+/** How long a wheel motion may take to visibly land before it counts as ineffective. */
+const WHEEL_SETTLE_MS = 500;
+const WHEEL_SETTLE_POLL_MS = 16;
 type FillOutcome =
   | "exact"
   | "equivalent"
@@ -1539,7 +1542,8 @@ function sameWheelRequest(a: WheelRequest, b: WheelRequest): boolean {
  * silently: the wheel point may land on an element that calls
  * `preventDefault()` on wheel events (maps, carousels, canvas editors), or
  * the page may be at the end of its scroll range. When a motion leaves the
- * target exactly where it was, the next request is identical, and the loop
+ * target exactly where it was once its settle window has passed (see
+ * `readAfterWheel`), the next request is identical, and the loop
  * falls back once to `DOM.scrollIntoViewIfNeeded` (which bypasses a site's
  * patched `Element.prototype.scrollIntoView`) instead of repeating a motion
  * that already proved ineffective. The action deadline is checked before
@@ -1565,9 +1569,11 @@ async function bringIntoView<
       "transient",
     );
   let previous: WheelRequest | undefined;
+  let afterWheel: T | undefined;
   let fellBack = false;
   for (let attempt = 0; attempt <= AUTO_SCROLL_ATTEMPTS; attempt += 1) {
-    const result = await input.evaluate();
+    const result = afterWheel ?? (await input.evaluate());
+    afterWheel = undefined;
     if (typeof result?.error === "string") {
       throw new ElementResolutionError(
         `${input.actionName} failed: ${result.error}`,
@@ -1603,8 +1609,49 @@ async function bringIntoView<
     }
     previous = scroll;
     if (!(await input.wheel(scroll))) throw notVisible();
+    afterWheel = await readAfterWheel(services, input.evaluate, scroll);
   }
   throw notVisible();
+}
+
+/**
+ * Re-evaluate a target after a wheel motion until the scroll has landed.
+ *
+ * `Input.dispatchMouseEvent` returns once the browser accepts the wheel
+ * event, not once the page has scrolled. Without GPU acceleration (Linux
+ * VMs) the scroll lands 200-800ms later, so an immediate re-read sees the
+ * old scroll request, takes the wheel for ineffective, and the late scroll
+ * then pushes the target back out after the fallback. Poll until the target
+ * leaves its pre-wheel position and holds still for one read, or the settle
+ * window or action deadline passes; a wheel that really was swallowed still
+ * reaches the fallback after the window.
+ */
+async function readAfterWheel<
+  T extends { error?: unknown; scroll?: WheelRequest | null },
+>(
+  services: PageActionServices,
+  evaluate: () => Promise<T>,
+  before: WheelRequest,
+): Promise<T> {
+  const startedAt = services.now?.();
+  let last = before;
+  let moved = false;
+  while (true) {
+    const result = await evaluate();
+    const scroll = result?.scroll;
+    if (typeof result?.error === "string" || !scroll) return result;
+    if (moved && sameWheelRequest(last, scroll)) return result;
+    if (!sameWheelRequest(before, scroll)) moved = true;
+    last = scroll;
+    if (
+      startedAt === undefined ||
+      services.now!() - startedAt >= WHEEL_SETTLE_MS ||
+      actionDeadlinePassed(services)
+    ) {
+      return result;
+    }
+    await services.sleep(WHEEL_SETTLE_POLL_MS);
+  }
 }
 
 async function ensureFrameOwnerInView(

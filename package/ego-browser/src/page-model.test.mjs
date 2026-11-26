@@ -60,6 +60,9 @@ function createFixture(rootDir) {
   let scrollClickPointsRemaining = 0;
   let trapClickPoints = false;
   let wheelDispatchDurationMs = 0;
+  // A page whose compositor applies wheel scrolls late (Linux without GPU
+  // acceleration): `offset` is the target's distance from the viewport top.
+  let lateWheel = null;
   let fillElementKind = "input";
   let fillText = "";
   let fillTransform = null;
@@ -543,6 +546,53 @@ function createFixture(rootDir) {
             },
           };
         }
+        if (
+          lateWheel &&
+          params.functionDeclaration.includes("getBoundingClientRect")
+        ) {
+          const applyLandedWheels = () => {
+            for (const wheel of lateWheel.pending) {
+              if (wheel.landAt <= nowMs) lateWheel.offset -= wheel.deltaY;
+            }
+            lateWheel.pending = lateWheel.pending.filter(
+              (wheel) => wheel.landAt > nowMs,
+            );
+          };
+          const inView = () =>
+            lateWheel.offset >= 0 && lateWheel.offset <= lateWheel.viewport;
+          applyLandedWheels();
+          if (!inView()) {
+            return {
+              result: {
+                type: "object",
+                value: {
+                  scroll: {
+                    x: 80,
+                    y: 300,
+                    deltaX: 0,
+                    deltaY: lateWheel.offset - 300,
+                  },
+                },
+              },
+            };
+          }
+          if (params.functionDeclaration.includes("setTimeout(finish, 100)")) {
+            // The stability sample waits before re-reading the point.
+            nowMs += 100;
+            applyLandedWheels();
+            if (!inView()) {
+              return {
+                result: {
+                  type: "object",
+                  value: { error: "element is not visible in the viewport" },
+                },
+              };
+            }
+          }
+          return {
+            result: { type: "object", value: { x: 40, y: lateWheel.offset } },
+          };
+        }
         if (params.functionDeclaration.includes("getBoundingClientRect")) {
           if (trapClickPoints) {
             // The wheel point sits on an element that swallows wheel events:
@@ -674,10 +724,17 @@ function createFixture(rootDir) {
       }
       if (method === "DOM.scrollIntoViewIfNeeded") {
         trapClickPoints = false;
+        if (lateWheel) lateWheel.offset = 300;
         return {};
       }
       if (method === "Input.dispatchMouseEvent") {
         if (params.type === "mouseWheel") nowMs += wheelDispatchDurationMs;
+        if (params.type === "mouseWheel" && lateWheel) {
+          lateWheel.pending.push({
+            deltaY: params.deltaY,
+            landAt: nowMs + lateWheel.landAfterMs,
+          });
+        }
         if (timeoutNextMouseDispatch) {
           timeoutNextMouseDispatch = false;
           throw new Error("CDP request timed out: Input.dispatchMouseEvent");
@@ -947,6 +1004,12 @@ function createFixture(rootDir) {
     },
     setWheelDispatchDuration(ms) {
       wheelDispatchDurationMs = ms;
+    },
+    applyWheelScrollLate({ offset, landAfterMs, viewport = 600 }) {
+      lateWheel = { offset, landAfterMs, viewport, pending: [] };
+    },
+    targetOffset() {
+      return lateWheel?.offset;
     },
     navigateOnNextClick(url) {
       navigateOnNextClickUrl = url;
@@ -6959,6 +7022,40 @@ test("Page fill falls back to a programmatic scroll when wheel input does not mo
       ) > fallbackIndex,
       "text input waits for the fallback scroll",
     );
+  });
+});
+
+test("Page click waits for a wheel scroll that lands after the dispatch returns", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/first");
+    // Without GPU acceleration the wheel is acknowledged at once but the page
+    // scrolls about 150-800ms later.
+    fixture.applyWheelScrollLate({ offset: 3000, landAfterMs: 150 });
+
+    assert.deepEqual(await page.click("#below-the-fold"), {});
+
+    assert.equal(
+      fixture.calls.filter(
+        ([kind, method]) =>
+          kind === "cdp" && method === "DOM.scrollIntoViewIfNeeded",
+      ).length,
+      0,
+      "a late wheel scroll is not mistaken for an ineffective one",
+    );
+    const wheelCalls = fixture.calls.filter(
+      ([kind, method, params]) =>
+        kind === "cdp" &&
+        method === "Input.dispatchMouseEvent" &&
+        params.type === "mouseWheel",
+    );
+    assert.equal(
+      wheelCalls.reduce((total, [, , params]) => total + params.deltaY, 0),
+      2700,
+      "one motion scrolls the target in without overshooting",
+    );
+    const offset = fixture.targetOffset();
+    assert(offset >= 0 && offset <= 600, `target ends in view: ${offset}`);
   });
 });
 
