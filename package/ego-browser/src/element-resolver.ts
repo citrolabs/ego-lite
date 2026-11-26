@@ -471,6 +471,7 @@ async function validateRoleLocatorBackendNodes(
 ): Promise<Set<number>> {
   const valid = new Set<number>();
   if (entries.length === 0) return valid;
+  const parentFrameIds = parentFrameIdsOf(iframeSessions);
   const available = (
     await Promise.all(
       pageContexts(sessionId, iframeSessions).map(async (context) => {
@@ -507,19 +508,13 @@ async function validateRoleLocatorBackendNodes(
         .map((node) => ({
           backendNodeId: node.backendDOMNodeId,
           frameId: context.frameId,
+          ownerFrameId: context.ownerFrameId,
           sessionId: context.sessionId,
         })),
     );
-    const framedNodeKeys = new Set(
-      rawMatches
-        .filter((match) => match.frameId)
-        .map((match) => `${match.sessionId}\u0000${match.backendNodeId}`),
-    );
-    const matches = rawMatches.filter(
-      (match) =>
-        match.frameId ||
-        !framedNodeKeys.has(`${match.sessionId}\u0000${match.backendNodeId}`),
-    );
+    // Same provenance rules as locator resolution, so a ref that resolves
+    // uniquely also validates.
+    const matches = dedupeFrameMatches(rawMatches, parentFrameIds);
     if (
       matches.length === 1 &&
       matches[0].backendNodeId === entry.candidate.backendNodeId &&

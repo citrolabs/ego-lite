@@ -373,6 +373,62 @@ test("role locator validation accepts refs in an OOPIF's same-process child fram
   );
 });
 
+test("role locator validation counts a node once across nested same-process frames of an OOPIF", async () => {
+  // Page → OOPIF frame-middle → same-process frame-child → same-process
+  // frame-leaf. The OOPIF root tree and frame-child's frame-scoped tree both
+  // also list frame-leaf's button.
+  const sessions = new Map([
+    ["frame-middle", "session:middle"],
+    ["frame-child", "session:middle"],
+    ["frame-leaf", "session:middle"],
+  ]);
+  sessions.parentFrameIds = new Map([
+    ["frame-middle", "frame-main"],
+    ["frame-child", "frame-middle"],
+    ["frame-leaf", "frame-child"],
+  ]);
+  const cdp = {
+    async sendRaw(method, _params, sessionId) {
+      assert.equal(method, "Accessibility.getFullAXTree");
+      if (sessionId !== "session:middle") return { nodes: [] };
+      return {
+        nodes: [
+          {
+            backendDOMNodeId: 51,
+            ignored: false,
+            role: { value: "button" },
+            name: { value: "Leaf" },
+          },
+        ],
+      };
+    },
+  };
+
+  const ref = (frameId) => ({
+    backendNodeId: 51,
+    frameId,
+    loc: 'role:button[name="Leaf"]',
+  });
+  assert.equal(
+    await validateSnapshotLocator(
+      cdp,
+      "session:page",
+      sessions,
+      ref("frame-leaf"),
+    ),
+    true,
+  );
+  assert.equal(
+    await validateSnapshotLocator(
+      cdp,
+      "session:page",
+      sessions,
+      ref("frame-child"),
+    ),
+    false,
+  );
+});
+
 test("DOM locator validation accepts refs in an OOPIF's same-process child frame", async () => {
   const cdp = {
     async sendRaw(method, params, sessionId) {
