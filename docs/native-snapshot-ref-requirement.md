@@ -86,5 +86,6 @@ Please cover at least these cases in native tests:
 
 Omit the locator when uniqueness and node identity cannot both be established.
 Do not serialize `loc=unstable` or `loc=ambiguous` in `content`, and do not use
-those status strings in `refs`. The JS runtime validates advertised locators
-and omits invalid ones as a compatibility safeguard.
+those status strings in `refs`. The JS runtime passes advertised locators
+through without checking them again: a per-snapshot check cost more than the
+native snapshot itself on pages with many locators.

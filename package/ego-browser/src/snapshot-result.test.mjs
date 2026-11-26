@@ -6,9 +6,30 @@ import {
   compactSnapshotResult,
   preparePageSnapshotResult,
   rewriteSnapshotRefIds,
-  sanitizeSnapshotLocators,
-  validateSnapshotLocator,
 } from "../dist/src/snapshot-result.js";
+import { validateLocatorBackendNodes } from "../dist/src/element-resolver.js";
+
+/** Whether one locator resolves uniquely to the ref's own backend node. */
+async function validateSnapshotLocator(
+  cdp,
+  pageSessionId,
+  iframeSessions,
+  ref,
+) {
+  const valid = await validateLocatorBackendNodes(
+    cdp,
+    pageSessionId,
+    iframeSessions,
+    [
+      {
+        index: 0,
+        locator: `loc=${ref.loc}`,
+        backendNodeId: ref.backendNodeId,
+      },
+    ],
+  );
+  return valid.has(0);
+}
 
 test("public ref rewriting changes metadata once without changing quoted content or locators", () => {
   const input = [
@@ -134,10 +155,38 @@ test("snapshot compaction omits unusable locator statuses from refs", () => {
   assert.equal(result.refs[2].loc, "css:#save");
 });
 
-test("snapshot locator validation batches DOM queries and object cleanup", async () => {
+test("Page snapshots pass native stable locators through without CDP calls", async () => {
   const calls = [];
   const services = {
-    async cdp(method, params, sessionId) {
+    async cdp(method) {
+      calls.push(method);
+      return {};
+    },
+  };
+  const content = [
+    "button A [ref=10, loc=css:#a]",
+    "button B [ref=11, loc=css:#b]",
+  ].join("\n");
+  const result = {
+    content,
+    refs: [
+      { backendNodeId: 10, loc: "css:#a" },
+      { backendNodeId: 11, loc: "css:#b" },
+    ],
+  };
+
+  await preparePageSnapshotResult(services, "session:page", new Map(), result);
+
+  assert.equal(result.content, content);
+  assert.equal(result.refs[0].loc, "css:#a");
+  assert.equal(result.refs[1].loc, "css:#b");
+  assert.deepEqual(calls, []);
+});
+
+test("locator validation batches DOM queries and object cleanup", async () => {
+  const calls = [];
+  const cdp = {
+    async sendRaw(method, params, sessionId) {
       calls.push([method, params, sessionId]);
       if (method === "Runtime.evaluate" && params.returnByValue) {
         return { result: { value: [1, 1] } };
@@ -164,41 +213,24 @@ test("snapshot locator validation batches DOM queries and object cleanup", async
       throw new Error(`unexpected CDP method: ${method}`);
     },
   };
-  const result = {
-    content: [
-      "button A [ref=10, loc=css:#a]",
-      "button B [ref=11, loc=css:#b]",
-    ].join("\n"),
-    refs: [
-      { backendNodeId: 10, loc: "css:#a" },
-      { backendNodeId: 11, loc: "css:#b" },
+
+  const valid = await validateLocatorBackendNodes(
+    cdp,
+    "session:page",
+    new Map(),
+    [
+      { index: 0, locator: "loc=css:#a", backendNodeId: 10 },
+      { index: 1, locator: "loc=css:#b", backendNodeId: 11 },
     ],
-  };
+  );
 
-  await preparePageSnapshotResult(services, "session:page", new Map(), result);
-
-  assert.equal(result.refs[0].loc, "css:#a");
-  assert.equal(result.refs[1].loc, "css:#b");
-  assert.equal(
-    calls.filter(([method]) => method === "Runtime.evaluate").length,
-    2,
-  );
-  assert.equal(
-    calls.filter(([method]) => method === "Runtime.getProperties").length,
-    1,
-  );
-  assert.equal(
-    calls.filter(([method]) => method === "DOM.describeNode").length,
-    2,
-  );
-  assert.equal(
-    calls.filter(([method]) => method === "Runtime.releaseObjectGroup").length,
-    1,
-  );
-  assert.equal(
-    calls.some(([method]) => method === "Runtime.releaseObject"),
-    false,
-  );
+  assert.deepEqual([...valid].sort(), [0, 1]);
+  const count = (name) => calls.filter(([method]) => method === name).length;
+  assert.equal(count("Runtime.evaluate"), 2);
+  assert.equal(count("Runtime.getProperties"), 1);
+  assert.equal(count("DOM.describeNode"), 2);
+  assert.equal(count("Runtime.releaseObjectGroup"), 1);
+  assert.equal(count("Runtime.releaseObject"), 0);
 });
 
 test("DOM locator validation keeps healthy contexts when one count fails", async () => {
@@ -305,46 +337,6 @@ test("role locator validation keeps healthy trees when one frame detaches", asyn
     ),
     true,
   );
-});
-
-test("invalid native snapshot locators are hidden without removing their refs", async () => {
-  const result = {
-    content: [
-      'textfield "Prompt" [ref=10, loc=css:#prompt, url=https://example.com/prompt]',
-      'text "literal ref=10, loc=css:#prompt"',
-      'button "Save" [ref=11, loc=role:button[name="Save"]]',
-    ].join("\n"),
-    refs: [
-      {
-        backendNodeId: 10,
-        role: "textfield",
-        name: "Prompt",
-        loc: "css:#prompt",
-      },
-      {
-        backendNodeId: 11,
-        role: "button",
-        name: "Save",
-        loc: 'role:button[name="Save"]',
-      },
-    ],
-  };
-
-  await sanitizeSnapshotLocators(
-    result,
-    async (ref) => ref.backendNodeId === 11,
-  );
-
-  assert.equal(
-    result.content,
-    [
-      'textfield "Prompt" [ref=10, url=https://example.com/prompt]',
-      'text "literal ref=10, loc=css:#prompt"',
-      'button "Save" [ref=11, loc=role:button[name="Save"]]',
-    ].join("\n"),
-  );
-  assert.equal(result.refs[0].loc, undefined);
-  assert.equal(result.refs[1].loc, 'role:button[name="Save"]');
 });
 
 test("stable locator validation requires one match for the original backend node", async () => {
