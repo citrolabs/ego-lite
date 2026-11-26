@@ -108,6 +108,14 @@ try {
   await bundle.write({ file: bundledCli, format: "esm", sourcemap: false });
   await bundle.close();
 
+  await build({
+    ...common,
+    entryPoints: ["src/linux/host.ts"],
+    outfile: "dist/out/host.js",
+    bundle: true,
+    absWorkingDir: root,
+  });
+
   // `SKILL.md` keeps every platform's passages, for launchers that do not
   // pick a platform guide; `SKILL.<platform>.md` drops the others'.
   await mkdir(bundledGuideDir, { recursive: true });
