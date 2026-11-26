@@ -11,30 +11,51 @@
 // platform-neutral `SKILL.md` keeps every block. Marker lines never reach the
 // output. Prettier keeps a blank line on each side of a marker, so a block
 // holds whole paragraphs, headings, or code fences, never part of a paragraph.
+//
+// Execution-mode passages work the same way with `<!-- mode: direct -->` or
+// `<!-- mode: ego-run -->` ... `<!-- /mode -->`: `direct` is the guide for
+// `ego-browser nodejs` (what the browser prints today), `ego-run` the guide for
+// the persistent-session CLI. Every render picks exactly one mode. A mode block
+// may sit inside a platform block and vice versa; blocks of the same kind do
+// not nest.
 
 export const guidePlatforms = ["macos", "windows"];
+export const guideModes = ["direct", "ego-run"];
+export const defaultGuideMode = "direct";
 
 // Claude Code keeps 30,000 characters of command output; leave headroom.
 export const maxGuideLength = 25_000;
 
-const platformPattern = /^\s*<!--\s*platform:\s*([a-z, ]+?)\s*-->\s*$/;
-const endPattern = /^\s*<!--\s*\/platform\s*-->\s*$/;
+const openPattern = /^\s*<!--\s*(platform|mode):\s*([a-z, -]+?)\s*-->\s*$/;
+const closePattern = /^\s*<!--\s*\/(platform|mode)\s*-->\s*$/;
 
-// `platform` is one of `guidePlatforms`, or `null` for the all-platform guide.
-export function renderGuide(source, { platform = null, name = "guide" } = {}) {
+// `platform` is one of `guidePlatforms`, or `null` for the all-platform guide;
+// `mode` is one of `guideModes`.
+export function renderGuide(
+  source,
+  { platform = null, mode = defaultGuideMode, name = "guide" } = {},
+) {
   if (platform !== null && !guidePlatforms.includes(platform)) {
     throw new Error(`unknown guide platform ${JSON.stringify(platform)}`);
+  }
+  if (!guideModes.includes(mode)) {
+    throw new Error(`unknown guide mode ${JSON.stringify(mode)}`);
   }
   const match = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(source);
   const version = match && /^version: "([^"]+)"$/m.exec(match[1])?.[1];
   if (!version) {
     throw new Error(`${name} needs frontmatter with a version`);
   }
-  const label = platform ? `v${version} (${platform})` : `v${version}`;
+  const tags = [platform, mode === defaultGuideMode ? null : mode].filter(
+    Boolean,
+  );
+  const label = tags.length
+    ? `v${version} (${tags.join(", ")})`
+    : `v${version}`;
   const guide = [
     `[ego-browser:skill] ego-browser usage guide ${label}`,
     "",
-    unwrapProse(selectPlatform(match[2], platform, name).trim()),
+    unwrapProse(selectBlocks(match[2], { platform, mode }, name).trim()),
     "",
     `[ego-browser:skill] end of guide v${version}`,
     "",
@@ -47,44 +68,64 @@ export function renderGuide(source, { platform = null, name = "guide" } = {}) {
   return guide;
 }
 
-// Drop the platform blocks that do not apply, and every marker line.
-export function selectPlatform(markdown, platform, name = "guide") {
+// Drop the platform and mode blocks that do not apply, and every marker line.
+export function selectBlocks(
+  markdown,
+  { platform = null, mode = defaultGuideMode } = {},
+  name = "guide",
+) {
   const lines = [];
-  let keep = null; // null outside a block, boolean inside
-  let openedAt = 0;
+  const open = []; // enclosing blocks, innermost last: { kind, keep, line }
   markdown.split("\n").forEach((line, index) => {
-    const open = platformPattern.exec(line);
-    if (open) {
-      if (keep !== null) {
-        throw new Error(
-          `${name}:${index + 1}: platform blocks do not nest (opened at line ${openedAt})`,
-        );
-      }
-      const platforms = open[1].split(",").map((entry) => entry.trim());
-      for (const entry of platforms) {
-        if (!guidePlatforms.includes(entry)) {
+    const opener = openPattern.exec(line);
+    if (opener) {
+      const [, kind, list] = opener;
+      const values = list.split(",").map((entry) => entry.trim());
+      const known = kind === "platform" ? guidePlatforms : guideModes;
+      for (const entry of values) {
+        if (!known.includes(entry)) {
           throw new Error(
-            `${name}:${index + 1}: unknown platform ${JSON.stringify(entry)}; use ${guidePlatforms.join(", ")}`,
+            `${name}:${index + 1}: unknown ${kind} ${JSON.stringify(entry)}; use ${known.join(", ")}`,
           );
         }
       }
-      keep = platform === null || platforms.includes(platform);
-      openedAt = index + 1;
-      return;
-    }
-    if (endPattern.test(line)) {
-      if (keep === null) {
-        throw new Error(`${name}:${index + 1}: platform block closed twice`);
+      const enclosing = open.find((block) => block.kind === kind);
+      if (enclosing) {
+        throw new Error(
+          `${name}:${index + 1}: ${kind} blocks do not nest (opened at line ${enclosing.line})`,
+        );
       }
-      keep = null;
+      const keep =
+        kind === "platform"
+          ? platform === null || values.includes(platform)
+          : values.includes(mode);
+      open.push({ kind, keep, line: index + 1 });
       return;
     }
-    if (keep !== false) lines.push(line);
+    const closer = closePattern.exec(line);
+    if (closer) {
+      const last = open.at(-1);
+      if (!last || last.kind !== closer[1]) {
+        throw new Error(
+          `${name}:${index + 1}: ${closer[1]} block closed ${last ? `inside an open ${last.kind} block` : "twice"}`,
+        );
+      }
+      open.pop();
+      return;
+    }
+    if (open.every((block) => block.keep)) lines.push(line);
   });
-  if (keep !== null) {
-    throw new Error(`${name}:${openedAt}: platform block is never closed`);
+  if (open.length) {
+    throw new Error(
+      `${name}:${open.at(-1).line}: ${open.at(-1).kind} block is never closed`,
+    );
   }
   return lines.join("\n").replace(/\n{3,}/g, "\n\n");
+}
+
+// The platform selection of the default (direct) mode.
+export function selectPlatform(markdown, platform, name = "guide") {
+  return selectBlocks(markdown, { platform }, name);
 }
 
 // Join soft-wrapped Markdown lines with a space, which renders identically.

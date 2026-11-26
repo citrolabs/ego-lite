@@ -90,6 +90,18 @@ export function flushSink(stream: WritableLike, thrown: boolean): void {
   buffer = [];
 }
 
+/**
+ * Drain one program's output and start a fresh round, for hosts that keep the
+ * context alive across programs (the `ego-run` daemon drives the REPL this
+ * way). `installLifecycleFlush` only ever fires once per process, so a
+ * long-lived context has to flush explicitly after each program.
+ */
+export function flushRound(stream: WritableLike, thrown: boolean): void {
+  flushed = false;
+  flushSink(stream, thrown);
+  resetSink();
+}
+
 /** Clear sink state. Real runs get a fresh process; this is only for in-process tests. */
 export function resetSink(): void {
   buffer = [];
