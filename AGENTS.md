@@ -70,6 +70,23 @@ Run from `package/ego-browser/`:
 - The code prefers the small shared state singleton (`src/state.ts`) over threading connection state through call sites.
 - Site skills must stay site-shaped and verifiable: stable URLs, durable selectors, no pixel coordinates, no secrets.
 
+## What Belongs in the Browser
+
+Some requirements are a better fit for the ego lite browser than for this SDK. Do not build those in the SDK. Stop, tell the user, and draft the requirement so the user can pass it to the browser (client) team.
+
+A requirement belongs in the browser when the SDK could only meet it by working around the bindings:
+
+- the browser already has the information and the binding does not return it, for example who opened a tab, which document a snapshot ref belongs to, or why control moved to the user;
+- the browser can do the work in one place and the SDK would need extra CDP round trips, polling, retries or timeouts to get the same result;
+- the SDK would re-check or repair what a binding returns, for example validating or rewriting snapshot output;
+- the SDK would keep state on disk, or a placeholder such as a blank tab, only to make up for state the browser does not keep or report.
+
+The reason is cost. A workaround in the SDK runs on every call, has to be kept in step with the browser's own rules, and stays after the browser closes the gap. The SDK once re-validated every snapshot locator over CDP; that took 75–89% of snapshot time on pages with many locators, and it removed nothing once the browser verified locators itself.
+
+The draft for the user states: what the binding returns or does today, with the browser file if you can find it; what the SDK would have to do instead and what that costs per call; the interface you propose; and what SDK code it would remove. The `docs/native-*-requirement.md` files are examples. Check the browser at its latest remote branch, because a local checkout may be out of date.
+
+If the task cannot wait for the browser, say so and let the user decide whether to add a stopgap. Mark a stopgap with a comment that names the missing browser capability, so it can be removed when the browser provides it. Before adding one, also check that the browser has not already closed the gap.
+
 ## Writing Skills
 
 These rules apply to every `SKILL.md` in this repo and to the files it points to: the entry Skill (`skills/ego-browser/`), the usage guide (`package/ego-browser/skill-body/SKILL.md`), site learnings, and project Skills under `.claude/skills/`. They follow the Agent Skills standard (agentskills.io) and the Anthropic, OpenAI, and Google authoring guides.
