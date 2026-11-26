@@ -187,3 +187,58 @@ test("stale ref tombstones stay bounded for long-lived pages", () => {
   assert.equal(registry.isInvalidated("page-target", "1"), false);
   assert.equal(registry.isInvalidated("page-target", "10001"), true);
 });
+
+function documentRefs(count, documentId) {
+  return Array.from({ length: count }, (_, index) => ({
+    refId: index + 1,
+    backendNodeId: index + 1,
+    frameId: "main",
+    documentId,
+  }));
+}
+
+test("refs of a document that was navigated away keep only a small stale window", () => {
+  const registry = new PageRefRegistry();
+  registry.replace("page-target", documentRefs(9000, "big"));
+
+  registry.invalidateChangedDocuments(
+    "page-target",
+    new Map([
+      ["main", "small"],
+      ["", "small"],
+    ]),
+  );
+  registry.replace("page-target", documentRefs(80, "small"));
+
+  const state = registry.exportState("page-target");
+  assert.equal(state.refs.filter((ref) => ref.active).length, 80);
+  assert.ok(
+    state.refs.length <= 80 + 500,
+    `old document refs stay bounded, got ${state.refs.length}`,
+  );
+  assert.equal(
+    registry.isInvalidated("page-target", "9000"),
+    true,
+    "the most recent refs of the old document still report as stale",
+  );
+  assert.ok(state.nextRef > 9000, "pruned ref ids are never reused");
+});
+
+test("inactive refs of the current document keep their public ids", () => {
+  const registry = new PageRefRegistry();
+  const documents = new Map([
+    ["main", "doc"],
+    ["", "doc"],
+  ]);
+  registry.replace("page-target", documentRefs(9000, "doc"));
+  registry.invalidateChangedDocuments("page-target", documents);
+  // A viewport snapshot of the same document omits most full-page refs.
+  registry.replace("page-target", documentRefs(1, "doc"));
+  registry.invalidateChangedDocuments("page-target", documents);
+
+  const later = [
+    { refId: 1, backendNodeId: 8000, frameId: "main", documentId: "doc" },
+  ];
+  registry.merge("page-target", later);
+  assert.equal(later[0].refId, 8000);
+});

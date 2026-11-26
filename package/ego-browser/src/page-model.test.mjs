@@ -6725,6 +6725,46 @@ test("a navigation during snapshot capture is retried against the new document",
   });
 });
 
+test("a large full-page snapshot does not keep the page ledger large after navigating away", async () => {
+  await withFixture(async (fixture) => {
+    let loaderId = "big";
+    const refCount = () => (loaderId === "big" ? 9000 : 80);
+    const baseCdp = fixture.services.cdp;
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId) {
+        if (method === "Page.getFrameTree")
+          return { frameTree: { frame: { id: "main", loaderId } } };
+        return baseCdp(method, params, sessionId);
+      },
+      async snapshot() {
+        const refs = Array.from({ length: refCount() }, (_, index) => ({
+          refId: index + 1,
+          backendNodeId: index + 1,
+          frameId: "main",
+        }));
+        return {
+          content: refs.map((ref) => `button [ref=${ref.refId}]`).join("\n"),
+          refs,
+        };
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/big");
+    await page.snapshot({ scope: "full_page" });
+    loaderId = "small";
+    await page.snapshot();
+
+    const stored = await new PageLedgerStore({
+      rootDir: fixture.rootDir,
+    }).getPage(7, page.label);
+    assert.equal(stored.refs.refs.filter((ref) => ref.active).length, 80);
+    assert.ok(
+      stored.refs.refs.length <= 80 + 500,
+      `the persisted ledger keeps ${stored.refs.refs.length} refs`,
+    );
+    await assert.rejects(() => page.click("@9000"), /Stale ref: @9000/);
+  });
+});
+
 test("a subtree snapshot whose root document commits away is stale, not retried with the old root", async () => {
   await withFixture(async (fixture) => {
     let loaderId = "before";
@@ -6771,6 +6811,60 @@ test("a subtree snapshot whose root document commits away is stale, not retried 
     assert.equal(
       fixture.services.pageRefs.isInvalidated(page.targetId, "21"),
       true,
+    );
+  });
+});
+
+test("a subtree root pruned with its superseded document is stale, not retried", async () => {
+  await withFixture(async (fixture) => {
+    let loaderId = "before";
+    const requestedRoots = [];
+    const baseCdp = fixture.services.cdp;
+    const bigRefs = () =>
+      Array.from({ length: 900 }, (_, index) => ({
+        refId: index + 1,
+        backendNodeId: index + 1,
+        frameId: "main",
+      }));
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId) {
+        if (method === "Page.getFrameTree")
+          return { frameTree: { frame: { id: "main", loaderId } } };
+        return baseCdp(method, params, sessionId);
+      },
+      async snapshot(options) {
+        const refs = bigRefs();
+        if (options.scope === "subtree") {
+          requestedRoots.push(options.root);
+          // The navigation commits while the subtree capture is in flight.
+          loaderId = "after";
+        }
+        return {
+          content: refs.map((ref) => `button [ref=${ref.refId}]`).join("\n"),
+          refs,
+        };
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/big");
+    await page.snapshot({ scope: "full_page" });
+
+    await assert.rejects(
+      () => page.snapshot({ scope: "subtree", root: "@1" }),
+      (error) => {
+        assert.match(error.message, /Stale ref: @1; take a new snapshot/);
+        assert.equal(error.kind, "permanent");
+        return true;
+      },
+    );
+    assert.deepEqual(
+      requestedRoots,
+      [1],
+      "the pruned root's old backend id is not reused for a retry",
+    );
+    assert.equal(
+      fixture.services.pageRefs.isInvalidated(page.targetId, "1"),
+      false,
+      "the root ref was pruned rather than kept as a tombstone",
     );
   });
 });

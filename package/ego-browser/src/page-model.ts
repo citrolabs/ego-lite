@@ -2074,9 +2074,11 @@ class Page {
           // The subtree root is a node of the document the refs were taken
           // from. Once that document is gone, a retry would capture whatever
           // node now carries its backend id, so the root is stale instead.
+          // Superseded refs may be pruned outright, so a root that is no
+          // longer active is stale too, not only one kept as a tombstone.
           const registry = this.#services.pageRefs;
           registry.invalidateChangedDocuments(page.targetId, documents);
-          if (registry.isInvalidated(page.targetId, rootRefId)) {
+          if (!registry.forTarget(page.targetId).get(rootRefId)) {
             throw new ElementResolutionError(
               `Stale ref: @${rootRefId}; take a new snapshot`,
               "permanent",
