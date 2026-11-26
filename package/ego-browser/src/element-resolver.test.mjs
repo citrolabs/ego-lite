@@ -1119,6 +1119,122 @@ test("semantic locators search cross-process iframe sessions", async () => {
   });
 });
 
+function nestedOopifSessions() {
+  // frame-middle is an OOPIF; frame-leaf is its same-process child, so both
+  // map to the OOPIF session, as ensureFrameSessions reports them.
+  const sessions = new Map([
+    ["frame-middle", "session:middle"],
+    ["frame-leaf", "session:middle"],
+  ]);
+  sessions.parentFrameIds = new Map([
+    ["frame-middle", "frame-main"],
+    ["frame-leaf", "frame-middle"],
+  ]);
+  return sessions;
+}
+
+test("role locators search an OOPIF root once alongside its same-process child frame", async () => {
+  const cdp = new FakeCDP(async (method, params, sessionId) => {
+    if (method === "Accessibility.getFullAXTree") {
+      if (sessionId !== "session:middle") return { nodes: [] };
+      if (params.frameId === "frame-leaf") {
+        return {
+          nodes: [
+            {
+              role: { value: "button" },
+              name: { value: "Leaf" },
+              backendDOMNodeId: 401,
+            },
+          ],
+        };
+      }
+      assert.equal(params.frameId, undefined);
+      return {
+        nodes: [
+          {
+            role: { value: "button" },
+            name: { value: "Save" },
+            backendDOMNodeId: 301,
+          },
+        ],
+      };
+    }
+    if (method === "DOM.resolveNode") {
+      assert.equal(sessionId, "session:middle");
+      return { object: { objectId: `node-${params.backendNodeId}` } };
+    }
+    return {};
+  });
+
+  assert.deepEqual(
+    await resolveElementObjectId(
+      cdp,
+      "session:page",
+      new RefMap(),
+      'loc=role:button[name="Save"]',
+      nestedOopifSessions(),
+    ),
+    {
+      objectId: "node-301",
+      sessionId: "session:middle",
+      frameId: "frame-middle",
+    },
+  );
+  assert.deepEqual(
+    await resolveElementObjectId(
+      cdp,
+      "session:page",
+      new RefMap(),
+      'loc=role:button[name="Leaf"]',
+      nestedOopifSessions(),
+    ),
+    {
+      objectId: "node-401",
+      sessionId: "session:middle",
+      frameId: "frame-leaf",
+    },
+  );
+});
+
+test("CSS locators search an OOPIF root once alongside its same-process child frame", async () => {
+  const cdp = new FakeCDP(async (method, params, sessionId) => {
+    if (method === "Page.createIsolatedWorld") {
+      assert.equal(sessionId, "session:middle");
+      assert.equal(params.frameId, "frame-leaf");
+      return { executionContextId: 88 };
+    }
+    if (method === "Runtime.evaluate") {
+      const inMiddleRoot =
+        sessionId === "session:middle" && params.contextId === undefined;
+      if (params.returnByValue) {
+        return { result: { value: inMiddleRoot ? 1 : 0 } };
+      }
+      return {
+        result: inMiddleRoot
+          ? { objectId: "middle-save" }
+          : { type: "undefined" },
+      };
+    }
+    return {};
+  });
+
+  assert.deepEqual(
+    await resolveElementObjectId(
+      cdp,
+      "session:page",
+      new RefMap(),
+      "loc=css:#save",
+      nestedOopifSessions(),
+      { strict: true },
+    ),
+    {
+      objectId: "middle-save",
+      sessionId: "session:middle",
+      frameId: "frame-middle",
+    },
+  );
+});
+
 test("text locators search same-process iframe execution contexts", async () => {
   const cdp = new FakeCDP(async (method, params, sessionId) => {
     assert.equal(sessionId, "session:page");
