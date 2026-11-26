@@ -92,6 +92,41 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
       "Resume an Agent-owned space after user approval and return TaskSpace.",
   },
   {
+    name: "plugins",
+    signature: "await plugins(urlOrHost? | { query?, url? })",
+    summary:
+      "List site plugins (local, installed, and official ones that install on first use) with their page.runPlugin calls, arguments, and result shapes.",
+  },
+  {
+    name: "installPlugin",
+    signature: "await installPlugin(source, { allowThirdParty?, version? })",
+    summary:
+      "Install an official plugin id, or a third-party directory, bundle URL, .git URL, or github:owner/repo[/path][#ref]. Third-party plugins run with your script's full access: install one only when the user explicitly asked, with allowThirdParty: true.",
+  },
+  {
+    name: "updatePlugin",
+    signature: "await updatePlugin(id?)",
+    summary:
+      "Update installed plugins now, crossing major versions; third-party plugins update only this way.",
+  },
+  {
+    name: "pinPlugin",
+    signature: "await pinPlugin(id, version?)",
+    summary:
+      "Stop automatic updates for a plugin, optionally switching an official plugin to a version first; unpinPlugin(id) undoes it.",
+  },
+  {
+    name: "rollbackPlugin",
+    signature: "await rollbackPlugin(id)",
+    summary: "Return a plugin to its previous version and pin it there.",
+  },
+  {
+    name: "removePlugin",
+    signature: "await removePlugin(id)",
+    summary:
+      "Remove an installed plugin; an official one reinstalls on its next use.",
+  },
+  {
     name: "TaskSpace.spaceId",
     signature: "task.spaceId",
     summary: "Stable numeric identifier for this task space.",
@@ -558,6 +593,13 @@ export const PUBLIC_API_SCHEMA: readonly PublicApiEntry[] = [
     signature: "await fileChooser.setFiles(pathOrPaths)",
     summary:
       "Set files on an intercepted chooser and return any JavaScript dialog opened by the upload.",
+  },
+  {
+    name: "Page.runPlugin",
+    signature: "await page.runPlugin(ref, args?, { timeout? })",
+    summary:
+      'Run a site plugin command such as "x/timeline" with this Page and return its structured result. Official plugins install and update silently; errors carry a code and a Next: step. timeout defaults to 120000.',
+    options: { timeout },
   },
   {
     name: "Page.close",

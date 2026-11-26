@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute } from "node:path";
 
+import { notifyPageTouched, pluginRunner } from "./plugin-hooks.js";
 import {
   browserCdp,
   browserEgo,
@@ -2830,6 +2831,18 @@ class Page {
     })();
   }
 
+  /**
+   * Run a site plugin command with this Page as its default Page. The plugin
+   * gets the same helpers as an Agent script; see plugins().
+   */
+  async runPlugin(
+    ref: string,
+    args?: Record<string, unknown>,
+    options?: { timeout?: number },
+  ): Promise<any> {
+    return pluginRunner()(this, this.#task, ref, args, options);
+  }
+
   async close(): Promise<void> {
     const page = await this.#resolve();
     await this.#services.gate.withSpace(this.spaceId, async () => {
@@ -2894,6 +2907,7 @@ class Page {
     this.#targetId = entry.targetId;
     this.#openedBy = entry.openedBy;
     markPageObserved(this.spaceId, entry.targetId);
+    notifyPageTouched(this, this.#task);
     return { spaceId: this.spaceId, targetId: entry.targetId };
   }
 

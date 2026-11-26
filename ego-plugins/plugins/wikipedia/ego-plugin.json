@@ -1,0 +1,228 @@
+{
+  "id": "wikipedia",
+  "name": "Wikipedia",
+  "version": "1.0.0",
+  "description": "Search Wikipedia and read articles (lead, sections, infobox, categories) in any language edition.",
+  "homepage": "https://github.com/citrolabs/ego-plugins/tree/main/plugins/wikipedia",
+  "engines": {
+    "egoPluginApi": 1
+  },
+  "domains": ["wikipedia.org"],
+  "commands": {
+    "article": {
+      "entry": "article.mjs",
+      "readOnly": true,
+      "description": "Readable article content: lead, sections, infobox and categories.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Article title, e.g. \"Ada Lovelace\"."
+          },
+          "url": {
+            "type": "string",
+            "description": "Article URL (instead of title)."
+          },
+          "lang": {
+            "type": "string",
+            "default": "en",
+            "description": "Language edition, e.g. en, zh, ja."
+          },
+          "maxSections": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Return at most this many sections."
+          }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": [
+          "title",
+          "url",
+          "lead",
+          "sections",
+          "infobox",
+          "categories"
+        ],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string"
+          },
+          "lang": {
+            "type": ["string", "null"]
+          },
+          "lead": {
+            "type": "string"
+          },
+          "sections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["title", "level", "text"],
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "level": {
+                  "type": "integer"
+                },
+                "text": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "infobox": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["label", "value"],
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "lastModified": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    },
+    "search": {
+      "entry": "search.mjs",
+      "readOnly": true,
+      "description": "Full-text search; returns titles, URLs and snippets.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["query"],
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "lang": {
+            "type": "string",
+            "default": "en",
+            "description": "Language edition, e.g. en, zh, ja."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 10
+          }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["query", "results"],
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "lang": {
+            "type": "string"
+          },
+          "total": {
+            "type": ["integer", "null"]
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["title", "url", "snippet"],
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "snippet": {
+                  "type": "string"
+                },
+                "wordCount": {
+                  "type": ["integer", "null"]
+                },
+                "updatedAt": {
+                  "type": ["string", "null"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "summary": {
+      "entry": "summary.mjs",
+      "readOnly": true,
+      "description": "Short lead summary of an article, without opening it.",
+      "args": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["title"],
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "lang": {
+            "type": "string",
+            "default": "en",
+            "description": "Language edition, e.g. en, zh, ja."
+          }
+        }
+      },
+      "returns": {
+        "type": "object",
+        "required": ["title", "extract"],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "lang": {
+            "type": "string"
+          },
+          "url": {
+            "type": ["string", "null"]
+          },
+          "description": {
+            "type": ["string", "null"]
+          },
+          "extract": {
+            "type": "string"
+          },
+          "type": {
+            "type": ["string", "null"]
+          },
+          "thumbnail": {
+            "type": ["string", "null"]
+          },
+          "updatedAt": {
+            "type": ["string", "null"]
+          }
+        }
+      }
+    }
+  }
+}

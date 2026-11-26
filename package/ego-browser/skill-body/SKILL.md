@@ -417,6 +417,15 @@ await page.acceptDialog("prompt response");
 A receipt describes only the dispatched action and immediate popup or dialog
 observations; it does not verify the resulting application state.
 
+## Site plugins
+
+Some sites have maintained plugins that return structured data. Open pages as
+usual; on such a site the output ends with an `[ego-browser:plugins]` hint
+showing the call, e.g. `await page.runPlugin('x/timeline', { user: 'nasa' })`.
+Prefer it to hand-written extraction. Plugin errors have a `Next:` line to
+follow. Install third-party plugins only when the user asks:
+`installPlugin(source, { allowThirdParty: true })`.
+
 ## Files and requests
 
 Set an existing file input with absolute paths:
