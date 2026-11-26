@@ -1769,19 +1769,45 @@ async function assertFrameOwnersReceivePointerEvents(
       parentFrameIds?: ReadonlyMap<string, string | undefined>;
     }
   ).parentFrameIds;
-  const source = `function frameOwnerReceivesPointer(point) {
+  const source = `function frameOwnerReceivesPointer(point, quad) {
     ${HIT_TARGET_HELPERS}
     if (!this.isConnected) return { error: "iframe is not connected" };
     const view = this.ownerDocument.defaultView;
     if (!view) return { outside: true };
     const rect = this.getBoundingClientRect();
     const style = view.getComputedStyle(this);
-    const scaleX = this.offsetWidth > 0 ? rect.width / this.offsetWidth : 1;
-    const scaleY = this.offsetHeight > 0 ? rect.height / this.offsetHeight : 1;
-    const ownerPoint = {
-      x: rect.left + (this.clientLeft + (parseFloat(style.paddingLeft) || 0) + point.x) * scaleX,
-      y: rect.top + (this.clientTop + (parseFloat(style.paddingTop) || 0) + point.y) * scaleY
-    };
+    // Point in the iframe's untransformed border box.
+    const u = this.clientLeft + (parseFloat(style.paddingLeft) || 0) + point.x;
+    const v = this.clientTop + (parseFloat(style.paddingTop) || 0) + point.y;
+    let ownerPoint;
+    if (
+      Array.isArray(quad) && quad.length >= 8 &&
+      quad.every((value) => Number.isFinite(value)) &&
+      this.offsetWidth > 0 && this.offsetHeight > 0
+    ) {
+      // getBoundingClientRect is axis-aligned and cannot express rotation or
+      // skew, so map through the transformed border-box quad instead. Its
+      // corners are top-left, top-right, bottom-right, bottom-left of the
+      // untransformed box. The quad may be reported relative to an ancestor
+      // viewport; its bounding box aligns it with this document's viewport.
+      const xs = [quad[0], quad[2], quad[4], quad[6]];
+      const ys = [quad[1], quad[3], quad[5], quad[7]];
+      const minX = Math.min(...xs);
+      const minY = Math.min(...ys);
+      const spanX = Math.max(...xs) - minX;
+      const spanY = Math.max(...ys) - minY;
+      const toViewX = (x) => rect.left + (spanX > 0 ? (x - minX) * rect.width / spanX : 0);
+      const toViewY = (y) => rect.top + (spanY > 0 ? (y - minY) * rect.height / spanY : 0);
+      const fu = u / this.offsetWidth;
+      const fv = v / this.offsetHeight;
+      const quadX = quad[0] + fu * (quad[2] - quad[0]) + fv * (quad[6] - quad[0]);
+      const quadY = quad[1] + fu * (quad[3] - quad[1]) + fv * (quad[7] - quad[1]);
+      ownerPoint = { x: toViewX(quadX), y: toViewY(quadY) };
+    } else {
+      const scaleX = this.offsetWidth > 0 ? rect.width / this.offsetWidth : 1;
+      const scaleY = this.offsetHeight > 0 ? rect.height / this.offsetHeight : 1;
+      ownerPoint = { x: rect.left + u * scaleX, y: rect.top + v * scaleY };
+    }
     if (
       !(ownerPoint.x >= 0 && ownerPoint.y >= 0 &&
         ownerPoint.x < view.innerWidth && ownerPoint.y < view.innerHeight)
@@ -1815,12 +1841,23 @@ async function assertFrameOwnersReceivePointerEvents(
     );
     let result: any;
     try {
+      let quad: unknown = null;
+      try {
+        const quads = await services.cdp(
+          "DOM.getContentQuads",
+          { objectId },
+          ownerSessionId,
+        );
+        quad = Array.isArray(quads?.quads) ? (quads.quads[0] ?? null) : null;
+      } catch {
+        // Fall back to the axis-aligned bounding-box mapping.
+      }
       const response = await services.cdp(
         "Runtime.callFunctionOn",
         {
           functionDeclaration: source,
           objectId,
-          arguments: [{ value: point }],
+          arguments: [{ value: point }, { value: quad }],
           returnByValue: true,
           awaitPromise: false,
         },

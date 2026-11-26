@@ -392,7 +392,10 @@ test("Page click fails closed when a parent-document overlay covers a same-proce
   );
   assert.equal(ownerCheck[1].objectId, "iframe-owner");
   assert.equal(ownerCheck[2], "session:page");
-  assert.deepEqual(ownerCheck[1].arguments, [{ value: { x: 10, y: 20 } }]);
+  assert.deepEqual(ownerCheck[1].arguments, [
+    { value: { x: 10, y: 20 } },
+    { value: null },
+  ]);
   assert.equal(
     calls.some(([method]) => method === "Input.dispatchMouseEvent"),
     false,
@@ -504,6 +507,131 @@ test("Page click parent hit test requires the iframe itself, not an interactive 
   assert.deepEqual(ownerCheck.call(iframe, { x: 10, y: 20 }), {
     x: 110,
     y: 220,
+  });
+});
+
+test("Page click parent hit test maps the point through a rotated iframe", async () => {
+  let ownerCall;
+  const services = {
+    async cdp(method, params = {}) {
+      if (method === "Accessibility.getFullAXTree") {
+        return params.frameId === "frame-child"
+          ? {
+              nodes: [
+                {
+                  role: { value: "button" },
+                  name: { value: "Check" },
+                  backendDOMNodeId: 21,
+                },
+              ],
+            }
+          : { nodes: [] };
+      }
+      if (method === "DOM.resolveNode") {
+        return { object: { objectId: `node-${params.backendNodeId}` } };
+      }
+      if (method === "DOM.getContentQuads") {
+        // A 200x200 iframe rotated 90deg clockwise about its center (200, 300).
+        return params.objectId === "node-90"
+          ? { quads: [[300, 200, 300, 400, 100, 400, 100, 200]] }
+          : { quads: [] };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        if (params.functionDeclaration.includes("frameOwnerReceivesPointer")) {
+          ownerCall = params;
+          return { result: { value: { x: 280, y: 210 } } };
+        }
+        if (params.functionDeclaration.includes("actionable: false")) {
+          return { result: { value: { actionable: true } } };
+        }
+        return params.functionDeclaration.includes("getBoundingClientRect")
+          ? { result: { value: { x: 10, y: 20 } } }
+          : { result: { value: { ok: true } } };
+      }
+      if (method === "DOM.getFrameOwner") return { backendNodeId: 90 };
+      if (method === "DOM.getBoxModel") {
+        return {
+          model: { content: [100, 200, 300, 200, 300, 400, 100, 400] },
+        };
+      }
+      return {};
+    },
+    async showAgentMousePosition() {},
+    async showAgentTaskState() {},
+    async sleep() {},
+  };
+  await clickInPage(
+    services,
+    "session:page",
+    new RefMap(),
+    'loc=role:button[name="Check"]',
+    {},
+    0,
+    new Map([["frame-child", "session:page"]]),
+  );
+  assert.ok(ownerCall, "the parent-document hit test ran");
+  const quad = [300, 200, 300, 400, 100, 400, 100, 200];
+  assert.deepEqual(ownerCall.arguments, [
+    { value: { x: 10, y: 20 } },
+    { value: quad },
+  ]);
+
+  // Evaluate the real check: only the rotated position of the framed point
+  // hits the iframe; the axis-aligned estimate (110, 220) hits the parent.
+  const ownerCheck = Function(`return (${ownerCall.functionDeclaration});`)();
+  const document = { nodeType: 9 };
+  const fakeElement = (tagName, attributes) => ({
+    tagName,
+    id: attributes.id || "",
+    parentElement: null,
+    getAttribute: (name) => attributes[name] ?? null,
+    hasAttribute: (name) => name in attributes,
+    getRootNode: () => document,
+  });
+  const body = fakeElement("BODY", { id: "parent" });
+  const iframe = {
+    ...fakeElement("IFRAME", {}),
+    isConnected: true,
+    clientLeft: 0,
+    clientTop: 0,
+    offsetWidth: 200,
+    offsetHeight: 200,
+    getBoundingClientRect: () => ({
+      left: 100,
+      top: 200,
+      width: 200,
+      height: 200,
+    }),
+    ownerDocument: {
+      documentElement: fakeElement("HTML", {}),
+      defaultView: {
+        innerWidth: 800,
+        innerHeight: 600,
+        getComputedStyle: () => ({ paddingLeft: "0", paddingTop: "0" }),
+      },
+    },
+  };
+  const hitAt = (x, y) =>
+    Math.abs(x - 280) < 1e-9 && Math.abs(y - 210) < 1e-9 ? iframe : body;
+  document.elementFromPoint = hitAt;
+  document.elementsFromPoint = (x, y) => [hitAt(x, y)];
+
+  assert.deepEqual(ownerCheck.call(iframe, { x: 10, y: 20 }, quad), {
+    x: 280,
+    y: 210,
+  });
+  // A quad reported relative to an ancestor viewport is realigned with the
+  // iframe's own document through its bounding box.
+  assert.deepEqual(
+    ownerCheck.call(
+      iframe,
+      { x: 10, y: 20 },
+      quad.map((value) => value + 50),
+    ),
+    { x: 280, y: 210 },
+  );
+  assert.deepEqual(ownerCheck.call(iframe, { x: 10, y: 20 }, null), {
+    error: '<body id="parent"> intercepts pointer events',
   });
 });
 
