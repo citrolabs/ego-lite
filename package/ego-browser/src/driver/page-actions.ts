@@ -1,3 +1,7 @@
+import {
+  isCdpRequestTimeoutError,
+  isPageDialogOpenedError,
+} from "../browser-runtime.js";
 import { runtimeValue } from "../cdp-eval.js";
 import {
   ElementResolutionError,
@@ -6,9 +10,11 @@ import {
 import { RefMap } from "../ref-map.js";
 import {
   ACTION_TARGET_STATE_HELPERS,
+  COMPOSED_PARENT_HELPER,
   EDIT_ACTION_TARGET_HELPERS,
   ENABLED_SCROLL_TARGET_HELPERS,
   HIT_TARGET_HELPERS,
+  NATIVE_SELECT_FUNCTIONS,
   SCROLL_TARGET_HELPERS,
 } from "./action-target.js";
 import { dispatchWheelMotion } from "./scroll-motion.js";
@@ -30,6 +36,12 @@ type PageActionServices = {
 };
 
 export type MouseButton = "left" | "middle" | "right";
+
+/**
+ * Frame id to CDP session id for every frame of the Page. Loaded only when a
+ * coordinate press lands in a frame the current session cannot inspect.
+ */
+export type FrameSessionsLoader = () => Promise<Map<string, string>>;
 
 export type PageClickOptions = {
   button?: MouseButton;
@@ -247,6 +259,12 @@ export async function clickInPage(
   assertPageSelector(selector);
   const button = options.button ?? "left";
   const clickCount = options.clickCount ?? 1;
+  // `force` only skips actionability checks; the press itself is the same, so
+  // it would still open a native select menu.
+  const nativeSelect = button === "left";
+  // When the press lands on an iframe, the native select check descends into
+  // it; frames in other processes are inspected in their own sessions.
+  const frameSessions: FrameSessionsLoader = async () => iframeSessions;
   const target = await resolveElementObjectId(
     cdpAdapter(services),
     sessionId,
@@ -300,7 +318,14 @@ export async function clickInPage(
       },
       cursorPoint,
     );
-    if (target.frameId && target.sessionId === sessionId) {
+    // Input for a same-process iframe is dispatched through the Page session
+    // in Page viewport coordinates, so an element of an embedding document
+    // that covers the iframe (such as a drop-down select) takes the press.
+    // The target's own document cannot see it, so the native select check
+    // also starts from the dispatch viewport.
+    const sameProcessFrame =
+      Boolean(target.frameId) && target.sessionId === sessionId;
+    if (sameProcessFrame) {
       // Moving into a same-process iframe can adjust the outer document's
       // scroll position. Translate the frame-local point again before the
       // press so native input uses the post-hover viewport coordinates.
@@ -317,7 +342,13 @@ export async function clickInPage(
         target.sessionId,
         target.objectId,
         point.local,
-        { hitTest: !options.force },
+        {
+          hitTest: !options.force,
+          nativeSelect,
+          viewportPoint: { x: point.x, y: point.y },
+          checkViewport: true,
+          frameSessions,
+        },
       );
       await dispatchMouseEvent(services, target.sessionId, {
         type: "mouseMoved",
@@ -327,21 +358,44 @@ export async function clickInPage(
         buttons: 0,
         modifiers,
       });
+      // The final move can run hover handlers of its own, or scroll the
+      // embedding document, and put a drop-down select under the press point.
+      // Check the Page viewport exactly where the first press lands. This is
+      // a Page-session evaluation rather than a call into the target, and no
+      // input event separates the final move from the press.
+      if (nativeSelect) {
+        await assertNoNativeSelectAtViewportPoint(
+          services,
+          sessionId,
+          { x: point.x, y: point.y },
+          "page.click",
+          frameSessions,
+        );
+      }
     }
     for (let count = 1; count <= clickCount; count += 1) {
       // Moving the pointer or completing an earlier click can change layout.
       // Recheck the enabled state and the hit target in one page call before
       // every press so hover-created overlays fail closed. A same-process
-      // iframe must keep its native move/press sequence contiguous; its state
-      // was checked immediately before that gesture's final move, and later
-      // presses in any iframe only recheck the enabled state.
-      if (!target.frameId || count > 1) {
+      // iframe must keep its native move/press sequence contiguous; its target
+      // state was checked immediately before that gesture's final move and its
+      // press point for a native select right after it, and later presses in
+      // any iframe only recheck the enabled state. An out-of-process
+      // iframe had no check since its point was resolved, so its first left
+      // press still checks for a native select.
+      if (!target.frameId || count > 1 || (nativeSelect && !sameProcessFrame)) {
         await assertClickTargetActionable(
           services,
           target.sessionId,
           target.objectId,
           point.local,
-          { hitTest: !options.force && !target.frameId },
+          {
+            hitTest: !options.force && !target.frameId,
+            nativeSelect,
+            viewportPoint: { x: point.x, y: point.y },
+            checkViewport: sameProcessFrame,
+            frameSessions,
+          },
         );
       }
       await dispatchMouseEvent(services, target.sessionId, {
@@ -1207,6 +1261,12 @@ export async function clickPointInPage(
   options: PageMouseClickOptions = {},
   modifiers = 0,
   baseButtons = 0,
+  frameSessions?: FrameSessionsLoader,
+  /**
+   * Called once the pointer has moved to the point, before any press, so the
+   * caller can track the pointer position even when a press is refused.
+   */
+  onMoved?: () => void,
 ): Promise<void> {
   assertPoint(x, y, "page.mouse.click");
   const button = options.button ?? "left";
@@ -1221,7 +1281,19 @@ export async function clickPointInPage(
     buttons: baseButtons,
     modifiers,
   });
+  onMoved?.();
   for (let count = 1; count <= clickCount; count += 1) {
+    // Checked after the move and before every press: a hover handler or an
+    // earlier click of the sequence can put a select under the point.
+    if (button === "left") {
+      await assertNoNativeSelectAtViewportPoint(
+        services,
+        sessionId,
+        { x, y },
+        "page.mouse.click",
+        frameSessions,
+      );
+    }
     await dispatchMouseEvent(services, sessionId, {
       type: "mousePressed",
       x,
@@ -1280,10 +1352,20 @@ export async function mouseButtonInPage(
   buttons: number,
   options: PageMouseButtonOptions = {},
   modifiers = 0,
+  frameSessions?: FrameSessionsLoader,
 ): Promise<MouseButton> {
   assertPoint(x, y, `page.mouse.${type === "mousePressed" ? "down" : "up"}`);
   const button = options.button ?? "left";
   const clickCount = options.clickCount ?? 1;
+  if (type === "mousePressed" && button === "left") {
+    await assertNoNativeSelectAtViewportPoint(
+      services,
+      sessionId,
+      { x, y },
+      "page.mouse.down",
+      frameSessions,
+    );
+  }
   await dispatchMouseEvent(services, sessionId, {
     type,
     x,
@@ -1439,11 +1521,13 @@ async function resolveElementPoint(
     if (scroll) return { scroll };
     ${strictStabilityExpression}
     point = ${pointExpression};
-    if (${hitTest ? "true" : "false"}) {
-      const interceptor = interceptingElementAtPoint(this, point);
-      if (interceptor) {
-        return { error: describeHitTarget(interceptor) + " intercepts pointer events" };
-      }
+    ${
+      hitTest
+        ? `const interceptor = interceptingElementAtPoint(this, point);
+    if (interceptor) {
+      return { error: describeHitTarget(interceptor) + " intercepts pointer events" };
+    }`
+        : ""
     }
     return point;
   }`;
@@ -1823,20 +1907,59 @@ async function assertClickTargetActionable(
   sessionId: string,
   objectId: string,
   point: { x: number; y: number },
-  options: { hitTest: boolean; actionName?: string },
+  options: {
+    hitTest: boolean;
+    nativeSelect?: boolean;
+    actionName?: string;
+    /**
+     * The press point in the viewport of `sessionId`. Required with
+     * `nativeSelect`: when the press lands on an iframe, the check continues
+     * from this point through the frame's documents.
+     */
+    viewportPoint?: { x: number; y: number };
+    /**
+     * With `nativeSelect`, always continue the check at `viewportPoint` from
+     * the top document of `sessionId`, not only when the target's document
+     * hits an iframe: the target lives in a same-process iframe whose input is
+     * dispatched in the embedding viewport, where another document may cover it.
+     */
+    checkViewport?: boolean;
+    frameSessions?: FrameSessionsLoader;
+  },
 ): Promise<void> {
-  const { hitTest, actionName = "page.click" } = options;
+  const { hitTest, nativeSelect = false, actionName = "page.click" } = options;
+  // The native select check looks at the element the press really lands on,
+  // which may be a transparent <select> inside the target, a <select> in the
+  // shadow root of a custom element inside it or, with `force`, something
+  // other than the target. When that element is an iframe, the press reaches
+  // the frame's document, so the check descends into it below.
+  const helpers = nativeSelect
+    ? `${HIT_TARGET_HELPERS}${NATIVE_SELECT_FUNCTIONS}`
+    : hitTest
+      ? HIT_TARGET_HELPERS
+      : ACTION_TARGET_STATE_HELPERS;
   const expression = `function clickTargetActionable(point) {
-    ${hitTest ? HIT_TARGET_HELPERS : ACTION_TARGET_STATE_HELPERS}
+    ${helpers}
     if (!this.isConnected) return { error: "element is not connected" };
     if (isActionTargetDisabled(this)) return { error: "element is disabled" };
-    if (${hitTest ? "true" : "false"}) {
-      const interceptor = interceptingElementAtPoint(this, point);
-      if (interceptor) {
-        return { error: describeHitTarget(interceptor) + " intercepts pointer events" };
-      }
+    ${
+      nativeSelect
+        ? `const pressed = deepestHitElement(hitElementAtPoint(this, point), point);
+    const nativeSelect = nativeSelectMenuAt(pressed);
+    if (nativeSelect) return { nativeSelect };
+    const pressedTag = String(pressed?.tagName || "").toUpperCase();
+    const frameHit = pressedTag === "IFRAME" || pressedTag === "FRAME";`
+        : "const frameHit = false;"
     }
-    return { ok: true };
+    ${
+      hitTest
+        ? `const interceptor = interceptingElementAtPoint(this, point);
+    if (interceptor) {
+      return { error: describeHitTarget(interceptor) + " intercepts pointer events" };
+    }`
+        : ""
+    }
+    return { ok: true, frameHit };
   }`;
   const response = await services.cdp(
     "Runtime.callFunctionOn",
@@ -1850,12 +1973,361 @@ async function assertClickTargetActionable(
     sessionId,
   );
   const result = runtimeValue(response, expression);
+  if (result?.nativeSelect) {
+    throw nativeSelectMenuError(actionName, result.nativeSelect);
+  }
   if (typeof result?.error === "string") {
     throw new ElementResolutionError(
       `${actionName} failed: ${result.error}`,
       "transient",
     );
   }
+  // The press may only follow a positive answer from the page.
+  if (nativeSelect && result?.ok !== true) {
+    throw nativeSelectUncheckedError(
+      actionName,
+      "the page-side hit test returned no result",
+    );
+  }
+  if (nativeSelect && (result.frameHit === true || options.checkViewport)) {
+    // The hit test of the target's document stops at an iframe element (the
+    // press reaches whatever the frame's document has at that point) and does
+    // not see embedding documents that may cover the target's own frame.
+    if (!options.viewportPoint) {
+      throw nativeSelectUncheckedError(
+        actionName,
+        "the press lands on an iframe",
+      );
+    }
+    await assertNoNativeSelectAtViewportPoint(
+      services,
+      sessionId,
+      options.viewportPoint,
+      actionName,
+      options.frameSessions,
+    );
+  }
+}
+
+type NativeSelectInfo = {
+  locator: string | null;
+  options: string[];
+  optionCount: number;
+};
+
+/**
+ * Permanent: retrying cannot help, the caller has to switch to selectOption.
+ * The message names a selector that matches only this select when there is
+ * one, because a bare "select" is often ambiguous on real pages.
+ */
+function nativeSelectMenuError(
+  actionName: string,
+  info: NativeSelectInfo,
+): ElementResolutionError {
+  const target = info.locator ? `<select> ${info.locator}` : "a <select>";
+  const call = info.locator
+    ? `page.selectOption(${JSON.stringify(info.locator)}, { label: "..." })`
+    : `page.selectOption(selector, { label: "..." }) with a selector or snapshot ref that matches only this <select>`;
+  const shown = info.options.map((label) => JSON.stringify(label)).join(", ");
+  const more =
+    info.optionCount > info.options.length
+      ? `, ... (${info.optionCount} in total)`
+      : "";
+  const options = shown ? ` Options: ${shown}${more}.` : "";
+  return new ElementResolutionError(
+    `${actionName} refused to press the left mouse button on ${target}: ` +
+      `that opens the browser's native option menu, which agents cannot ` +
+      `close and which blocks task spaces from closing. Use ${call} ` +
+      `instead.${options}`,
+    "permanent",
+  );
+}
+
+/**
+ * The guard could not establish what a left press at the point would land on,
+ * so the press is refused instead of risked. Transient: a frame that is still
+ * loading or attaching can usually be inspected a moment later.
+ */
+function nativeSelectUncheckedError(
+  actionName: string,
+  reason: string,
+): ElementResolutionError {
+  return new ElementResolutionError(
+    `${actionName} failed: could not verify that the left press would not ` +
+      `open a native <select> menu (${reason}). Retry, or act on the element ` +
+      `with a selector or snapshot ref instead of coordinates.`,
+    "transient",
+  );
+}
+
+const NATIVE_SELECT_FRAME_DEPTH = 10;
+
+/**
+ * Raw coordinate presses have no target element, so look up what is at the
+ * viewport point, descending through open shadow roots and iframes. A frame
+ * whose document its embedder cannot read (cross-origin) is inspected where it
+ * lives: in its own session when it is out of process, otherwise in an
+ * isolated world of that frame. The press is allowed only once a document has
+ * positively reported that the hit element is not a drop-down select;
+ * evaluation errors, unreachable frames, and unexpected responses refuse it.
+ */
+async function assertNoNativeSelectAtViewportPoint(
+  services: PageActionServices,
+  sessionId: string,
+  point: { x: number; y: number },
+  actionName: string,
+  frameSessions?: FrameSessionsLoader,
+): Promise<void> {
+  let currentSessionId = sessionId;
+  let contextId: number | undefined;
+  // The point in the current document's viewport, and in the viewport of the
+  // current session's local root.
+  let { x, y } = point;
+  let sessionPoint = { x, y };
+  for (let depth = 0; depth < NATIVE_SELECT_FRAME_DEPTH; depth += 1) {
+    // Evaluates to the frame element itself when its document is unreadable
+    // and to a JSON verdict otherwise, so the common case is one round trip.
+    const expression = `(() => {
+      ${COMPOSED_PARENT_HELPER}
+      ${NATIVE_SELECT_FUNCTIONS}
+      let doc = document;
+      let x = ${x};
+      let y = ${y};
+      for (let depth = 0; depth < ${NATIVE_SELECT_FRAME_DEPTH}; depth += 1) {
+        const element = deepestHitElement(doc.elementFromPoint(x, y), { x, y });
+        if (!element) return JSON.stringify({ nativeSelect: null });
+        const tag = String(element.tagName || "").toUpperCase();
+        if (tag !== "IFRAME" && tag !== "FRAME") {
+          return JSON.stringify({ nativeSelect: nativeSelectMenuAt(element) });
+        }
+        let inner = null;
+        try {
+          inner = element.contentDocument;
+        } catch {}
+        if (!inner) return element;
+        const local = frameContentPoint(element, { x, y });
+        if (!local) {
+          return JSON.stringify({ unchecked: "the point is inside a rotated, skewed, flipped, zoomed or 3D-transformed iframe" });
+        }
+        x = local.x;
+        y = local.y;
+        doc = inner;
+      }
+      return JSON.stringify({ unchecked: "iframes are nested too deeply" });
+    })()`;
+    let response: any;
+    try {
+      response = await services.cdp(
+        "Runtime.evaluate",
+        {
+          expression,
+          returnByValue: false,
+          awaitPromise: false,
+          objectGroup: "ego-browser",
+          ...(contextId === undefined ? {} : { contextId }),
+        },
+        currentSessionId,
+      );
+    } catch (error) {
+      if (keepsTypeThroughSelectCheck(error)) throw error;
+      throw nativeSelectUncheckedError(actionName, errorText(error));
+    }
+    const result = response?.result;
+    if (response?.exceptionDetails || result?.subtype === "error") {
+      throw nativeSelectUncheckedError(
+        actionName,
+        "the page-side hit test threw",
+      );
+    }
+    if (typeof result?.objectId === "string") {
+      const frame = await uninspectedFrameAtPoint(
+        services,
+        currentSessionId,
+        result.objectId,
+        actionName,
+        frameSessions,
+      );
+      // An <iframe> without a content frame has no document to press on.
+      if (!frame) return;
+      // Box models are reported in the session's own viewport, so a frame
+      // evaluated in an isolated world of the same session keeps mapping from
+      // that viewport, while a frame in its own session starts a new one.
+      ({ x, y } = frame.toFrame(sessionPoint));
+      if (frame.sessionId !== currentSessionId) sessionPoint = { x, y };
+      currentSessionId = frame.sessionId;
+      contextId = frame.contextId;
+      continue;
+    }
+    let verdict: any = null;
+    if (typeof result?.value === "string") {
+      try {
+        verdict = JSON.parse(result.value);
+      } catch {
+        // Not a verdict; refused below.
+      }
+    }
+    if (!verdict || typeof verdict !== "object") {
+      throw nativeSelectUncheckedError(
+        actionName,
+        "the page-side hit test returned no result",
+      );
+    }
+    if (typeof verdict.unchecked === "string") {
+      throw nativeSelectUncheckedError(actionName, verdict.unchecked);
+    }
+    if (verdict.nativeSelect === null) return;
+    if (
+      typeof verdict.nativeSelect === "object" &&
+      Array.isArray(verdict.nativeSelect.options) &&
+      typeof verdict.nativeSelect.optionCount === "number"
+    ) {
+      throw nativeSelectMenuError(
+        actionName,
+        verdict.nativeSelect as NativeSelectInfo,
+      );
+    }
+    throw nativeSelectUncheckedError(
+      actionName,
+      "the page-side hit test returned an unexpected result",
+    );
+  }
+  throw nativeSelectUncheckedError(actionName, "iframes are nested too deeply");
+}
+
+/**
+ * Where to continue the hit test for a frame element whose document its
+ * embedder cannot read: the session and execution context that own the frame's
+ * document, and the mapping from the embedding session's viewport into the
+ * frame's content viewport. Null when the element has no content frame. Throws when the frame
+ * cannot be reached, so the caller never presses into an uninspected document.
+ */
+async function uninspectedFrameAtPoint(
+  services: PageActionServices,
+  sessionId: string,
+  objectId: string,
+  actionName: string,
+  frameSessions: FrameSessionsLoader | undefined,
+): Promise<{
+  sessionId: string;
+  contextId?: number;
+  toFrame: FramePointMapping;
+} | null> {
+  try {
+    let frameId: unknown;
+    let model: unknown;
+    try {
+      const described = await services.cdp(
+        "DOM.describeNode",
+        { objectId },
+        sessionId,
+      );
+      frameId = described?.node?.frameId;
+      if (typeof frameId !== "string" || frameId.length === 0) return null;
+      const box = await services.cdp(
+        "DOM.getBoxModel",
+        { objectId },
+        sessionId,
+      );
+      model = box?.model;
+    } finally {
+      await releaseObject(services, sessionId, objectId);
+    }
+    const toFrame = framePointMapping(model);
+    const frameSessionId = (await frameSessions?.())?.get(frameId);
+    if (frameSessionId && frameSessionId !== sessionId) {
+      return { sessionId: frameSessionId, toFrame };
+    }
+    // Same process, but a document the embedder may not read (for example a
+    // sandboxed or data: frame): evaluate inside the frame itself.
+    const world = await services.cdp(
+      "Page.createIsolatedWorld",
+      { frameId, worldName: "ego-browser-locator" },
+      sessionId,
+    );
+    if (!Number.isInteger(world?.executionContextId)) {
+      throw new Error("the iframe has no execution context");
+    }
+    return { sessionId, contextId: world.executionContextId, toFrame };
+  } catch (error) {
+    if (keepsTypeThroughSelectCheck(error)) throw error;
+    throw nativeSelectUncheckedError(
+      actionName,
+      `the point is inside an iframe that could not be inspected: ${errorText(error)}`,
+    );
+  }
+}
+
+type FramePointMapping = (point: { x: number; y: number }) => {
+  x: number;
+  y: number;
+};
+
+/** Rendered quads may carry sub-pixel noise from layout snapping. */
+const QUAD_TOLERANCE = 0.5;
+
+/**
+ * Inverts the mapping from a frame's content viewport to the viewport the
+ * frame element's box model is reported in. The rendered quads already include
+ * every transform of the frame and its ancestors; the layout width and height
+ * do not, so their ratio is the scale. Only translation and positive,
+ * axis-aligned scaling can be inverted this way: a quad that is not an upright
+ * rectangle (rotation, skew, flip, perspective) throws, so the caller refuses
+ * the press instead of checking the wrong point.
+ */
+function framePointMapping(model: any): FramePointMapping {
+  const content = model?.content;
+  const border = model?.border;
+  const quadOk = (quad: unknown): quad is number[] =>
+    Array.isArray(quad) &&
+    quad.length === 8 &&
+    quad.every((value) => Number.isFinite(value));
+  if (!quadOk(content) || !quadOk(border)) {
+    throw new Error("the iframe has no box");
+  }
+  const upright = (quad: number[]) => {
+    const [x0, y0, x1, y1, x2, y2, x3, y3] = quad;
+    const near = (a: number, b: number) => Math.abs(a - b) <= QUAD_TOLERANCE;
+    return (
+      x1 > x0 &&
+      y3 > y0 &&
+      near(y0, y1) &&
+      near(x0, x3) &&
+      near(x2, x1) &&
+      near(y2, y3)
+    );
+  };
+  if (!upright(content) || !upright(border)) {
+    throw new Error("the iframe is rotated, skewed, flipped or 3D-transformed");
+  }
+  const width = Number(model.width);
+  const height = Number(model.height);
+  if (!(width > 0) || !(height > 0)) {
+    throw new Error("the iframe has no layout size");
+  }
+  const scaleX = (border[2] - border[0]) / width;
+  const scaleY = (border[7] - border[1]) / height;
+  if (!(scaleX > 0) || !(scaleY > 0)) {
+    throw new Error("the iframe has no layout size");
+  }
+  const [originX, originY] = content;
+  return ({ x, y }) => ({
+    x: (x - originX) / scaleX,
+    y: (y - originY) / scaleY,
+  });
+}
+
+/**
+ * Errors the Page action boundary handles by type, so the native select check
+ * must not wrap them: a dialog that opened meanwhile becomes `receipt.dialog`,
+ * and a transport timeout lets the Page stop a stalled navigation and report
+ * `EGO_PAGE_UNRESPONSIVE`. Either way the press is still not sent.
+ */
+function keepsTypeThroughSelectCheck(error: unknown): boolean {
+  return isPageDialogOpenedError(error) || isCdpRequestTimeoutError(error);
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function assertElementReceivesPointerEvents(

@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   ACTION_TARGET_STATE_HELPERS,
+  COMPOSED_PARENT_HELPER,
   HIT_TARGET_HELPERS,
+  NATIVE_SELECT_FUNCTIONS,
   SCROLL_TARGET_HELPERS,
 } from "../../dist/src/driver/action-target.js";
 
@@ -205,4 +207,246 @@ test("action targeting chooses a real inline fragment instead of the bounding-bo
   };
 
   assert.deepEqual(actionPointForElement(target), { x: 740, y: 110 });
+});
+
+test("native select detection finds drop-down selects and names a unique locator", () => {
+  const { nativeSelectMenuAt } = Function(`
+    ${COMPOSED_PARENT_HELPER}
+    ${NATIVE_SELECT_FUNCTIONS}
+    return { nativeSelectMenuAt };
+  `)();
+  // A tiny tree scope: `elements` answer selectors by id or name; `hosts`
+  // carry open shadow roots, which are tree scopes of their own.
+  const scope = (elements = [], hosts = []) => ({
+    elements,
+    querySelectorAll(selector) {
+      if (selector === "*") return hosts;
+      return elements.filter(
+        (element) =>
+          selector === `select#${element.id}` ||
+          selector === `select[name=${JSON.stringify(element.name)}]`,
+      );
+    },
+  });
+  const topView = {};
+  topView.top = topView;
+  const doc = { ...scope(), defaultView: topView };
+  const select = ({
+    id = "",
+    name = null,
+    multiple = false,
+    size = 0,
+    disabled = false,
+    labels = ["Alpha", "Beta"],
+    ownerDocument = doc,
+    inDocument = true,
+  } = {}) => {
+    const element = {
+      tagName: "SELECT",
+      parentElement: null,
+      id,
+      name,
+      multiple,
+      size,
+      disabled,
+      options: labels.map((label) => ({ label })),
+      ownerDocument,
+      getAttribute: (attribute) => (attribute === "name" ? name : null),
+      matches: () => disabled,
+    };
+    if (inDocument) ownerDocument.elements.push(element);
+    return element;
+  };
+
+  const dropdown = select({ id: "dropdown" });
+  const option = { tagName: "OPTION", parentElement: dropdown };
+  assert.deepEqual(nativeSelectMenuAt(option), {
+    locator: "select#dropdown",
+    options: ["Alpha", "Beta"],
+    optionCount: 2,
+  });
+
+  assert.equal(
+    nativeSelectMenuAt(select({ name: "month" })).locator,
+    'select[name="month"]',
+  );
+
+  select({ name: "shared" });
+  assert.equal(
+    nativeSelectMenuAt(select({ name: "shared" })).locator,
+    null,
+    "an ambiguous selector is not offered",
+  );
+
+  // Page CSS selectors also match inside open shadow roots, so a duplicate id
+  // in another tree scope makes the locator ambiguous too.
+  const shadow = scope();
+  doc.querySelectorAll = ((query) => (selector) =>
+    selector === "*" ? [{ shadowRoot: shadow }] : query(selector))(
+    doc.querySelectorAll,
+  );
+  select({ id: "twin" });
+  shadow.elements.push({ id: "twin", name: null });
+  assert.equal(
+    nativeSelectMenuAt(select({ id: "twin", inDocument: false })).locator,
+    null,
+    "a selector that matches another element is not offered",
+  );
+  assert.equal(
+    nativeSelectMenuAt(select({ id: "twin" })).locator,
+    null,
+    "a selector matched in several tree scopes is not offered",
+  );
+
+  // A select inside an iframe: its id may name a control of the top document
+  // for page.selectOption(), so no locator is suggested at all.
+  const frameView = { top: topView };
+  const frameDoc = { ...scope(), defaultView: frameView };
+  const framed = select({ id: "framed", ownerDocument: frameDoc });
+  assert.equal(nativeSelectMenuAt(framed).locator, null);
+  assert.equal(nativeSelectMenuAt(framed).optionCount, 2);
+  const crossOrigin = {
+    get top() {
+      throw new Error("SecurityError");
+    },
+  };
+  const crossDoc = { ...scope(), defaultView: crossOrigin };
+  assert.equal(
+    nativeSelectMenuAt(select({ id: "x", ownerDocument: crossDoc })).locator,
+    null,
+  );
+
+  const many = select({
+    labels: Array.from({ length: 12 }, (_, i) => `O${i}`),
+  });
+  assert.equal(nativeSelectMenuAt(many).options.length, 10);
+  assert.equal(nativeSelectMenuAt(many).optionCount, 12);
+
+  assert.equal(nativeSelectMenuAt(select({ multiple: true })), null);
+  assert.equal(nativeSelectMenuAt(select({ size: 3 })), null);
+  assert.equal(nativeSelectMenuAt(select({ disabled: true })), null);
+  assert.equal(
+    nativeSelectMenuAt({ tagName: "DIV", parentElement: null }),
+    null,
+  );
+  assert.equal(nativeSelectMenuAt(null), null);
+});
+
+function nativeSelectHelpers() {
+  return Function(`
+    ${COMPOSED_PARENT_HELPER}
+    ${NATIVE_SELECT_FUNCTIONS}
+    return { deepestHitElement, frameContentPoint, nativeSelectMenuAt };
+  `)();
+}
+
+test("native select detection descends into the shadow root of a custom element inside the target", () => {
+  const { deepestHitElement, nativeSelectMenuAt } = nativeSelectHelpers();
+  const root = { nodeType: 11, querySelectorAll: () => ({ length: 0 }) };
+  const select = {
+    tagName: "SELECT",
+    parentElement: null,
+    options: [{ label: "One" }],
+    getAttribute: () => null,
+    getRootNode: () => root,
+    matches: () => false,
+  };
+  const points = [];
+  const host = {
+    tagName: "MY-PICKER",
+    shadowRoot: {
+      elementFromPoint(x, y) {
+        points.push([x, y]);
+        return select;
+      },
+    },
+  };
+  root.host = host;
+  // The wrapper hit test stops at the shadow host, which is not a select.
+  assert.equal(nativeSelectMenuAt(host), null);
+  assert.equal(deepestHitElement(host, { x: 3, y: 4 }), select);
+  assert.deepEqual(points, [[3, 4]]);
+  assert.equal(
+    nativeSelectMenuAt(deepestHitElement(host, { x: 3, y: 4 })).optionCount,
+    1,
+  );
+
+  const closed = { tagName: "DIV", shadowRoot: null };
+  assert.equal(deepestHitElement(closed, { x: 0, y: 0 }), closed);
+  const self = { tagName: "X", shadowRoot: { elementFromPoint: () => self } };
+  assert.equal(deepestHitElement(self, { x: 0, y: 0 }), self);
+  assert.equal(deepestHitElement(null, { x: 0, y: 0 }), null);
+});
+
+test("native select detection maps points into translated and scaled iframes and refuses other transforms", () => {
+  const { frameContentPoint } = nativeSelectHelpers();
+  const styles = new Map();
+  const view = {
+    getComputedStyle: (node) => ({
+      transform: "none",
+      rotate: "none",
+      scale: "none",
+      zoom: "1",
+      offsetPath: "none",
+      paddingLeft: "0px",
+      paddingTop: "0px",
+      ...styles.get(node),
+    }),
+  };
+  const body = { nodeType: 1, parentElement: null };
+  const frame = (rect) => ({
+    nodeType: 1,
+    parentElement: body,
+    ownerDocument: { defaultView: view },
+    offsetWidth: 300,
+    offsetHeight: 200,
+    clientLeft: 2,
+    clientTop: 3,
+    getBoundingClientRect: () => rect,
+  });
+
+  const plain = frame({ left: 100, top: 50, width: 300, height: 200 });
+  styles.set(plain, { paddingLeft: "4px", paddingTop: "5px" });
+  assert.deepEqual(frameContentPoint(plain, { x: 150, y: 100 }), {
+    x: 44,
+    y: 42,
+  });
+
+  // An ancestor scales the iframe by two: the bounding box doubles, the
+  // layout size does not.
+  const scaled = frame({ left: 100, top: 50, width: 600, height: 400 });
+  styles.set(body, { transform: "matrix(2, 0, 0, 2, 10, 20)" });
+  assert.deepEqual(frameContentPoint(scaled, { x: 250, y: 150 }), {
+    x: 73,
+    y: 47,
+  });
+  styles.set(body, { scale: "2" });
+  assert.deepEqual(frameContentPoint(scaled, { x: 250, y: 150 }), {
+    x: 73,
+    y: 47,
+  });
+
+  for (const style of [
+    { transform: "matrix(0, 1, -1, 0, 0, 0)" },
+    { transform: "matrix(-1, 0, 0, 1, 0, 0)" },
+    { transform: "matrix(1, 0, 0.5, 1, 0, 0)" },
+    { transform: "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)" },
+    { rotate: "45deg" },
+    { scale: "-1 1" },
+    { scale: "2 2 2" },
+    { zoom: "2" },
+    { offsetPath: 'path("M 0 0 L 10 10")' },
+  ]) {
+    styles.set(body, style);
+    assert.equal(
+      frameContentPoint(scaled, { x: 250, y: 150 }),
+      null,
+      JSON.stringify(style),
+    );
+  }
+  styles.delete(body);
+
+  const empty = frame({ left: 0, top: 0, width: 0, height: 0 });
+  empty.offsetWidth = 0;
+  assert.equal(frameContentPoint(empty, { x: 0, y: 0 }), null);
 });

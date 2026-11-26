@@ -46,6 +46,7 @@ import {
   moveMouseInPage,
   selectOptionInPage,
   wheelInPage,
+  type FrameSessionsLoader,
   type MouseButton,
   type PageClickOptions,
   type PageDragAndDropOptions,
@@ -695,6 +696,7 @@ class PageMouse {
   readonly #run: RawActionRunner;
   readonly #runObserved: ObservedActionRunner;
   readonly #modifierMask: () => number;
+  readonly #frameSessions: FrameSessionsLoader;
   #x = 0;
   #y = 0;
   #buttons = 0;
@@ -704,10 +706,12 @@ class PageMouse {
     run: RawActionRunner,
     runObserved: ObservedActionRunner,
     modifierMask: () => number,
+    frameSessions: FrameSessionsLoader,
   ) {
     this.#run = run;
     this.#runObserved = runObserved;
     this.#modifierMask = modifierMask;
+    this.#frameSessions = frameSessions;
   }
 
   async click(
@@ -725,11 +729,16 @@ class PageMouse {
         options,
         this.#modifierMask(),
         this.#buttons,
+        this.#frameSessions,
+        () => {
+          // The pointer is at (x, y) once the move lands, even if the
+          // native-select guard later refuses the press.
+          this.#x = x;
+          this.#y = y;
+          this.#lastButton = "none";
+        },
       ),
     );
-    this.#x = x;
-    this.#y = y;
-    this.#lastButton = "none";
     return receipt;
   }
 
@@ -765,6 +774,7 @@ class PageMouse {
         nextButtons,
         options,
         this.#modifierMask(),
+        this.#frameSessions,
       ).then(() => undefined),
     );
     this.#buttons = nextButtons;
@@ -1916,6 +1926,7 @@ class Page {
           operation(this.#services, sessionId),
         ),
       () => this.keyboard.modifierMask(),
+      async () => this.#frameSessions(await this.#resolve()),
     );
   }
 
