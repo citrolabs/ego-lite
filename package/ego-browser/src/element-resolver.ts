@@ -345,7 +345,10 @@ async function resolveRefObjectIdWithRecoveredFrame(
       entry.role,
       entry.name,
       `ref @${refId}`,
-      { strictGlobal: true },
+      {
+        strictGlobal: true,
+        parentFrameIds: parentFrameIdsOf(iframeSessions),
+      },
     );
   }
 
@@ -1051,7 +1054,10 @@ async function resolveLocatorCenter(cdp, sessionId, locator, iframeSessions) {
       locator.role,
       locator.name,
       locator.raw,
-      { nameMode: locator.nameMode },
+      {
+        nameMode: locator.nameMode,
+        parentFrameIds: parentFrameIdsOf(iframeSessions),
+      },
     );
     const result = await send(
       cdp,
@@ -1126,6 +1132,7 @@ async function resolveLocatorObjectId(
         nameMode: locator.nameMode,
         strictGlobal: options.strictGlobal,
         actionability: options.actionability,
+        parentFrameIds: parentFrameIdsOf(iframeSessions),
       },
     );
     const result = await send(
@@ -1284,18 +1291,52 @@ async function findUniqueLocatorContext(
   return matches[0];
 }
 
+function parentFrameIdsOf(
+  iframeSessions,
+): ReadonlyMap<string, string | undefined> | undefined {
+  return (
+    iframeSessions as {
+      parentFrameIds?: ReadonlyMap<string, string | undefined>;
+    } | null
+  )?.parentFrameIds;
+}
+
+/** Number of known ancestors of `frameId`; -1 for the Page's own document. */
+function frameDepth(
+  frameId: string | undefined,
+  parentFrameIds: ReadonlyMap<string, string | undefined> | undefined,
+): number {
+  if (!frameId) return -1;
+  let depth = 0;
+  const seen = new Set<string>();
+  let current = parentFrameIds?.get(frameId);
+  while (current !== undefined && !seen.has(current)) {
+    seen.add(current);
+    depth += 1;
+    current = parentFrameIds?.get(current);
+  }
+  return depth;
+}
+
 /**
- * An OOPIF session's default AX tree can include the nodes of its
- * same-process child frames, which are also searched in their own
- * frame-scoped context. Keeps one match per session and backend node,
- * preferring the frame-scoped one so the child's frame provenance survives.
+ * An OOPIF session's default AX tree, and the frame-scoped tree of each of
+ * its same-process frames, can include the nodes of same-process descendant
+ * frames, which are also searched in their own frame-scoped context. Keeps
+ * one match per session and backend node, preferring the deepest owning
+ * frame so the node's own frame provenance (and iframe offset) survives.
  */
-function dedupeFrameMatches(matches) {
+function dedupeFrameMatches(matches, parentFrameIds) {
   const byKey = new Map();
   for (const match of matches) {
     const key = `${match.sessionId}\u0000${match.backendNodeId}`;
     const existing = byKey.get(key);
-    if (!existing || (!existing.frameId && match.frameId)) {
+    if (
+      !existing ||
+      (!existing.frameId && match.frameId) ||
+      (Boolean(existing.frameId) === Boolean(match.frameId) &&
+        frameDepth(match.ownerFrameId, parentFrameIds) >
+          frameDepth(existing.ownerFrameId, parentFrameIds))
+    ) {
       byKey.set(key, match);
     }
   }
@@ -1312,10 +1353,12 @@ async function findUniqueRoleMatch(
     nameMode = "exact",
     strictGlobal = false,
     actionability = undefined,
+    parentFrameIds = undefined,
   }: {
     nameMode?: "exact" | "substring";
     strictGlobal?: boolean;
     actionability?: ElementActionability;
+    parentFrameIds?: ReadonlyMap<string, string | undefined>;
   } = {},
 ) {
   const matchesIn = async (selectedContexts) => {
@@ -1350,8 +1393,8 @@ async function findUniqueRoleMatch(
   const rawMainMatches = await matchesIn(contexts.slice(0, 1));
   let cachedFrameMatches;
   const matchesWithFrameProvenance = async () => {
-    cachedFrameMatches ||= matchesIn(contexts.slice(1)).then(
-      dedupeFrameMatches,
+    cachedFrameMatches ||= matchesIn(contexts.slice(1)).then((matches) =>
+      dedupeFrameMatches(matches, parentFrameIds),
     );
     const frames = await cachedFrameMatches;
     const framedNodeKeys = new Set(

@@ -1235,6 +1235,56 @@ test("role locators count a same-process child's node once when the OOPIF root A
   }
 });
 
+test("role locators attribute a node to its deepest same-process frame inside an OOPIF", async () => {
+  // Page → OOPIF frame-middle → same-process frame-child → same-process
+  // frame-leaf. The OOPIF root tree and frame-child's frame-scoped tree both
+  // also list frame-leaf's button, and frame-child is searched first.
+  const sessions = new Map([
+    ["frame-middle", "session:middle"],
+    ["frame-child", "session:middle"],
+    ["frame-leaf", "session:middle"],
+  ]);
+  sessions.parentFrameIds = new Map([
+    ["frame-middle", "frame-main"],
+    ["frame-child", "frame-middle"],
+    ["frame-leaf", "frame-child"],
+  ]);
+  const leafButton = {
+    role: { value: "button" },
+    name: { value: "Leaf" },
+    backendDOMNodeId: 501,
+  };
+  const cdp = new FakeCDP(async (method, params, sessionId) => {
+    if (method === "Accessibility.getFullAXTree") {
+      if (sessionId !== "session:middle") return { nodes: [] };
+      return { nodes: [leafButton] };
+    }
+    if (method === "DOM.resolveNode") {
+      assert.equal(sessionId, "session:middle");
+      return { object: { objectId: `node-${params.backendNodeId}` } };
+    }
+    return {};
+  });
+
+  for (const options of [undefined, { strict: true }]) {
+    assert.deepEqual(
+      await resolveElementObjectId(
+        cdp,
+        "session:page",
+        new RefMap(),
+        'loc=role:button[name="Leaf"]',
+        sessions,
+        options,
+      ),
+      {
+        objectId: "node-501",
+        sessionId: "session:middle",
+        frameId: "frame-leaf",
+      },
+    );
+  }
+});
+
 test("CSS locators search an OOPIF root once alongside its same-process child frame", async () => {
   const cdp = new FakeCDP(async (method, params, sessionId) => {
     if (method === "Page.createIsolatedWorld") {
