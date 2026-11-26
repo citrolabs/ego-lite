@@ -227,6 +227,10 @@ const INPUT_EVENT_DELAY_MS = 25;
 const FILL_VERIFICATION_ATTEMPTS = 5;
 const FILL_VERIFICATION_INTERVAL_MS = 50;
 const AUTO_SCROLL_ATTEMPTS = 6;
+// A renderer acknowledges a wheel event on its next frame. Several frames of
+// delay mean the page draws too slowly (a throttled Task Space, a busy main
+// thread) for a wheel motion to finish within an action's budget.
+const SLOW_WHEEL_EVENT_MS = 200;
 type FillOutcome =
   | "exact"
   | "equivalent"
@@ -1505,11 +1509,20 @@ async function resolveElementPoint(
 type WheelRequest = { x: number; y: number; deltaX: number; deltaY: number };
 
 function wheelMotionServices(services: PageActionServices, sessionId: string) {
+  let slowEvent = false;
   return {
-    dispatch: (params: Record<string, unknown>) =>
-      dispatchMouseEvent(services, sessionId, params),
+    dispatch: async (params: Record<string, unknown>) => {
+      const startedAt = services.now?.();
+      await dispatchMouseEvent(services, sessionId, params);
+      if (
+        startedAt !== undefined &&
+        services.now!() - startedAt > SLOW_WHEEL_EVENT_MS
+      ) {
+        slowEvent = true;
+      }
+    },
     sleep: services.sleep,
-    exhausted: () => actionDeadlinePassed(services),
+    exhausted: () => slowEvent || actionDeadlinePassed(services),
   };
 }
 
@@ -1542,9 +1555,11 @@ function sameWheelRequest(a: WheelRequest, b: WheelRequest): boolean {
  * target exactly where it was, the next request is identical, and the loop
  * falls back once to `DOM.scrollIntoViewIfNeeded` (which bypasses a site's
  * patched `Element.prototype.scrollIntoView`) instead of repeating a motion
- * that already proved ineffective. The action deadline is checked before
- * every motion and inside it so a slow wheel handler cannot run the action
- * far past its timeout.
+ * that already proved ineffective. A motion cut short, by a slowly
+ * acknowledged wheel event or by the action deadline, falls back the same
+ * way, so a page that cannot follow wheel input still gets scrolled. The
+ * action deadline is checked before every motion and inside it so a slow
+ * wheel handler cannot run the action far past its timeout.
  */
 async function bringIntoView<
   T extends { error?: unknown; scroll?: WheelRequest | null },
@@ -1566,6 +1581,16 @@ async function bringIntoView<
     );
   let previous: WheelRequest | undefined;
   let fellBack = false;
+  const fallBack = async () => {
+    if (fellBack) throw notVisible();
+    fellBack = true;
+    previous = undefined;
+    try {
+      await services.cdp("DOM.scrollIntoViewIfNeeded", { objectId }, sessionId);
+    } catch {
+      throw notVisible();
+    }
+  };
   for (let attempt = 0; attempt <= AUTO_SCROLL_ATTEMPTS; attempt += 1) {
     const result = await input.evaluate();
     if (typeof result?.error === "string") {
@@ -1587,22 +1612,11 @@ async function bringIntoView<
       throw notVisible();
     }
     if (previous && sameWheelRequest(previous, scroll)) {
-      if (fellBack) throw notVisible();
-      fellBack = true;
-      previous = undefined;
-      try {
-        await services.cdp(
-          "DOM.scrollIntoViewIfNeeded",
-          { objectId },
-          sessionId,
-        );
-      } catch {
-        throw notVisible();
-      }
+      await fallBack();
       continue;
     }
     previous = scroll;
-    if (!(await input.wheel(scroll))) throw notVisible();
+    if (!(await input.wheel(scroll))) await fallBack();
   }
   throw notVisible();
 }
