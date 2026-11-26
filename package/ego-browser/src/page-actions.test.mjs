@@ -395,6 +395,7 @@ test("Page click fails closed when a parent-document overlay covers a same-proce
   assert.deepEqual(ownerCheck[1].arguments, [
     { value: { x: 10, y: 20 } },
     { value: null },
+    { value: null },
   ]);
   assert.equal(
     calls.some(([method]) => method === "Input.dispatchMouseEvent"),
@@ -574,6 +575,7 @@ test("Page click parent hit test maps the point through a rotated iframe", async
   assert.deepEqual(ownerCall.arguments, [
     { value: { x: 10, y: 20 } },
     { value: quad },
+    { value: null },
   ]);
 
   // Evaluate the real check: only the rotated position of the framed point
@@ -716,6 +718,231 @@ test("Page click hit-tests every ancestor document of a nested OOPIF target", as
     ["node-90", "session:runner", { x: 10, y: 20 }],
     ["node-91", "session:page", { x: 110, y: 220 }],
   ]);
+});
+
+test("Page click parent hit test undoes an ancestor rotation around an untransformed iframe", async () => {
+  // The owner document is itself rendered in a frame rotated 90deg clockwise:
+  // its viewport point (x, y) is reported at (1000 - y, x + 50).
+  const toReported = ([x, y]) => [1000 - y, x + 50];
+  const corners = (left, top, width, height) =>
+    [
+      [left, top],
+      [left + width, top],
+      [left + width, top + height],
+      [left, top + height],
+    ].flatMap(toReported);
+  const iframeQuad = corners(100, 200, 200, 200);
+  const rootQuad = corners(0, 0, 800, 600);
+  let ownerCall;
+  const services = {
+    async cdp(method, params = {}) {
+      if (method === "Accessibility.getFullAXTree") {
+        return params.frameId === "frame-child"
+          ? {
+              nodes: [
+                {
+                  role: { value: "button" },
+                  name: { value: "Check" },
+                  backendDOMNodeId: 21,
+                },
+              ],
+            }
+          : { nodes: [] };
+      }
+      if (method === "DOM.resolveNode") {
+        return { object: { objectId: `node-${params.backendNodeId}` } };
+      }
+      if (method === "DOM.getContentQuads") {
+        if (params.objectId === "node-90") return { quads: [iframeQuad] };
+        if (params.objectId === "owner-root") return { quads: [rootQuad] };
+        return { quads: [] };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        if (params.functionDeclaration.includes("frameOwnerDocumentRoot")) {
+          return { result: { objectId: "owner-root" } };
+        }
+        if (params.functionDeclaration.includes("frameOwnerReceivesPointer")) {
+          ownerCall = params;
+          return { result: { value: { x: 110, y: 220 } } };
+        }
+        if (params.functionDeclaration.includes("actionable: false")) {
+          return { result: { value: { actionable: true } } };
+        }
+        return params.functionDeclaration.includes("getBoundingClientRect")
+          ? { result: { value: { x: 10, y: 20 } } }
+          : { result: { value: { ok: true } } };
+      }
+      if (method === "DOM.getFrameOwner") return { backendNodeId: 90 };
+      if (method === "DOM.getBoxModel") {
+        return {
+          model: { content: [100, 200, 300, 200, 300, 400, 100, 400] },
+        };
+      }
+      return {};
+    },
+    async showAgentMousePosition() {},
+    async showAgentTaskState() {},
+    async sleep() {},
+  };
+  await clickInPage(
+    services,
+    "session:page",
+    new RefMap(),
+    'loc=role:button[name="Check"]',
+    {},
+    0,
+    new Map([["frame-child", "session:page"]]),
+  );
+  assert.deepEqual(ownerCall.arguments, [
+    { value: { x: 10, y: 20 } },
+    { value: iframeQuad },
+    { value: rootQuad },
+  ]);
+
+  // Only the iframe's untransformed position (110, 220) hits it; aligning the
+  // rotated quad's bounding box with the iframe's rect would test (280, 210).
+  const ownerCheck = Function(`return (${ownerCall.functionDeclaration});`)();
+  const document = { nodeType: 9 };
+  const fakeElement = (tagName, attributes) => ({
+    tagName,
+    id: attributes.id || "",
+    parentElement: null,
+    getAttribute: (name) => attributes[name] ?? null,
+    hasAttribute: (name) => name in attributes,
+    getRootNode: () => document,
+  });
+  const body = fakeElement("BODY", { id: "parent" });
+  const iframe = {
+    ...fakeElement("IFRAME", {}),
+    isConnected: true,
+    clientLeft: 0,
+    clientTop: 0,
+    offsetWidth: 200,
+    offsetHeight: 200,
+    getBoundingClientRect: () => ({
+      left: 100,
+      top: 200,
+      width: 200,
+      height: 200,
+    }),
+    ownerDocument: {
+      documentElement: {
+        ...fakeElement("HTML", {}),
+        getBoundingClientRect: () => ({
+          left: 0,
+          top: 0,
+          width: 800,
+          height: 600,
+        }),
+      },
+      defaultView: {
+        innerWidth: 800,
+        innerHeight: 600,
+        getComputedStyle: () => ({ paddingLeft: "0", paddingTop: "0" }),
+      },
+    },
+  };
+  const hitAt = (x, y) =>
+    Math.abs(x - 110) < 1e-9 && Math.abs(y - 220) < 1e-9 ? iframe : body;
+  document.elementFromPoint = hitAt;
+  document.elementsFromPoint = (x, y) => [hitAt(x, y)];
+
+  const mapped = ownerCheck.call(
+    iframe,
+    { x: 10, y: 20 },
+    iframeQuad,
+    rootQuad,
+  );
+  assert.ok(Math.abs(mapped.x - 110) < 1e-9, JSON.stringify(mapped));
+  assert.ok(Math.abs(mapped.y - 220) < 1e-9, JSON.stringify(mapped));
+  assert.deepEqual(
+    ownerCheck.call(iframe, { x: 10, y: 20 }, iframeQuad, null),
+    { error: '<body id="parent"> intercepts pointer events' },
+  );
+});
+
+test("Page click rechecks parent documents after hovering an OOPIF target", async () => {
+  const calls = [];
+  let ownerChecks = 0;
+  const services = {
+    async cdp(method, params = {}, sessionId) {
+      calls.push([method, params, sessionId]);
+      if (method === "Accessibility.getFullAXTree") {
+        return sessionId === "session:frame"
+          ? {
+              nodes: [
+                {
+                  role: { value: "button" },
+                  name: { value: "Run OOPIF action" },
+                  backendDOMNodeId: 21,
+                },
+              ],
+            }
+          : { nodes: [] };
+      }
+      if (method === "DOM.resolveNode") {
+        return {
+          object: {
+            objectId:
+              params.backendNodeId === 90 ? "iframe-owner" : "iframe-button",
+          },
+        };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        if (params.functionDeclaration.includes("frameOwnerReceivesPointer")) {
+          ownerChecks += 1;
+          // Hovering the target opens a parent-document overlay.
+          return {
+            result: {
+              value:
+                ownerChecks === 1
+                  ? { x: 110, y: 220 }
+                  : { error: '<div id="ov"> intercepts pointer events' },
+            },
+          };
+        }
+        if (params.functionDeclaration.includes("actionable: false")) {
+          return { result: { value: { actionable: true } } };
+        }
+        return params.functionDeclaration.includes("getBoundingClientRect")
+          ? { result: { value: { x: 10, y: 20 } } }
+          : { result: { value: { ok: true } } };
+      }
+      if (method === "DOM.getFrameOwner") return { backendNodeId: 90 };
+      if (method === "DOM.getBoxModel") {
+        return {
+          model: { content: [100, 200, 300, 200, 300, 400, 100, 400] },
+        };
+      }
+      return {};
+    },
+    async showAgentMousePosition() {},
+    async showAgentTaskState() {},
+    async sleep() {},
+  };
+
+  await assert.rejects(
+    () =>
+      clickInPage(
+        services,
+        "session:page",
+        new RefMap(),
+        'loc=role:button[name="Run OOPIF action"]',
+        {},
+        0,
+        new Map([["frame-child", "session:frame"]]),
+      ),
+    /page\.click failed: <div id="ov"> intercepts pointer events/,
+  );
+  assert.equal(ownerChecks, 2);
+  const pointerEvents = calls
+    .filter(([method]) => method === "Input.dispatchMouseEvent")
+    .map(([, params]) => params.type);
+  assert.deepEqual(
+    pointerEvents,
+    ["mouseMoved"],
+    "no press reaches the overlay",
+  );
 });
 
 test("Page click force skips the parent-document hit test of an iframe target", async () => {

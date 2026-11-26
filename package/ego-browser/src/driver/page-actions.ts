@@ -348,6 +348,17 @@ export async function clickInPage(
         buttons: 0,
         modifiers,
       });
+    } else if (target.frameId && !options.force) {
+      // Hovering an OOPIF target can open an overlay in a parent document
+      // after the first check; recheck the ancestors before the press.
+      await assertFrameOwnersReceivePointerEvents(
+        services,
+        sessionId,
+        target.frameId,
+        point.local,
+        iframeSessions,
+        "page.click",
+      );
     }
     for (let count = 1; count <= clickCount; count += 1) {
       // Moving the pointer or completing an earlier click can change layout.
@@ -1769,7 +1780,7 @@ async function assertFrameOwnersReceivePointerEvents(
       parentFrameIds?: ReadonlyMap<string, string | undefined>;
     }
   ).parentFrameIds;
-  const source = `function frameOwnerReceivesPointer(point, quad) {
+  const source = `function frameOwnerReceivesPointer(point, quad, rootQuad) {
     ${HIT_TARGET_HELPERS}
     if (!this.isConnected) return { error: "iframe is not connected" };
     const view = this.ownerDocument.defaultView;
@@ -1779,30 +1790,63 @@ async function assertFrameOwnersReceivePointerEvents(
     // Point in the iframe's untransformed border box.
     const u = this.clientLeft + (parseFloat(style.paddingLeft) || 0) + point.x;
     const v = this.clientTop + (parseFloat(style.paddingTop) || 0) + point.y;
+    const isQuad = (value) =>
+      Array.isArray(value) && value.length >= 8 &&
+      value.every((entry) => Number.isFinite(entry));
     let ownerPoint;
-    if (
-      Array.isArray(quad) && quad.length >= 8 &&
-      quad.every((value) => Number.isFinite(value)) &&
-      this.offsetWidth > 0 && this.offsetHeight > 0
-    ) {
+    if (isQuad(quad) && this.offsetWidth > 0 && this.offsetHeight > 0) {
       // getBoundingClientRect is axis-aligned and cannot express rotation or
       // skew, so map through the transformed border-box quad instead. Its
       // corners are top-left, top-right, bottom-right, bottom-left of the
-      // untransformed box. The quad may be reported relative to an ancestor
-      // viewport; its bounding box aligns it with this document's viewport.
-      const xs = [quad[0], quad[2], quad[4], quad[6]];
-      const ys = [quad[1], quad[3], quad[5], quad[7]];
-      const minX = Math.min(...xs);
-      const minY = Math.min(...ys);
-      const spanX = Math.max(...xs) - minX;
-      const spanY = Math.max(...ys) - minY;
-      const toViewX = (x) => rect.left + (spanX > 0 ? (x - minX) * rect.width / spanX : 0);
-      const toViewY = (y) => rect.top + (spanY > 0 ? (y - minY) * rect.height / spanY : 0);
+      // untransformed box.
       const fu = u / this.offsetWidth;
       const fv = v / this.offsetHeight;
       const quadX = quad[0] + fu * (quad[2] - quad[0]) + fv * (quad[6] - quad[0]);
       const quadY = quad[1] + fu * (quad[3] - quad[1]) + fv * (quad[7] - quad[1]);
-      ownerPoint = { x: toViewX(quadX), y: toViewY(quadY) };
+      // The quad may be reported in an ancestor viewport, including that
+      // ancestor's own transforms (an iframe inside a rotated parent frame).
+      // The untransformed root element's quad in the same space gives the
+      // affine map from this document's viewport into it; invert that.
+      let toView = null;
+      const root = this.ownerDocument.documentElement;
+      if (isQuad(rootQuad) && root) {
+        const rootStyle = view.getComputedStyle(root);
+        const untransformed = ["transform", "rotate", "scale", "translate"]
+          .every((name) => !rootStyle[name] || rootStyle[name] === "none");
+        const rootRect = root.getBoundingClientRect();
+        if (untransformed && rootRect.width > 0 && rootRect.height > 0) {
+          const ax = (rootQuad[2] - rootQuad[0]) / rootRect.width;
+          const ay = (rootQuad[3] - rootQuad[1]) / rootRect.width;
+          const bx = (rootQuad[6] - rootQuad[0]) / rootRect.height;
+          const by = (rootQuad[7] - rootQuad[1]) / rootRect.height;
+          const det = ax * by - bx * ay;
+          if (Math.abs(det) > 1e-9) {
+            toView = (x, y) => {
+              const dx = x - rootQuad[0];
+              const dy = y - rootQuad[1];
+              return {
+                x: rootRect.left + (dx * by - bx * dy) / det,
+                y: rootRect.top + (ax * dy - dx * ay) / det,
+              };
+            };
+          }
+        }
+      }
+      if (!toView) {
+        // Without a usable root quad, align the quad's bounding box with the
+        // iframe's bounding rect. This handles ancestor offsets and scale.
+        const xs = [quad[0], quad[2], quad[4], quad[6]];
+        const ys = [quad[1], quad[3], quad[5], quad[7]];
+        const minX = Math.min(...xs);
+        const minY = Math.min(...ys);
+        const spanX = Math.max(...xs) - minX;
+        const spanY = Math.max(...ys) - minY;
+        toView = (x, y) => ({
+          x: rect.left + (spanX > 0 ? (x - minX) * rect.width / spanX : 0),
+          y: rect.top + (spanY > 0 ? (y - minY) * rect.height / spanY : 0),
+        });
+      }
+      ownerPoint = toView(quadX, quadY);
     } else {
       const scaleX = this.offsetWidth > 0 ? rect.width / this.offsetWidth : 1;
       const scaleY = this.offsetHeight > 0 ? rect.height / this.offsetHeight : 1;
@@ -1852,12 +1896,15 @@ async function assertFrameOwnersReceivePointerEvents(
       } catch {
         // Fall back to the axis-aligned bounding-box mapping.
       }
+      const rootQuad = quad
+        ? await ownerRootQuad(services, ownerSessionId, objectId)
+        : null;
       const response = await services.cdp(
         "Runtime.callFunctionOn",
         {
           functionDeclaration: source,
           objectId,
-          arguments: [{ value: point }, { value: quad }],
+          arguments: [{ value: point }, { value: quad }, { value: rootQuad }],
           returnByValue: true,
           awaitPromise: false,
         },
@@ -1882,6 +1929,44 @@ async function assertFrameOwnersReceivePointerEvents(
     }
     point = { x: result.x, y: result.y };
     currentFrameId = parentIsFrame ? parentFrameId : undefined;
+  }
+}
+
+/**
+ * Content quad of the root element of the iframe owner's document, reported
+ * in the same coordinate space as the iframe's own quad. Returns null when it
+ * is unavailable, which selects the bounding-box fallback.
+ */
+async function ownerRootQuad(
+  services: PageActionServices,
+  sessionId: string,
+  ownerObjectId: string,
+): Promise<unknown> {
+  let rootObjectId: string | undefined;
+  try {
+    const root = await services.cdp(
+      "Runtime.callFunctionOn",
+      {
+        functionDeclaration:
+          "function frameOwnerDocumentRoot() { return this.ownerDocument.documentElement; }",
+        objectId: ownerObjectId,
+        returnByValue: false,
+        awaitPromise: false,
+      },
+      sessionId,
+    );
+    rootObjectId = root?.result?.objectId;
+    if (!rootObjectId) return null;
+    const quads = await services.cdp(
+      "DOM.getContentQuads",
+      { objectId: rootObjectId },
+      sessionId,
+    );
+    return Array.isArray(quads?.quads) ? (quads.quads[0] ?? null) : null;
+  } catch {
+    return null;
+  } finally {
+    if (rootObjectId) await releaseObject(services, sessionId, rootObjectId);
   }
 }
 
