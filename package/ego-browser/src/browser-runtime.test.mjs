@@ -264,6 +264,59 @@ test("OOPIF roots without parentId keep the parent from target metadata", async 
   }
 });
 
+test("a stalled OOPIF frame tree leaves the action budget for the Page", async () => {
+  // The runner OOPIF never answers its own Page.getFrameTree. Discovery must
+  // give up on that optional read quickly so a main-document action still has
+  // most of its budget, and the OOPIF itself stays mapped to its session.
+  const previous = globalThis.ego;
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      if (
+        request.method === "Page.getFrameTree" &&
+        request.sessionId === "session:runner"
+      ) {
+        return;
+      }
+      let result = {};
+      if (request.method === "Target.getTargets") {
+        result = {
+          targetInfos: [
+            { targetId: "page-main", type: "page" },
+            { targetId: "runner", type: "iframe", parentFrameId: "page-main" },
+          ],
+        };
+      } else if (request.method === "Page.getFrameTree") {
+        result = {
+          frameTree: {
+            frame: { id: "page-main" },
+            childFrames: [{ frame: { id: "runner", parentId: "page-main" } }],
+          },
+        };
+      } else if (request.method === "Target.attachToTarget") {
+        result = { sessionId: `session:${request.params.targetId}` };
+      }
+      queueMicrotask(() => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      });
+    },
+  };
+  globalThis.ego = runtime;
+
+  try {
+    invalidateSession();
+    const startedAt = performance.now();
+    const sessions = await ensureFrameSessions("page-main", 10_000);
+    const elapsed = performance.now() - startedAt;
+    assert(elapsed < 2_000, `discovery took ${elapsed}ms of a 10s budget`);
+    assert.equal(sessions.get("runner"), "session:runner");
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
 test("frame session discovery drops an enumerated iframe that disappears before attach", async () => {
   const previous = globalThis.ego;
   let discoveries = 0;

@@ -24,6 +24,10 @@ export function responseTimeoutMs(): number {
 // until it recovers, so one caller never waits longer than this for setup.
 const SESSION_SETUP_WAIT_MS = 2000;
 const SESSION_TTL_MS = 2000;
+// An OOPIF's own Page.getFrameTree only reveals same-process child frames; a
+// responsive renderer answers within milliseconds. One stalled OOPIF must not
+// spend the whole action budget that the Page and its other frames still need.
+const OOPIF_FRAME_TREE_WAIT_MS = 1000;
 // Upper bound for buffered CDP events. The runtime can be long-lived (installEgoSdk
 // inside the browser); without a cap, undrained events grow without bound.
 const MAX_BUFFERED_EVENTS = 10000;
@@ -929,7 +933,7 @@ export async function ensureFrameSessions(
             "Page.getFrameTree",
             {},
             sessionId,
-            remaining(),
+            Math.min(remaining(), OOPIF_FRAME_TREE_WAIT_MS),
           );
           const tree = findFrame(
             response?.result?.frameTree || response?.frameTree,
