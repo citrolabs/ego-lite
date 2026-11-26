@@ -637,6 +637,152 @@ test("Page click parent hit test maps the point through a rotated iframe", async
   });
 });
 
+test("Page click parent hit test maps the point through a perspective-transformed iframe", async () => {
+  // A 200x200 iframe at (100, 200) styled `perspective(400px) rotateY(60deg)`
+  // about its center (200, 300). Its quad is a trapezoid, not a parallelogram.
+  const center = [200, 300];
+  const angle = Math.PI / 3;
+  const project = ([x, y]) => {
+    const dx = x - center[0];
+    const z = dx * Math.sin(angle);
+    const scale = 400 / (400 - z);
+    return [
+      center[0] + dx * Math.cos(angle) * scale,
+      center[1] + (y - center[1]) * scale,
+    ];
+  };
+  const quad = [
+    [100, 200],
+    [300, 200],
+    [300, 400],
+    [100, 400],
+  ].flatMap(project);
+  const [expectedX, expectedY] = project([110, 220]);
+  // The affine estimate through three corners lands well away from it.
+  const affineX =
+    quad[0] + 0.05 * (quad[2] - quad[0]) + 0.1 * (quad[6] - quad[0]);
+  const affineY =
+    quad[1] + 0.05 * (quad[3] - quad[1]) + 0.1 * (quad[7] - quad[1]);
+  assert.ok(Math.hypot(affineX - expectedX, affineY - expectedY) > 2);
+
+  let ownerCall;
+  const services = {
+    async cdp(method, params = {}) {
+      if (method === "Accessibility.getFullAXTree") {
+        return params.frameId === "frame-child"
+          ? {
+              nodes: [
+                {
+                  role: { value: "button" },
+                  name: { value: "Check" },
+                  backendDOMNodeId: 21,
+                },
+              ],
+            }
+          : { nodes: [] };
+      }
+      if (method === "DOM.resolveNode") {
+        return { object: { objectId: `node-${params.backendNodeId}` } };
+      }
+      if (method === "DOM.getContentQuads") {
+        return params.objectId === "node-90"
+          ? { quads: [quad] }
+          : { quads: [] };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        if (params.functionDeclaration.includes("frameOwnerReceivesPointer")) {
+          ownerCall = params;
+          return { result: { value: { x: expectedX, y: expectedY } } };
+        }
+        if (params.functionDeclaration.includes("actionable: false")) {
+          return { result: { value: { actionable: true } } };
+        }
+        return params.functionDeclaration.includes("getBoundingClientRect")
+          ? { result: { value: { x: 10, y: 20 } } }
+          : { result: { value: { ok: true } } };
+      }
+      if (method === "DOM.getFrameOwner") return { backendNodeId: 90 };
+      if (method === "DOM.getBoxModel") {
+        return {
+          model: { content: [100, 200, 300, 200, 300, 400, 100, 400] },
+        };
+      }
+      return {};
+    },
+    async showAgentMousePosition() {},
+    async showAgentTaskState() {},
+    async sleep() {},
+  };
+  await clickInPage(
+    services,
+    "session:page",
+    new RefMap(),
+    'loc=role:button[name="Check"]',
+    {},
+    0,
+    new Map([["frame-child", "session:page"]]),
+  );
+  assert.ok(ownerCall, "the parent-document hit test ran");
+
+  const ownerCheck = Function(`return (${ownerCall.functionDeclaration});`)();
+  const document = { nodeType: 9 };
+  const fakeElement = (tagName, attributes) => ({
+    tagName,
+    id: attributes.id || "",
+    parentElement: null,
+    getAttribute: (name) => attributes[name] ?? null,
+    hasAttribute: (name) => name in attributes,
+    getRootNode: () => document,
+  });
+  const body = fakeElement("BODY", { id: "parent" });
+  const iframe = {
+    ...fakeElement("IFRAME", {}),
+    isConnected: true,
+    clientLeft: 0,
+    clientTop: 0,
+    offsetWidth: 200,
+    offsetHeight: 200,
+    getBoundingClientRect: () => {
+      const xs = [quad[0], quad[2], quad[4], quad[6]];
+      const ys = [quad[1], quad[3], quad[5], quad[7]];
+      return {
+        left: Math.min(...xs),
+        top: Math.min(...ys),
+        width: Math.max(...xs) - Math.min(...xs),
+        height: Math.max(...ys) - Math.min(...ys),
+      };
+    },
+    ownerDocument: {
+      documentElement: {
+        ...fakeElement("HTML", {}),
+        getBoundingClientRect: () => ({
+          left: 0,
+          top: 0,
+          width: 800,
+          height: 600,
+        }),
+      },
+      defaultView: {
+        innerWidth: 800,
+        innerHeight: 600,
+        getComputedStyle: () => ({ paddingLeft: "0", paddingTop: "0" }),
+      },
+    },
+  };
+  const hitAt = (x, y) =>
+    Math.abs(x - expectedX) < 1e-6 && Math.abs(y - expectedY) < 1e-6
+      ? iframe
+      : body;
+  document.elementFromPoint = hitAt;
+  document.elementsFromPoint = (x, y) => [hitAt(x, y)];
+
+  for (const rootQuad of [null, [0, 0, 800, 0, 800, 600, 0, 600]]) {
+    const mapped = ownerCheck.call(iframe, { x: 10, y: 20 }, quad, rootQuad);
+    assert.ok(Math.abs(mapped.x - expectedX) < 1e-6, JSON.stringify(mapped));
+    assert.ok(Math.abs(mapped.y - expectedY) < 1e-6, JSON.stringify(mapped));
+  }
+});
+
 test("Page click hit-tests every ancestor document of a nested OOPIF target", async () => {
   const ownerChecks = [];
   const services = {

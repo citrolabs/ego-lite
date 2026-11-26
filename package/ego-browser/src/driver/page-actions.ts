@@ -1793,20 +1793,70 @@ async function assertFrameOwnersReceivePointerEvents(
     const isQuad = (value) =>
       Array.isArray(value) && value.length >= 8 &&
       value.every((entry) => Number.isFinite(entry));
+    // Projective map of the unit square onto a quad whose corners are
+    // top-left, top-right, bottom-right, bottom-left. A CSS perspective makes
+    // the quad a general quadrilateral rather than a parallelogram, so an
+    // affine map through three corners would place the point wrongly.
+    const squareToQuad = (q) => {
+      const [x0, y0, x1, y1, x2, y2, x3, y3] = q;
+      const sx = x0 - x1 + x2 - x3;
+      const sy = y0 - y1 + y2 - y3;
+      let g = 0;
+      let h = 0;
+      if (Math.abs(sx) > 1e-9 || Math.abs(sy) > 1e-9) {
+        const dx1 = x1 - x2;
+        const dx2 = x3 - x2;
+        const dy1 = y1 - y2;
+        const dy2 = y3 - y2;
+        const den = dx1 * dy2 - dx2 * dy1;
+        if (Math.abs(den) < 1e-9) return null;
+        g = (sx * dy2 - dx2 * sy) / den;
+        h = (dx1 * sy - sx * dy1) / den;
+      }
+      return [
+        x1 - x0 + g * x1, x3 - x0 + h * x3, x0,
+        y1 - y0 + g * y1, y3 - y0 + h * y3, y0,
+        g, h, 1,
+      ];
+    };
+    const invert = (m) => {
+      const [a, b, c, d, e, f, g, h, i] = m;
+      const A = e * i - f * h;
+      const B = f * g - d * i;
+      const C = d * h - e * g;
+      const det = a * A + b * B + c * C;
+      if (Math.abs(det) < 1e-12) return null;
+      return [
+        A / det, (c * h - b * i) / det, (b * f - c * e) / det,
+        B / det, (a * i - c * g) / det, (c * d - a * f) / det,
+        C / det, (b * g - a * h) / det, (a * e - b * d) / det,
+      ];
+    };
+    const apply = (m, x, y) => {
+      const w = m[6] * x + m[7] * y + m[8];
+      if (!(Math.abs(w) > 1e-12)) return null;
+      return {
+        x: (m[0] * x + m[1] * y + m[2]) / w,
+        y: (m[3] * x + m[4] * y + m[5]) / w,
+      };
+    };
     let ownerPoint;
-    if (isQuad(quad) && this.offsetWidth > 0 && this.offsetHeight > 0) {
-      // getBoundingClientRect is axis-aligned and cannot express rotation or
-      // skew, so map through the transformed border-box quad instead. Its
-      // corners are top-left, top-right, bottom-right, bottom-left of the
-      // untransformed box.
-      const fu = u / this.offsetWidth;
-      const fv = v / this.offsetHeight;
-      const quadX = quad[0] + fu * (quad[2] - quad[0]) + fv * (quad[6] - quad[0]);
-      const quadY = quad[1] + fu * (quad[3] - quad[1]) + fv * (quad[7] - quad[1]);
+    const quadMap =
+      isQuad(quad) && this.offsetWidth > 0 && this.offsetHeight > 0
+        ? squareToQuad(quad)
+        : null;
+    const quadPoint = quadMap
+      ? apply(quadMap, u / this.offsetWidth, v / this.offsetHeight)
+      : null;
+    if (quadPoint) {
+      // getBoundingClientRect is axis-aligned and cannot express rotation,
+      // skew or perspective, so map through the transformed border-box quad.
+      const quadX = quadPoint.x;
+      const quadY = quadPoint.y;
       // The quad may be reported in an ancestor viewport, including that
       // ancestor's own transforms (an iframe inside a rotated parent frame).
       // The untransformed root element's quad in the same space gives the
-      // affine map from this document's viewport into it; invert that.
+      // map from this document's viewport into it; invert that.
       let toView = null;
       const root = this.ownerDocument.documentElement;
       if (isQuad(rootQuad) && root) {
@@ -1814,22 +1864,21 @@ async function assertFrameOwnersReceivePointerEvents(
         const untransformed = ["transform", "rotate", "scale", "translate"]
           .every((name) => !rootStyle[name] || rootStyle[name] === "none");
         const rootRect = root.getBoundingClientRect();
-        if (untransformed && rootRect.width > 0 && rootRect.height > 0) {
-          const ax = (rootQuad[2] - rootQuad[0]) / rootRect.width;
-          const ay = (rootQuad[3] - rootQuad[1]) / rootRect.width;
-          const bx = (rootQuad[6] - rootQuad[0]) / rootRect.height;
-          const by = (rootQuad[7] - rootQuad[1]) / rootRect.height;
-          const det = ax * by - bx * ay;
-          if (Math.abs(det) > 1e-9) {
-            toView = (x, y) => {
-              const dx = x - rootQuad[0];
-              const dy = y - rootQuad[1];
-              return {
-                x: rootRect.left + (dx * by - bx * dy) / det,
-                y: rootRect.top + (ax * dy - dx * ay) / det,
-              };
-            };
-          }
+        const rootMap =
+          untransformed && rootRect.width > 0 && rootRect.height > 0
+            ? squareToQuad(rootQuad)
+            : null;
+        const fromRoot = rootMap ? invert(rootMap) : null;
+        if (fromRoot) {
+          toView = (x, y) => {
+            const unit = apply(fromRoot, x, y);
+            return unit
+              ? {
+                  x: rootRect.left + unit.x * rootRect.width,
+                  y: rootRect.top + unit.y * rootRect.height,
+                }
+              : { x: NaN, y: NaN };
+          };
         }
       }
       if (!toView) {
