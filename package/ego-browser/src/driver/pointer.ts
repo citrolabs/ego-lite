@@ -80,6 +80,289 @@ const CLICK_PROBE_TTL_MS = 5_000;
 type ClickTarget = Point & { probeId: string | null };
 
 /**
+ * Page-side helpers for the synthetic input fallbacks. They send the pointer
+ * events a real mouse produces together with the compatibility mouse events,
+ * in Chrome's order, because pointer-driven widgets (Radix, Floating UI, and
+ * other popovers) open on `pointerdown` and never see a bare `mousedown`.
+ * As in Chrome, a canceled `pointerdown` suppresses the compatibility
+ * mousedown, mousemove, and mouseup until the button is released; `click`
+ * still fires.
+ *
+ * The sequence tracks the element under the pointer. When it changes, the old
+ * element gets `pointerout` and the new one `pointerover`, and the
+ * non-bubbling leave and enter events go to every element the pointer left
+ * (innermost first) or entered (outermost first), pointer events before the
+ * mouse ones, as Chrome does. So an enter listener on a trigger still fires
+ * when the point hits a child icon, and hover state opened on enter is
+ * cleared when a drag moves away. The hovered element and its chain persist on
+ * the page's window between fallback calls, so a later fallback that moves to
+ * another element sends leave events to the one an earlier call entered (a
+ * tooltip opened by `hover()` closes when the next fallback moves away). A
+ * trusted `pointerover` means the real pointer took over the hover: the
+ * elements the synthetic hover entered that the real pointer's own boundary
+ * events will not leave (outside both its previous and new targets) get their
+ * out and leave events, and the persisted state is dropped.
+ *
+ * Synthetic events cannot establish native pointer capture: Chrome ignores
+ * `setPointerCapture()` for a pointer whose buttons it never saw pressed. The
+ * sequence therefore runs inside `withSyntheticCapture()`, which records
+ * capture requests for the synthetic pointer made while its buttons are
+ * pressed (as in Chrome, a request with no button down does nothing), routes later pointer and
+ * compatibility mouse events to the capturing element, and fires
+ * `gotpointercapture` / `lostpointercapture` around them, so a slider that
+ * captures on `pointerdown` keeps receiving moves and the release after the
+ * path leaves it. While captured, the capturing element counts as the one
+ * under the pointer; when capture ends, the hover moves to the hit element.
+ * A capturing element that leaves the document loses capture, and events go
+ * back to hit-testing. As in Chrome, `click` goes to the capturing element when
+ * the pointer was captured at release, and otherwise to the nearest common
+ * ancestor of the press and release targets (`syntheticClickTarget()`).
+ */
+const SYNTHETIC_POINTER_JS = `
+  const SYNTHETIC_POINTER_ID = 1;
+  let syntheticMouseSuppressed = false;
+  let syntheticCaptureTarget = null;
+  let syntheticPendingCapture = null;
+  // Buttons of the synthetic pointer event being dispatched.
+  let syntheticButtons = 0;
+  // Hover state shared by every fallback call in this document.
+  const syntheticHover = (() => {
+    const key = "__egoBrowserSyntheticHover";
+    if (window[key]) return window[key];
+    const state = { element: null, chain: [] };
+    Object.defineProperty(window, key, { value: state, configurable: true });
+    if (typeof document.addEventListener === "function") {
+      document.addEventListener("pointerover", (event) => {
+        if (!event.isTrusted) return;
+        // Runs after the page's scripts finished defining the helpers below.
+        handOverSyntheticHover(state, event);
+      }, true);
+    }
+    return state;
+  })();
+  // The real pointer moved from event.relatedTarget to event.target. Its own
+  // boundary events leave only what it had entered, so the elements a
+  // synthetic hover entered beyond those, and that the new target does not
+  // contain, get their out and leave events here before the state is dropped.
+  const handOverSyntheticHover = (state, event) => {
+    const hovered = state.element;
+    const fromChain = state.chain;
+    state.element = null;
+    state.chain = [];
+    if (!hovered) return;
+    const to = event.target || null;
+    const from = event.relatedTarget || null;
+    const kept = new Set([
+      ...(to ? enteredChain(to) : []),
+      ...(from ? enteredChain(from) : []),
+    ]);
+    const connected = (node) => node.isConnected !== false;
+    const left = fromChain.filter((node) => !kept.has(node) && connected(node)).reverse();
+    const init = {
+      clientX: event.clientX,
+      clientY: event.clientY,
+      button: 0,
+      buttons: event.buttons || 0,
+    };
+    const out = left[0] === hovered ? hovered : null;
+    const boundary = (fire, prefix) => {
+      if (out) fire(out, prefix + "out");
+      for (const node of left) fire(node, prefix + "leave");
+    };
+    boundary((node, type) => firePointer(node, type, init, to), "pointer");
+    boundary((node, type) => fireMouse(node, type, init, 0, to), "mouse");
+  };
+  const NON_BUBBLING = ["pointerenter", "pointerleave", "mouseenter", "mouseleave"];
+  const syntheticEvent = (Ctor, type, init, extra) => {
+    // Enter and leave events are neither bubbling nor composed: each entered
+    // ancestor, shadow hosts included, gets its own dispatch instead.
+    const bubbles = !NON_BUBBLING.includes(type);
+    return new Ctor(type, {
+      ...init,
+      bubbles,
+      cancelable: bubbles,
+      composed: bubbles,
+      view: window,
+      ...extra,
+    });
+  };
+  const firePointer = (target, type, init, relatedTarget = null) => {
+    const Pointer = typeof PointerEvent === "function" ? PointerEvent : MouseEvent;
+    syntheticButtons = init.buttons || 0;
+    return target.dispatchEvent(syntheticEvent(Pointer, type, init, {
+      relatedTarget,
+      // Pointer events without a button change report button -1.
+      button: type === "pointerdown" || type === "pointerup" ? init.button : -1,
+      detail: 0,
+      pointerId: SYNTHETIC_POINTER_ID,
+      pointerType: "mouse",
+      isPrimary: true,
+      width: 1,
+      height: 1,
+      pressure: init.buttons ? 0.5 : 0,
+    }));
+  };
+  const fireMouse = (target, type, init, detail = 0, relatedTarget = null) =>
+    target.dispatchEvent(syntheticEvent(MouseEvent, type, init, { detail, relatedTarget }));
+  // Elements entered when the pointer arrives at target, outermost first,
+  // crossing shadow roots to their hosts.
+  const enteredChain = (target) => {
+    const chain = [];
+    for (let node = target; node; ) {
+      chain.push(node);
+      const parent = node.parentNode;
+      node = parent && parent.nodeType === 11 && parent.host ? parent.host : parent;
+      if (node && node.nodeType === 9) break;
+    }
+    return chain.reverse();
+  };
+  // Moves the hover to target: out and leave events on what the pointer
+  // left, then over and enter events on what it entered. The chain entered
+  // last is kept, so an element that has left the document gets no out or
+  // leave events while its still-connected ancestors are not re-entered.
+  const syntheticPointerEnter = (target, init) => {
+    if (target === syntheticHover.element) return;
+    const connected = (node) => node.isConnected !== false;
+    const hovered = syntheticHover.element;
+    const previous = hovered && connected(hovered) ? hovered : null;
+    const fromChain = syntheticHover.chain;
+    const toChain = enteredChain(target);
+    syntheticHover.element = target;
+    syntheticHover.chain = toChain;
+    let shared = 0;
+    while (
+      shared < fromChain.length &&
+      shared < toChain.length &&
+      fromChain[shared] === toChain[shared]
+    ) {
+      shared += 1;
+    }
+    const left = fromChain.slice(shared).reverse().filter(connected);
+    const entered = toChain.slice(shared);
+    const boundary = (fire, prefix) => {
+      if (previous) fire(previous, prefix + "out", target);
+      for (const node of left) fire(node, prefix + "leave", target);
+      fire(target, prefix + "over", previous);
+      for (const node of entered) fire(node, prefix + "enter", previous);
+    };
+    boundary((node, type, related) => firePointer(node, type, init, related), "pointer");
+    boundary((node, type, related) => fireMouse(node, type, init, 0, related), "mouse");
+  };
+  // Applies a capture change requested by the previous handler before the
+  // next pointer event, as Chrome processes pending capture.
+  // An element removed from the document loses capture, and Chrome then fires
+  // lostpointercapture at the document and resumes hit-testing, so later
+  // events reach document listeners instead of a detached node.
+  const syntheticCaptureTargetFor = (target, init) => {
+    if (syntheticPendingCapture && syntheticPendingCapture.isConnected === false) {
+      syntheticPendingCapture = null;
+    }
+    if (syntheticCaptureTarget && syntheticCaptureTarget.isConnected === false) {
+      syntheticCaptureTarget = null;
+      if (typeof document.dispatchEvent === "function") {
+        firePointer(document, "lostpointercapture", init);
+      }
+    }
+    if (syntheticPendingCapture !== syntheticCaptureTarget) {
+      const previous = syntheticCaptureTarget;
+      syntheticCaptureTarget = syntheticPendingCapture;
+      if (previous) firePointer(previous, "lostpointercapture", init);
+      if (syntheticCaptureTarget) firePointer(syntheticCaptureTarget, "gotpointercapture", init);
+    }
+    return syntheticCaptureTarget || target;
+  };
+  const syntheticPointerMove = (target, init) => {
+    const routed = syntheticCaptureTargetFor(target, init);
+    syntheticPointerEnter(routed, init);
+    firePointer(routed, "pointermove", init);
+    if (!syntheticMouseSuppressed) fireMouse(routed, "mousemove", init);
+  };
+  const syntheticPointerDown = (target, init, detail) => {
+    const routed = syntheticCaptureTargetFor(target, init);
+    syntheticPointerEnter(routed, init);
+    if (!firePointer(routed, "pointerdown", init)) syntheticMouseSuppressed = true;
+    if (!syntheticMouseSuppressed) fireMouse(routed, "mousedown", init, detail);
+    return routed;
+  };
+  // Returns where the release went and whether the pointer was captured then.
+  const syntheticPointerUp = (target, init, detail) => {
+    const routed = syntheticCaptureTargetFor(target, init);
+    const captured = syntheticCaptureTarget !== null;
+    syntheticPointerEnter(routed, init);
+    firePointer(routed, "pointerup", init);
+    if (!syntheticMouseSuppressed) fireMouse(routed, "mouseup", init, detail);
+    syntheticMouseSuppressed = false;
+    // Releasing the button implicitly releases capture, and the hover then
+    // moves from the capturing element to the one under the pointer.
+    syntheticPendingCapture = null;
+    syntheticPointerEnter(syntheticCaptureTargetFor(target, init), init);
+    return { target: routed, captured };
+  };
+  // The element under the point now. A pointerdown handler can replace the
+  // pressed element (an icon swapped inside its button), so the release
+  // hit-tests again instead of reusing a node that may have left the page.
+  const syntheticHitTarget = (init, fallback) => {
+    const hit = typeof document.elementFromPoint === "function"
+      ? document.elementFromPoint(init.clientX, init.clientY)
+      : null;
+    return hit || fallback;
+  };
+  // Chrome's click target: the capturing element when the pointer was
+  // captured at release, otherwise the nearest common ancestor of the press
+  // and release targets. A press target that left the document shares no
+  // ancestor with the release, so the click goes to the release target.
+  const syntheticClickTarget = (down, up) => {
+    if (up.captured) return up.target;
+    const pressedChain = enteredChain(down);
+    const releasedChain = enteredChain(up.target).reverse();
+    return releasedChain.find((node) => pressedChain.includes(node)) || up.target;
+  };
+  // Runs a synthetic sequence with the pointer-capture methods answering for
+  // the synthetic pointer id, then restores the page's own methods.
+  const withSyntheticCapture = (run) => {
+    const proto = typeof Element === "function" ? Element.prototype : null;
+    if (!proto) return run();
+    const names = ["setPointerCapture", "releasePointerCapture", "hasPointerCapture"];
+    const saved = names.map((name) => [name, Object.getOwnPropertyDescriptor(proto, name)]);
+    const original = Object.fromEntries(names.map((name) => [name, proto[name]]));
+    const forward = (name, element, args) => {
+      if (typeof original[name] !== "function") return undefined;
+      return original[name].apply(element, args);
+    };
+    const patch = {
+      setPointerCapture(pointerId) {
+        if (pointerId !== SYNTHETIC_POINTER_ID) return forward("setPointerCapture", this, arguments);
+        if (syntheticButtons !== 0 && this.isConnected !== false) syntheticPendingCapture = this;
+      },
+      releasePointerCapture(pointerId) {
+        if (pointerId !== SYNTHETIC_POINTER_ID) return forward("releasePointerCapture", this, arguments);
+        if (syntheticPendingCapture === this) syntheticPendingCapture = null;
+      },
+      hasPointerCapture(pointerId) {
+        if (pointerId !== SYNTHETIC_POINTER_ID) return forward("hasPointerCapture", this, arguments);
+        return syntheticPendingCapture === this;
+      },
+    };
+    for (const name of names) {
+      Object.defineProperty(proto, name, {
+        configurable: true,
+        enumerable: true,
+        writable: true,
+        value: patch[name],
+      });
+    }
+    try {
+      return run();
+    } finally {
+      for (const [name, descriptor] of saved) {
+        if (descriptor) Object.defineProperty(proto, name, descriptor);
+        else delete proto[name];
+      }
+    }
+  };
+`;
+
+/**
  * Mouse target accepted by mouse helpers.
  *
  * Forms:
@@ -195,7 +478,7 @@ export async function dragMouse(
   const first = resolved[0];
   const last = resolved.at(-1);
   maybeHighlight(first, options.label);
-  const probeId = await installMouseUpProbe(last);
+  const probeId = await installMouseUpProbe(last, button);
   let dispatchError: unknown = null;
   try {
     await dispatchMouse(first, "mousePressed", {
@@ -356,24 +639,67 @@ function newProbeId(kind: string) {
 
 /**
  * Page-side click probe: remembers the element under `pointExpression` and
- * whether a trusted click reached it. The listener removes itself on the
- * first matching click, and the whole probe removes itself after
- * CLICK_PROBE_TTL_MS so an acknowledged click never has to read it back.
+ * whether a trusted click reached it. It also records how much of the native
+ * press arrived before the click (a trusted `pointerdown` on the target, then
+ * the compatibility `mousedown` and the release), so the fallback resumes
+ * only the missing events instead of pressing a second time. It also records
+ * the element a native press handler captured the pointer to, so the resumed
+ * release goes to that element and the native capture is released. The listeners
+ * remove themselves on the first matching click, and the whole probe removes
+ * itself after CLICK_PROBE_TTL_MS so an acknowledged click never has to read
+ * it back.
  */
 function clickProbeInstallJs(id: string, pointExpression: string) {
   return `
     const probePoint = ${pointExpression};
     window.__egoBrowserInputProbes ||= {};
-    const probe = { seen: false, target: document.elementFromPoint(probePoint.x, probePoint.y) };
+    const probe = {
+      seen: false,
+      target: document.elementFromPoint(probePoint.x, probePoint.y),
+      pressTarget: null,
+      pointerId: null,
+      captureTarget: null,
+      mouseDown: false,
+      released: false,
+    };
+    const onTarget = (event) =>
+      probe.target && (event.target === probe.target || probe.target.contains(event.target));
+    const pressListeners = {
+      pointerdown: (event) => {
+        if (event.isTrusted && !probe.pressTarget && onTarget(event)) {
+          probe.pressTarget = event.target;
+          probe.pointerId = event.pointerId;
+        }
+      },
+      // Native capture the press handlers took, so a resumed release can go
+      // to the capturing element.
+      gotpointercapture: (event) => {
+        if (event.isTrusted && probe.pressTarget && event.pointerId === probe.pointerId) {
+          probe.captureTarget = event.target;
+        }
+      },
+      lostpointercapture: (event) => {
+        if (event.isTrusted && event.target === probe.captureTarget) probe.captureTarget = null;
+      },
+      mousedown: (event) => {
+        if (event.isTrusted && probe.pressTarget) probe.mouseDown = true;
+      },
+      pointerup: (event) => {
+        if (event.isTrusted && probe.pressTarget) probe.released = true;
+      },
+      mouseup: (event) => {
+        if (event.isTrusted && probe.pressTarget) probe.released = true;
+      },
+    };
     probe.dispose = () => {
       document.removeEventListener("click", probe.handler, true);
+      for (const [type, listener] of Object.entries(pressListeners)) {
+        document.removeEventListener(type, listener, true);
+      }
       clearTimeout(probe.timer);
     };
     probe.handler = (event) => {
-      if (
-        event.isTrusted && probe.target &&
-        (event.target === probe.target || probe.target.contains(event.target))
-      ) {
+      if (event.isTrusted && onTarget(event)) {
         probe.seen = true;
         probe.dispose();
       }
@@ -383,6 +709,9 @@ function clickProbeInstallJs(id: string, pointExpression: string) {
       delete window.__egoBrowserInputProbes[${JSON.stringify(id)}];
     }, ${JSON.stringify(CLICK_PROBE_TTL_MS)});
     document.addEventListener("click", probe.handler, true);
+    for (const [type, listener] of Object.entries(pressListeners)) {
+      document.addEventListener(type, listener, true);
+    }
     window.__egoBrowserInputProbes[${JSON.stringify(id)}] = probe;
   `;
 }
@@ -428,23 +757,78 @@ async function finishClickProbe(
         if (!probe) return { seen: false, fallback: false };
         probe.dispose();
         delete probes[${JSON.stringify(id)}];
+        // A native release already went out with its click; the click just
+        // landed outside the target. Replaying would press a second time.
+        if (probe.released) return { seen: true, fallback: false };
         if (probe.seen || !probe.target) return { seen: probe.seen, fallback: false };
         const target = probe.target;
+        ${SYNTHETIC_POINTER_JS}
+        const clickCount = ${JSON.stringify(clickCount)};
         const init = {
-          bubbles: true,
-          cancelable: true,
-          view: window,
           clientX: ${JSON.stringify(point.x)},
           clientY: ${JSON.stringify(point.y)},
           button: 0,
+          buttons: 0,
         };
-        target.dispatchEvent(new MouseEvent("mousemove", { ...init, buttons: 0, detail: 0 }));
-        target.dispatchEvent(new MouseEvent("mousedown", { ...init, buttons: 1, detail: ${JSON.stringify(clickCount)} }));
-        target.dispatchEvent(new MouseEvent("mouseup", { ...init, buttons: 0, detail: ${JSON.stringify(clickCount)} }));
-        target.dispatchEvent(new MouseEvent("click", { ...init, buttons: 0, detail: ${JSON.stringify(clickCount)} }));
-        if (${JSON.stringify(clickCount)} > 1) {
-          target.dispatchEvent(new MouseEvent("dblclick", { ...init, buttons: 0, detail: 2 }));
+        const pressed = { ...init, buttons: 1 };
+        const nativeDown = probe.pressTarget;
+        // Capture a native pointerdown handler took (or still has pending,
+        // which hasPointerCapture reports before gotpointercapture fires).
+        const nativeCaptureTarget = () => {
+          if (!nativeDown || probe.pointerId === null || probe.pointerId === undefined) return null;
+          const held = (element) => {
+            try {
+              return element.isConnected !== false &&
+                typeof element.hasPointerCapture === "function" &&
+                element.hasPointerCapture(probe.pointerId);
+            } catch {
+              return false;
+            }
+          };
+          if (probe.captureTarget && held(probe.captureTarget)) return probe.captureTarget;
+          if (typeof document.querySelectorAll !== "function") return null;
+          for (const element of document.querySelectorAll("*")) {
+            if (held(element)) return element;
+          }
+          return null;
+        };
+        // A capture the native press took carries over to the synthetic
+        // release: it goes to the capturing element, which then gets
+        // lostpointercapture. The native capture is released first, while
+        // the page's own capture methods are still in place, so it does not
+        // outlive the click.
+        const nativeCapture = nativeCaptureTarget();
+        if (nativeCapture) {
+          try {
+            nativeCapture.releasePointerCapture(probe.pointerId);
+          } catch {}
         }
+        const clickTarget = withSyntheticCapture(() => {
+          if (nativeDown) {
+            // The native press arrived (a slow handler held up its click), so
+            // only the release and click are missing. The real pointer is over
+            // the pressed element, and a canceled native pointerdown left
+            // mousedown out, so the compatibility mouseup stays out too.
+            syntheticHover.element = nativeDown;
+            syntheticHover.chain = enteredChain(nativeDown);
+            syntheticMouseSuppressed = !probe.mouseDown;
+            if (nativeCapture) {
+              // gotpointercapture already fired natively when it was observed;
+              // otherwise the synthetic release fires it before pointerup.
+              syntheticCaptureTarget = probe.captureTarget === nativeCapture ? nativeCapture : null;
+              syntheticPendingCapture = nativeCapture;
+            }
+            const up = syntheticPointerUp(syntheticHitTarget(init, target), init, clickCount);
+            return syntheticClickTarget(nativeDown, up);
+          }
+          syntheticPointerEnter(target, init);
+          syntheticPointerMove(target, init);
+          const down = syntheticPointerDown(target, pressed, clickCount);
+          const up = syntheticPointerUp(syntheticHitTarget(init, target), init, clickCount);
+          return syntheticClickTarget(down, up);
+        });
+        fireMouse(clickTarget, "click", init, clickCount);
+        if (clickCount > 1) fireMouse(clickTarget, "dblclick", init, 2);
         return { seen: false, fallback: true };
       })()`,
         returnByValue: true,
@@ -459,7 +843,16 @@ async function finishClickProbe(
   }
 }
 
-async function installMouseUpProbe(point: Point) {
+/**
+ * Page-side drag probe: records whether the native release arrived. A trusted
+ * `mouseup` on the drop target counts, and so does a trusted `pointerup` of
+ * the dragged button on any element: a handler that cancels `pointerdown`
+ * makes Chrome suppress the compatibility `mouseup`, and pointer capture
+ * retargets the `pointerup` to the capturing element rather than the one
+ * under the drop point. Either way the native drag completed, and replaying
+ * it would run the drag handlers a second time.
+ */
+async function installMouseUpProbe(point: Point, button: MouseButton) {
   if (!canProbeInputFallback()) return null;
   const id = `drag_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   try {
@@ -468,14 +861,19 @@ async function installMouseUpProbe(point: Point) {
       {
         expression: `(() => {
         const target = document.elementFromPoint(${JSON.stringify(point.x)}, ${JSON.stringify(point.y)});
+        const mouseButton = ${JSON.stringify(mouseButtonIndex(button))};
         window.__egoBrowserInputProbes ||= {};
         const probe = { seen: false, target };
         probe.handler = (event) => {
-          if (event.isTrusted && target && (event.target === target || target.contains(event.target))) {
+          if (!event.isTrusted) return;
+          if (event.type === "pointerup"
+            ? event.button === mouseButton
+            : target && (event.target === target || target.contains(event.target))) {
             probe.seen = true;
           }
         };
         document.addEventListener("mouseup", probe.handler, true);
+        document.addEventListener("pointerup", probe.handler, true);
         window.__egoBrowserInputProbes[${JSON.stringify(id)}] = probe;
         return Boolean(target);
       })()`,
@@ -542,17 +940,15 @@ async function finishHoverProbe(
         delete probes[${JSON.stringify(id)}];
         if (probe.seen || !probe.target) return { seen: probe.seen, fallback: false };
         const target = probe.target;
+        ${SYNTHETIC_POINTER_JS}
         const init = {
-          bubbles: true,
-          cancelable: true,
-          view: window,
           clientX: ${JSON.stringify(point.x)},
           clientY: ${JSON.stringify(point.y)},
           button: 0,
           buttons: 0,
         };
-        target.dispatchEvent(new MouseEvent("mousemove", init));
-        target.dispatchEvent(new MouseEvent("mouseover", init));
+        syntheticPointerEnter(target, init);
+        syntheticPointerMove(target, init);
         return { seen: false, fallback: true };
       })()`,
         returnByValue: true,
@@ -586,26 +982,30 @@ async function finishDragProbe(
         const probe = probes[${JSON.stringify(id)}];
         if (!probe) return { seen: false, fallback: false };
         document.removeEventListener("mouseup", probe.handler, true);
+        document.removeEventListener("pointerup", probe.handler, true);
         delete probes[${JSON.stringify(id)}];
         if (probe.seen) return { seen: true, fallback: false };
-        const mouseButton = ${JSON.stringify(button === "left" ? 0 : button === "middle" ? 1 : 2)};
-        const eventFor = (type, point, buttons) => {
-          const target = document.elementFromPoint(point.x, point.y) || document.body;
-          target.dispatchEvent(new MouseEvent(type, {
-            bubbles: true,
-            cancelable: true,
-            view: window,
-            clientX: point.x,
-            clientY: point.y,
-            button: mouseButton,
-            buttons,
-            detail: type === "mousemove" ? 0 : 1,
-          }));
-        };
+        ${SYNTHETIC_POINTER_JS}
+        const mouseButton = ${JSON.stringify(mouseButtonIndex(button))};
+        const pressedButtons = ${JSON.stringify(pressedButtons(button))};
+        const targetAt = (point) => document.elementFromPoint(point.x, point.y) || document.body;
+        const initAt = (point, buttons) => ({
+          clientX: point.x,
+          clientY: point.y,
+          button: mouseButton,
+          buttons,
+        });
         const points = ${JSON.stringify(points.map(({ x, y }) => ({ x, y })))};
-        eventFor("mousedown", points[0], 1);
-        for (const point of points.slice(1)) eventFor("mousemove", point, 1);
-        eventFor("mouseup", points.at(-1), 0);
+        const first = points[0];
+        const last = points.at(-1);
+        withSyntheticCapture(() => {
+          syntheticPointerEnter(targetAt(first), initAt(first, 0));
+          syntheticPointerDown(targetAt(first), initAt(first, pressedButtons), 1);
+          for (const point of points.slice(1)) {
+            syntheticPointerMove(targetAt(point), initAt(point, pressedButtons));
+          }
+          syntheticPointerUp(targetAt(last), initAt(last, 0), 1);
+        });
         return { seen: false, fallback: true };
       })()`,
         returnByValue: true,
@@ -922,4 +1322,9 @@ function pressedButtons(button: MouseButton) {
     return 4;
   }
   throw new Error(`unsupported mouse button: ${button}`);
+}
+
+/** The DOM `MouseEvent.button` index for a CDP button name. */
+function mouseButtonIndex(button: MouseButton) {
+  return button === "left" ? 0 : button === "middle" ? 1 : 2;
 }

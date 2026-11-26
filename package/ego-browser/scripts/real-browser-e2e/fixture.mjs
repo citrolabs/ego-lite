@@ -430,6 +430,72 @@ export async function startFixtureServer(taskName) {
         </html>`);
       return;
     }
+    if (url.pathname === "/pointer-fallback-popover") {
+      // Mirrors the CITRO-3535 repro: a Radix-style menu trigger opens on
+      // pointerdown and cancels it, so a click made of mouse events alone
+      // never opens the menu. `__stallNextTrustedMove` blocks the main thread
+      // on the next trusted pointermove for longer than the SDK's input
+      // dispatch timeout, which sends click() down its synthetic fallback.
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(`<!doctype html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <title>pointer fallback popover</title>
+            <style>
+              body { margin: 0; font: 16px sans-serif; }
+              button { position: absolute; width: 160px; height: 48px; }
+              #trigger { left: 40px; top: 40px; }
+              #trigger svg { width: 100%; height: 100%; }
+              #elsewhere { left: 40px; top: 200px; }
+              #menu { position: absolute; left: 40px; top: 100px; }
+              #menu[data-state="closed"] { display: none; }
+            </style>
+          </head>
+          <body>
+            <button id="trigger" aria-haspopup="menu" aria-expanded="false" data-state="closed">
+              <svg id="trigger-icon" aria-hidden="true" viewBox="0 0 16 16"><rect width="16" height="16"></rect></svg>
+            </button>
+            <div id="menu" role="menu" data-state="closed">
+              <div role="menuitem">Item</div>
+            </div>
+            <button id="elsewhere">Elsewhere</button>
+            <script>
+              window.__stallNextTrustedMove = false;
+              window.__pointerFallback = { events: [], opened: 0 };
+              const trigger = document.querySelector("#trigger");
+              const menu = document.querySelector("#menu");
+              document.addEventListener("pointermove", (event) => {
+                if (!event.isTrusted || !window.__stallNextTrustedMove) return;
+                window.__stallNextTrustedMove = false;
+                const until = performance.now() + 1500;
+                while (performance.now() < until) {}
+              }, true);
+              for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "click"]) {
+                trigger.addEventListener(type, (event) => {
+                  window.__pointerFallback.events.push({
+                    type,
+                    trusted: event.isTrusted,
+                    pointerType: event.pointerType || null,
+                  });
+                });
+              }
+              // Radix DropdownMenu.Trigger: toggle on a primary pointerdown
+              // and cancel it so the trigger keeps focus behavior its own.
+              trigger.addEventListener("pointerdown", (event) => {
+                if (event.button !== 0 || event.ctrlKey) return;
+                const open = menu.dataset.state !== "open";
+                menu.dataset.state = open ? "open" : "closed";
+                trigger.dataset.state = menu.dataset.state;
+                trigger.setAttribute("aria-expanded", String(open));
+                if (open) window.__pointerFallback.opened += 1;
+                if (open) event.preventDefault();
+              });
+            </script>
+          </body>
+        </html>`);
+      return;
+    }
     if (url.pathname === "/wheel-trap") {
       // Mirrors the CITRO-4275 repro: a block that swallows wheel events covers
       // the bottom of the viewport, and the input sits below it. With

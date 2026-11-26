@@ -1,9 +1,15 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import vm from "node:vm";
 
 import { setOverrides } from "../../dist/src/state.js";
 import { CLICK_POINT_HELPERS } from "../../dist/src/driver/action-target.js";
-import { click, scroll } from "../../dist/src/driver/pointer.js";
+import {
+  click,
+  dragMouse,
+  hover,
+  scroll,
+} from "../../dist/src/driver/pointer.js";
 
 test("click resolves selector offsets without the public elementEval helper", async () => {
   const calls = [];
@@ -573,7 +579,1337 @@ test("click reads the probe and falls back to synthetic events only after a disp
   const finish = calls[2].params.expression;
   assert.match(finish, /probe\.dispose\(\)/);
   assert.match(finish, /if \(probe\.seen \|\| !probe\.target\) return/);
-  assert.match(finish, /dispatchEvent\(new MouseEvent\("click"/);
+  assert.match(finish, /fireMouse\(clickTarget, "click"/);
+});
+
+/**
+ * Runs a fallback expression against a minimal page whose elements record
+ * every event they receive. By default the page holds one element, `target`;
+ * `build(createElement)` may instead return `{ target, elementAt }` for a
+ * nested tree and a point-to-element map. The probe store answers any id with
+ * an unseen probe for the target, merged with `probeState` (the native press
+ * progress a real probe records; a function receives the elements by name).
+ * `cancel` lists event types whose listener
+ * calls preventDefault, as a pointer-driven widget does on pointerdown;
+ * `listeners` adds extra handlers by element name and event type, called
+ * with the event and the element.
+ *
+ * As in Chrome, the native setPointerCapture rejects the synthetic pointer
+ * because its buttons were never pressed natively.
+ */
+function runFallbackInFakePage(expression, options) {
+  return createFakePage(options).run(
+    expression,
+    undefined,
+    options?.probeState,
+  );
+}
+
+/**
+ * The page behind runFallbackInFakePage, kept so several fallback calls can
+ * run in one document. `run(expression, probeTarget)` answers the probe with
+ * `probeTarget` (the tree's target by default); `elements` maps names to
+ * elements.
+ */
+function createFakePage({ cancel = [], build, listeners = {} } = {}) {
+  const events = [];
+  class FakeElement extends EventTarget {
+    constructor(name, parentNode = null) {
+      super();
+      this.name = name;
+      this.parentNode = parentNode;
+      this.nodeType = 1;
+      this.isConnected = true;
+    }
+    contains(node) {
+      for (let current = node; current; current = current.parentNode) {
+        if (current === this) return true;
+      }
+      return false;
+    }
+    setPointerCapture() {
+      throw new Error("NotFoundError: No active pointer with the given id");
+    }
+    releasePointerCapture() {}
+    hasPointerCapture() {
+      return false;
+    }
+  }
+  const nativeCapture = Object.getOwnPropertyDescriptor(
+    FakeElement.prototype,
+    "setPointerCapture",
+  );
+  class FakeMouseEvent extends Event {
+    constructor(type, init = {}) {
+      super(type, init);
+      Object.assign(this, {
+        clientX: init.clientX,
+        clientY: init.clientY,
+        button: init.button ?? 0,
+        buttons: init.buttons ?? 0,
+        detail: init.detail ?? 0,
+        relatedTarget: init.relatedTarget ?? null,
+      });
+    }
+  }
+  class FakePointerEvent extends FakeMouseEvent {
+    constructor(type, init = {}) {
+      super(type, init);
+      Object.assign(this, {
+        pointerId: init.pointerId,
+        pointerType: init.pointerType,
+        isPrimary: init.isPrimary,
+      });
+    }
+  }
+  const elements = [];
+  const createElement = (name, parent) => {
+    const element = new FakeElement(name, parent);
+    elements.push(element);
+    return element;
+  };
+  const tree = build
+    ? build(createElement)
+    : { target: createElement("target") };
+  const target = tree.target;
+  const elementAt = tree.elementAt ?? (() => target);
+  const record = (event) => {
+    events.push({
+      on: event.currentTarget.name,
+      type: event.type,
+      kind: event instanceof FakePointerEvent ? "pointer" : "mouse",
+      bubbles: event.bubbles,
+      composed: event.composed,
+      related: event.relatedTarget?.name ?? null,
+      button: event.button,
+      buttons: event.buttons,
+      detail: event.detail,
+      pointerType: event.pointerType,
+      isPrimary: event.isPrimary,
+      x: event.clientX,
+      y: event.clientY,
+    });
+    if (cancel.includes(event.type)) event.preventDefault();
+  };
+  for (const type of [
+    "pointerover",
+    "pointerenter",
+    "pointerout",
+    "pointerleave",
+    "pointermove",
+    "pointerdown",
+    "pointerup",
+    "mouseover",
+    "mouseenter",
+    "mouseout",
+    "mouseleave",
+    "mousemove",
+    "mousedown",
+    "mouseup",
+    "click",
+    "dblclick",
+    "gotpointercapture",
+    "lostpointercapture",
+  ]) {
+    for (const element of elements) element.addEventListener(type, record);
+  }
+  for (const element of elements) {
+    for (const [type, handler] of Object.entries(
+      listeners[element.name] ?? {},
+    )) {
+      element.addEventListener(type, (event) => handler(event, element));
+    }
+  }
+  const document = Object.assign(new EventTarget(), {
+    name: "document",
+    nodeType: 9,
+    elementFromPoint: (x, y) => elementAt(x, y),
+    querySelectorAll: () => elements.filter((element) => element.isConnected),
+    body: target,
+    removeEventListener() {},
+  });
+  document.addEventListener("lostpointercapture", record);
+  // Document listeners the fallback installs, so a test can deliver a trusted
+  // event to them (a real EventTarget cannot dispatch one).
+  const documentListeners = [];
+  const addDocumentListener = document.addEventListener.bind(document);
+  document.addEventListener = (type, listener, options) => {
+    documentListeners.push({ type, listener });
+    addDocumentListener(type, listener, options);
+  };
+  // `init` names `target` and `relatedTarget` by element name.
+  const deliverTrusted = (type, init = {}) => {
+    const event = {
+      ...init,
+      type,
+      isTrusted: true,
+      target: byName[init.target] ?? null,
+      relatedTarget: byName[init.relatedTarget] ?? null,
+    };
+    for (const entry of documentListeners) {
+      if (entry.type === type) entry.listener(event);
+    }
+  };
+  let probe = null;
+  const window = {
+    __egoBrowserInputProbes: new Proxy(
+      {},
+      { get: () => probe, deleteProperty: () => true },
+    ),
+  };
+  const run = (expression, probeTarget = target, probeState = {}) => {
+    const state =
+      typeof probeState === "function" ? probeState(byName) : probeState;
+    probe = { seen: false, target: probeTarget, dispose() {}, ...state };
+    const value = vm.runInNewContext(expression, {
+      window,
+      document,
+      Element: FakeElement,
+      MouseEvent: FakeMouseEvent,
+      PointerEvent: FakePointerEvent,
+    });
+    // The fallback must hand the page its own capture methods back.
+    assert.deepEqual(
+      Object.getOwnPropertyDescriptor(
+        FakeElement.prototype,
+        "setPointerCapture",
+      ),
+      nativeCapture,
+    );
+    // The value comes from another realm; copy it so deepEqual compares data.
+    return { value: { ...value }, events };
+  };
+  const byName = Object.fromEntries(
+    elements.map((element) => [element.name, element]),
+  );
+  return { run, events, elements: byName, deliverTrusted };
+}
+
+/** Click override whose probe read-back runs in the fake page above. */
+function clickFallbackInFakePage(options) {
+  let page = null;
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Runtime.evaluate") {
+        if (params.expression.includes("probe.dispose();\n        delete")) {
+          page = runFallbackInFakePage(params.expression, options);
+          return { result: { value: page.value } };
+        }
+        return { result: { value: { x: 100, y: 200 } } };
+      }
+      if (method === "Input.dispatchMouseEvent") {
+        throw new Error("CDP request timed out: Input.dispatchMouseEvent");
+      }
+      return {};
+    },
+  });
+  return { restore, page: () => page };
+}
+
+test("click fallback sends the pointer events a real mouse click produces", async () => {
+  const { restore, page } = clickFallbackInFakePage();
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  const { value, events } = page();
+  assert.deepEqual(value, { seen: false, fallback: true });
+  assert.deepEqual(
+    events.map((event) => event.type),
+    [
+      "pointerover",
+      "pointerenter",
+      "mouseover",
+      "mouseenter",
+      "pointermove",
+      "mousemove",
+      "pointerdown",
+      "mousedown",
+      "pointerup",
+      "mouseup",
+      "click",
+    ],
+  );
+  for (const event of events) {
+    assert.deepEqual([event.x, event.y], [100, 200], event.type);
+    if (event.kind === "pointer") {
+      assert.equal(event.pointerType, "mouse", event.type);
+      assert.equal(event.isPrimary, true, event.type);
+    }
+  }
+  const byType = Object.fromEntries(events.map((event) => [event.type, event]));
+  assert.equal(byType.pointerenter.bubbles, false);
+  assert.equal(byType.pointerover.bubbles, true);
+  assert.equal(byType.pointermove.button, -1);
+  const { pointerdown, pointerup } = byType;
+  assert.deepEqual(
+    [pointerdown.kind, pointerdown.button, pointerdown.buttons],
+    ["pointer", 0, 1],
+  );
+  assert.deepEqual([pointerup.button, pointerup.buttons], [0, 0]);
+  assert.deepEqual(
+    [byType.click.kind, byType.click.detail, byType.click.buttons],
+    ["mouse", 1, 0],
+  );
+});
+
+test("click fallback suppresses compatibility mouse events after a canceled pointerdown", async () => {
+  // Radix-style triggers open on pointerdown and call preventDefault; Chrome
+  // then skips mousedown and mouseup but still fires click.
+  const { restore, page } = clickFallbackInFakePage({
+    cancel: ["pointerdown"],
+  });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(
+    page().events.map((event) => event.type),
+    [
+      "pointerover",
+      "pointerenter",
+      "mouseover",
+      "mouseenter",
+      "pointermove",
+      "mousemove",
+      "pointerdown",
+      "pointerup",
+      "click",
+    ],
+  );
+});
+
+test("hover fallback sends pointer enter and move events", async () => {
+  let page = null;
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Runtime.evaluate") {
+        if (params.expression.includes('removeEventListener("mousemove"')) {
+          page = runFallbackInFakePage(params.expression);
+          return { result: { value: page.value } };
+        }
+        if (isProbeExpression({ params })) return { result: { value: true } };
+        return { result: { value: { x: 10, y: 20 } } };
+      }
+      if (method === "Input.dispatchMouseEvent") {
+        throw new Error("CDP request timed out: Input.dispatchMouseEvent");
+      }
+      return {};
+    },
+  });
+  try {
+    await withFakeEgo(() => hover([10, 20]));
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(page.value, { seen: false, fallback: true });
+  assert.deepEqual(
+    page.events.map((event) => event.type),
+    [
+      "pointerover",
+      "pointerenter",
+      "mouseover",
+      "mouseenter",
+      "pointermove",
+      "mousemove",
+    ],
+  );
+});
+
+test("drag fallback sends pointer events alongside the mouse events", async () => {
+  let page = null;
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Runtime.evaluate") {
+        if (params.expression.includes('removeEventListener("mouseup"')) {
+          page = runFallbackInFakePage(params.expression);
+          return { result: { value: page.value } };
+        }
+        return { result: { value: true } };
+      }
+      if (method === "Input.dispatchMouseEvent") {
+        throw new Error("CDP request timed out: Input.dispatchMouseEvent");
+      }
+      return {};
+    },
+  });
+  try {
+    await withFakeEgo(() =>
+      dragMouse([
+        [10, 20],
+        [30, 40],
+        [50, 60],
+      ]),
+    );
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(page.value, { seen: false, fallback: true });
+  assert.deepEqual(
+    page.events.map((event) => [event.type, event.x, event.y, event.buttons]),
+    [
+      ["pointerover", 10, 20, 0],
+      ["pointerenter", 10, 20, 0],
+      ["mouseover", 10, 20, 0],
+      ["mouseenter", 10, 20, 0],
+      ["pointerdown", 10, 20, 1],
+      ["mousedown", 10, 20, 1],
+      ["pointermove", 30, 40, 1],
+      ["mousemove", 30, 40, 1],
+      ["pointermove", 50, 60, 1],
+      ["mousemove", 50, 60, 1],
+      ["pointerup", 50, 60, 0],
+      ["mouseup", 50, 60, 0],
+    ],
+  );
+});
+
+test("click fallback sends enter events to every entered ancestor of a nested target", async () => {
+  // The point hits an icon inside a menu trigger; enter events do not bubble,
+  // so the trigger only sees them when they are dispatched on it directly.
+  const { restore, page } = clickFallbackInFakePage({
+    build(createElement) {
+      const trigger = createElement("trigger");
+      const icon = createElement("icon", trigger);
+      return { target: icon };
+    },
+  });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  const enters = page()
+    .events.filter((event) => /over|enter/.test(event.type))
+    .map((event) => [event.type, event.on]);
+  assert.deepEqual(enters, [
+    ["pointerover", "icon"],
+    ["pointerenter", "trigger"],
+    ["pointerenter", "icon"],
+    ["mouseover", "icon"],
+    ["mouseenter", "trigger"],
+    ["mouseenter", "icon"],
+  ]);
+});
+
+test("click fallback keeps enter events inside a shadow root from reaching its host twice", async () => {
+  // A composed event dispatched inside a shadow root also reaches the host,
+  // which already gets its own enter event, so enter and leave events must not
+  // be composed, as in Chrome.
+  const { restore, page } = clickFallbackInFakePage({
+    build(createElement) {
+      const host = createElement("host");
+      const shadowRoot = { nodeType: 11, host, parentNode: null };
+      const inner = createElement("inner", shadowRoot);
+      return { target: inner };
+    },
+  });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  const { events } = page();
+  assert.deepEqual(
+    events
+      .filter((event) => event.on === "host")
+      .map((event) => [event.type, event.composed]),
+    [
+      ["pointerenter", false],
+      ["mouseenter", false],
+    ],
+  );
+  for (const event of events.filter((event) => event.on === "inner")) {
+    assert.equal(event.composed, event.bubbles, event.type);
+  }
+  const composedOf = Object.fromEntries(
+    events
+      .filter((event) => event.on === "inner")
+      .map((event) => [event.type, event.composed]),
+  );
+  assert.deepEqual(
+    [
+      composedOf.pointerenter,
+      composedOf.mouseenter,
+      composedOf.pointerover,
+      composedOf.pointerdown,
+      composedOf.click,
+    ],
+    [false, false, true, true, true],
+  );
+});
+
+/** A body holding a tooltip trigger and another element beside it. */
+function triggerAndOtherPage(createElement) {
+  const body = createElement("body");
+  const trigger = createElement("trigger", body);
+  const other = createElement("other", body);
+  // Lets listeners reach a sibling by name.
+  body.children = { trigger, other };
+  return { target: trigger };
+}
+
+/**
+ * Runs one hover() per probe-target name, each falling back to synthetic
+ * events in the same fake page; `between(page, index)` runs after each call.
+ * Returns the page and the events each call produced.
+ */
+async function hoverFallbacksInOnePage(names, options, between = () => {}) {
+  const page = createFakePage(options);
+  let current = null;
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Runtime.evaluate") {
+        if (params.expression.includes('removeEventListener("mousemove"')) {
+          const { value } = page.run(params.expression, page.elements[current]);
+          return { result: { value } };
+        }
+        if (isProbeExpression({ params })) return { result: { value: true } };
+        return { result: { value: { x: 10, y: 20 } } };
+      }
+      if (method === "Input.dispatchMouseEvent") {
+        throw new Error("CDP request timed out: Input.dispatchMouseEvent");
+      }
+      return {};
+    },
+  });
+  const perCall = [];
+  try {
+    for (const [index, name] of names.entries()) {
+      current = name;
+      const start = page.events.length;
+      await withFakeEgo(() => hover([10, 20]));
+      perCall.push(page.events.slice(start));
+      between(page, index);
+    }
+  } finally {
+    restore();
+  }
+  return { page, perCall };
+}
+
+test("consecutive hover fallbacks send leave events to the element an earlier call entered", async () => {
+  const { perCall } = await hoverFallbacksInOnePage(["trigger", "other"], {
+    build: triggerAndOtherPage,
+  });
+
+  assert.deepEqual(
+    perCall[1].map((event) => [event.type, event.on, event.related]),
+    [
+      ["pointerout", "trigger", "other"],
+      ["pointerleave", "trigger", "other"],
+      ["pointerover", "other", "trigger"],
+      ["pointerenter", "other", "trigger"],
+      ["mouseout", "trigger", "other"],
+      ["mouseleave", "trigger", "other"],
+      ["mouseover", "other", "trigger"],
+      ["mouseenter", "other", "trigger"],
+      ["pointermove", "other", null],
+      ["mousemove", "other", null],
+    ],
+    "the body stays entered, the trigger is left, and the other element is entered",
+  );
+});
+
+test("a repeated hover fallback on the same element does not re-enter it", async () => {
+  const { perCall } = await hoverFallbacksInOnePage(["trigger", "trigger"], {
+    build: triggerAndOtherPage,
+  });
+
+  assert.deepEqual(
+    perCall[1].map((event) => event.type),
+    ["pointermove", "mousemove"],
+  );
+});
+
+test("a trusted pointerover drops the hover state persisted by earlier fallbacks", async () => {
+  const { perCall } = await hoverFallbacksInOnePage(
+    ["trigger", "other"],
+    { build: triggerAndOtherPage },
+    (page, index) => {
+      // The real pointer moved off the trigger; the browser already sent its
+      // own leave events.
+      if (index === 0) {
+        page.deliverTrusted("pointerover", {
+          target: "other",
+          relatedTarget: "trigger",
+        });
+      }
+    },
+  );
+
+  assert.deepEqual(
+    perCall[1]
+      .filter((event) => /out|leave/.test(event.type))
+      .map((event) => [event.type, event.on]),
+    [],
+    "no synthetic leave events for an element the real pointer already left",
+  );
+});
+
+test("a trusted pointerover leaves the elements only the synthetic hover entered", async () => {
+  // The synthetic hover entered the trigger while the real pointer stayed over
+  // `other`. When the real pointer moves from `other` to the body, its own
+  // boundary events never leave the trigger, so the trigger's tooltip would
+  // stay open.
+  let handOver = [];
+  await hoverFallbacksInOnePage(
+    ["trigger"],
+    { build: triggerAndOtherPage },
+    (page) => {
+      const start = page.events.length;
+      page.deliverTrusted("pointerover", {
+        target: "body",
+        relatedTarget: "other",
+        clientX: 5,
+        clientY: 6,
+      });
+      handOver = page.events.slice(start);
+    },
+  );
+
+  assert.deepEqual(
+    handOver.map((event) => [
+      event.type,
+      event.on,
+      event.related,
+      event.x,
+      event.y,
+    ]),
+    [
+      ["pointerout", "trigger", "body", 5, 6],
+      ["pointerleave", "trigger", "body", 5, 6],
+      ["mouseout", "trigger", "body", 5, 6],
+      ["mouseleave", "trigger", "body", 5, 6],
+    ],
+    "the body stays entered; only the trigger is left",
+  );
+});
+
+test("click fallback sends click to the element holding pointer capture at release", async () => {
+  // A pointerdown handler redirects capture to another element; Chrome then
+  // delivers the release and the click to that element, not to the trigger.
+  const { restore, page } = clickFallbackInFakePage({
+    build: triggerAndOtherPage,
+    listeners: {
+      trigger: {
+        pointerdown(event, trigger) {
+          const other = trigger.parentNode.children.other;
+          other.setPointerCapture(event.pointerId);
+        },
+      },
+    },
+  });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  const routed = page()
+    .events.filter((event) =>
+      ["pointerdown", "pointerup", "mouseup", "click"].includes(event.type),
+    )
+    .map((event) => [event.type, event.on]);
+  assert.deepEqual(routed, [
+    ["pointerdown", "trigger"],
+    ["pointerup", "other"],
+    ["mouseup", "other"],
+    ["click", "other"],
+  ]);
+});
+
+test("click fallback sends click to the common ancestor when press and release targets differ", async () => {
+  // The native press reached `other` and the release, sent by the fallback,
+  // hit-tests to the trigger. Chrome clicks their nearest common ancestor.
+  const { restore, page } = clickFallbackInFakePage({
+    build: triggerAndOtherPage,
+    probeState: (elements) => ({
+      pressTarget: elements.other,
+      mouseDown: true,
+    }),
+  });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  const routed = page()
+    .events.filter((event) => ["pointerup", "click"].includes(event.type))
+    .map((event) => [event.type, event.on]);
+  assert.deepEqual(routed, [
+    ["pointerup", "trigger"],
+    ["click", "body"],
+  ]);
+});
+
+test("click fallback ignores a capture request made while no button is pressed", async () => {
+  // Chrome's setPointerCapture does nothing for a pointer with no button
+  // down, so a request from the hover move must not redirect the press.
+  const { restore, page } = clickFallbackInFakePage({
+    build: triggerAndOtherPage,
+    listeners: {
+      trigger: {
+        pointermove(event, trigger) {
+          trigger.parentNode.children.other.setPointerCapture(event.pointerId);
+        },
+      },
+    },
+  });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  const routed = page()
+    .events.filter((event) => /down|up|click|capture/.test(event.type))
+    .map((event) => [event.type, event.on]);
+  assert.deepEqual(routed, [
+    ["pointerdown", "trigger"],
+    ["mousedown", "trigger"],
+    ["pointerup", "trigger"],
+    ["mouseup", "trigger"],
+    ["click", "trigger"],
+  ]);
+});
+
+test("click fallback resumes after a delivered native press without pressing again", async () => {
+  // A native pointerdown opened a Radix-style menu, but its slow handler held
+  // up the click past the dispatch timeout. A second pointerdown would toggle
+  // the menu closed; only the release and the click are missing.
+  const { restore, page } = clickFallbackInFakePage({
+    probeState: (elements) => ({
+      pressTarget: elements.target,
+      mouseDown: true,
+    }),
+  });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  const { value, events } = page();
+  assert.deepEqual(value, { seen: false, fallback: true });
+  assert.deepEqual(
+    events.map((event) => [event.type, event.on]),
+    [
+      ["pointerup", "target"],
+      ["mouseup", "target"],
+      ["click", "target"],
+    ],
+  );
+});
+
+test("click fallback keeps mouseup out after a canceled native pointerdown", async () => {
+  // The native pointerdown was canceled, so Chrome skipped mousedown and will
+  // skip the compatibility mouseup as well; click still fires.
+  const { restore, page } = clickFallbackInFakePage({
+    probeState: (elements) => ({
+      pressTarget: elements.target,
+      mouseDown: false,
+    }),
+  });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(
+    page().events.map((event) => event.type),
+    ["pointerup", "click"],
+  );
+});
+
+/**
+ * Gives `other` a native capture of pointer 1, as a native pointerdown
+ * handler would take it; releasing it is recorded in `released`.
+ */
+function nativeCaptureOnOther(elements, released) {
+  let held = true;
+  elements.other.hasPointerCapture = (id) => held && id === 1;
+  elements.other.releasePointerCapture = (id) => {
+    released.push(id);
+    held = false;
+  };
+}
+
+for (const [name, observed, expected] of [
+  [
+    "after gotpointercapture fired",
+    true,
+    [
+      ["pointerup", "other"],
+      ["mouseup", "other"],
+      ["lostpointercapture", "other"],
+      ["click", "other"],
+    ],
+  ],
+  [
+    "while the capture is still pending",
+    false,
+    [
+      ["gotpointercapture", "other"],
+      ["pointerup", "other"],
+      ["mouseup", "other"],
+      ["lostpointercapture", "other"],
+      ["click", "other"],
+    ],
+  ],
+]) {
+  test(`click fallback releases to the element a native press captured ${name}`, async () => {
+    // The native pointerdown handler captured the pointer to `other` before
+    // the dispatch timed out. Chrome would send the release and the click to
+    // the capturing element; the native capture must not outlive the click.
+    const released = [];
+    const { restore, page } = clickFallbackInFakePage({
+      build: triggerAndOtherPage,
+      probeState: (elements) => {
+        nativeCaptureOnOther(elements, released);
+        return {
+          pressTarget: elements.trigger,
+          pointerId: 1,
+          captureTarget: observed ? elements.other : null,
+          mouseDown: true,
+        };
+      },
+    });
+    try {
+      await withFakeEgo(() => click("#target"));
+    } finally {
+      restore();
+    }
+
+    const routed = page()
+      .events.filter((event) => /up|click|capture/.test(event.type))
+      .map((event) => [event.type, event.on]);
+    assert.deepEqual(routed, expected);
+    assert.deepEqual(released, [1], "the native capture was released");
+  });
+}
+
+test("click fallback hit-tests the release after pointerdown replaces the pressed element", async () => {
+  // A pointerdown handler swaps the pressed icon for a new one. The release
+  // and the click go to the element now under the point, not the removed one.
+  const { restore, page } = clickFallbackInFakePage({
+    build(createElement) {
+      const body = createElement("body");
+      const icon = createElement("icon", body);
+      const replacement = createElement("replacement", body);
+      return {
+        target: icon,
+        elementAt: () => (icon.isConnected ? icon : replacement),
+      };
+    },
+    listeners: {
+      icon: {
+        pointerdown(event, icon) {
+          icon.isConnected = false;
+          icon.parentNode = null;
+        },
+      },
+    },
+  });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  const routed = page()
+    .events.filter((event) => /down|up|click/.test(event.type))
+    .map((event) => [event.type, event.on]);
+  assert.deepEqual(routed, [
+    ["pointerdown", "icon"],
+    ["mousedown", "icon"],
+    ["pointerup", "replacement"],
+    ["mouseup", "replacement"],
+    ["click", "replacement"],
+  ]);
+});
+
+test("click fallback sends nothing once the native release was delivered", async () => {
+  // The whole native click went out and landed outside the probed target.
+  const { restore, page } = clickFallbackInFakePage({
+    probeState: (elements) => ({
+      pressTarget: elements.target,
+      mouseDown: true,
+      released: true,
+    }),
+  });
+  try {
+    await withFakeEgo(() => click("#target"));
+  } finally {
+    restore();
+  }
+
+  const { value, events } = page();
+  assert.deepEqual(value, { seen: true, fallback: false });
+  assert.deepEqual(events, []);
+});
+
+test("the click probe records the native press so the fallback can resume it", async () => {
+  // Runs the installed probe against a document that delivers trusted events.
+  let expression = null;
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Runtime.evaluate") {
+        if (isProbeExpression({ params }) && !expression) {
+          expression = params.expression;
+        }
+        return { result: { value: { x: 100, y: 200 } } };
+      }
+      return {};
+    },
+  });
+  try {
+    await withFakeEgo(() => click([100, 200]));
+  } finally {
+    restore();
+  }
+  assert.ok(expression, "the click installs a probe");
+
+  const outer = {
+    name: "outer",
+    contains: (node) => node === outer || node === inner,
+  };
+  const inner = { name: "inner", contains: (node) => node === inner };
+  const elsewhere = {
+    name: "elsewhere",
+    contains: (node) => node === elsewhere,
+  };
+  const listeners = {};
+  const document = {
+    elementFromPoint: () => outer,
+    addEventListener(type, listener) {
+      (listeners[type] ||= []).push(listener);
+    },
+    removeEventListener(type, listener) {
+      listeners[type] = (listeners[type] || []).filter(
+        (entry) => entry !== listener,
+      );
+    },
+  };
+  const window = {};
+  vm.runInNewContext(expression, {
+    window,
+    document,
+    setTimeout: () => 0,
+    clearTimeout: () => {},
+  });
+  const [probe] = Object.values(window.__egoBrowserInputProbes);
+  const deliver = (type, target, isTrusted = true, extra = {}) => {
+    for (const listener of listeners[type] || [])
+      listener({ type, target, isTrusted, ...extra });
+  };
+
+  deliver("pointerdown", elsewhere);
+  deliver("pointerdown", inner, false);
+  deliver("pointerup", inner);
+  assert.equal(
+    probe.pressTarget,
+    null,
+    "untrusted or off-target presses do not count",
+  );
+  assert.equal(
+    probe.released,
+    false,
+    "a release without a press does not count",
+  );
+
+  deliver("pointerdown", inner, true, { pointerId: 1 });
+  assert.equal(probe.pressTarget, inner);
+  assert.equal(probe.pointerId, 1);
+  assert.equal(probe.mouseDown, false);
+  deliver("gotpointercapture", elsewhere, true, { pointerId: 2 });
+  deliver("gotpointercapture", elsewhere, false, { pointerId: 1 });
+  assert.equal(
+    probe.captureTarget,
+    null,
+    "untrusted or other-pointer capture does not count",
+  );
+  deliver("gotpointercapture", elsewhere, true, { pointerId: 1 });
+  assert.equal(probe.captureTarget, elsewhere, "the press handler's capture");
+  deliver("lostpointercapture", elsewhere, true, { pointerId: 1 });
+  assert.equal(probe.captureTarget, null, "a released capture is dropped");
+  deliver("mousedown", inner);
+  assert.equal(probe.mouseDown, true);
+  deliver("pointerup", inner);
+  assert.equal(probe.released, true);
+
+  deliver("click", inner);
+  assert.equal(probe.seen, true);
+  assert.deepEqual(
+    Object.values(listeners).flat(),
+    [],
+    "a seen click removes every probe listener",
+  );
+});
+
+test("drag sends no fallback after a native drag whose pointerdown was canceled", async () => {
+  // A handler cancels pointerdown, so Chrome suppresses the compatibility
+  // mouseup; the thumb captured the pointer, so pointerup lands on it rather
+  // than on the drop target. The native drag still completed.
+  const thumb = { name: "thumb", contains: (node) => node === thumb };
+  const drop = { name: "drop", contains: (node) => node === drop };
+  const listeners = {};
+  const document = {
+    elementFromPoint: () => drop,
+    addEventListener(type, listener) {
+      (listeners[type] ||= []).push(listener);
+    },
+    removeEventListener(type, listener) {
+      listeners[type] = (listeners[type] || []).filter(
+        (entry) => entry !== listener,
+      );
+    },
+  };
+  const context = vm.createContext({ window: {}, document });
+  const deliver = (event) => {
+    for (const listener of listeners[event.type] || []) listener(event);
+  };
+  const dispatched = [];
+  let finish = null;
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Runtime.evaluate") {
+        const value = vm.runInContext(params.expression, context);
+        if (params.expression.includes('removeEventListener("mouseup"')) {
+          finish = JSON.parse(JSON.stringify(value));
+        }
+        return { result: { value } };
+      }
+      if (method === "Input.dispatchMouseEvent") {
+        dispatched.push(params.type);
+        if (params.type === "mouseReleased") {
+          // Neither an untrusted release nor another button's counts.
+          const pointerUp = { type: "pointerup", target: thumb };
+          deliver({ ...pointerUp, isTrusted: false, button: 0 });
+          deliver({ ...pointerUp, isTrusted: true, button: 2 });
+          assert.equal(
+            Object.values(context.window.__egoBrowserInputProbes)[0].seen,
+            false,
+          );
+          deliver({ ...pointerUp, isTrusted: true, button: 0 });
+        }
+      }
+      return {};
+    },
+  });
+  try {
+    await withFakeEgo(() =>
+      dragMouse([
+        [10, 20],
+        [50, 60],
+      ]),
+    );
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(dispatched, ["mousePressed", "mouseMoved", "mouseReleased"]);
+  assert.deepEqual(finish, { seen: true, fallback: false });
+  assert.deepEqual(
+    Object.values(listeners).flat(),
+    [],
+    "finishing the drag removes every probe listener",
+  );
+});
+
+/** Runs dragMouse with its fallback in a fake page built by `options`. */
+async function dragFallbackInFakePage(points, options) {
+  let page = null;
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      if (method === "Runtime.evaluate") {
+        if (params.expression.includes('removeEventListener("mouseup"')) {
+          page = runFallbackInFakePage(params.expression, options);
+          return { result: { value: page.value } };
+        }
+        return { result: { value: true } };
+      }
+      if (method === "Input.dispatchMouseEvent") {
+        throw new Error("CDP request timed out: Input.dispatchMouseEvent");
+      }
+      return {};
+    },
+  });
+  try {
+    await withFakeEgo(() => dragMouse(points));
+  } finally {
+    restore();
+  }
+  return page;
+}
+
+/** A slider thumb at x < 20 and a page body everywhere else. */
+function sliderPage(createElement) {
+  const body = createElement("body");
+  const thumb = createElement("thumb", body);
+  return { target: thumb, elementAt: (x) => (x < 20 ? thumb : body) };
+}
+
+test("drag fallback routes events to the element that captured the pointer", async () => {
+  let hasCapture = null;
+  const page = await dragFallbackInFakePage(
+    [
+      [10, 20],
+      [30, 40],
+      [50, 60],
+    ],
+    {
+      build: sliderPage,
+      listeners: {
+        thumb: {
+          pointerdown(event, thumb) {
+            thumb.setPointerCapture(event.pointerId);
+            hasCapture = thumb.hasPointerCapture(event.pointerId);
+          },
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(page.value, { seen: false, fallback: true });
+  assert.equal(hasCapture, true);
+  const afterDown = page.events
+    .slice(page.events.findIndex((event) => event.type === "mousedown") + 1)
+    .map((event) => [event.type, event.on, event.x]);
+  assert.deepEqual(afterDown, [
+    ["gotpointercapture", "thumb", 30],
+    ["pointermove", "thumb", 30],
+    ["mousemove", "thumb", 30],
+    ["pointermove", "thumb", 50],
+    ["mousemove", "thumb", 50],
+    ["pointerup", "thumb", 50],
+    ["mouseup", "thumb", 50],
+    ["lostpointercapture", "thumb", 50],
+    // Capture ended away from the thumb, so the hover moves to the body.
+    ["pointerout", "thumb", 50],
+    ["pointerleave", "thumb", 50],
+    ["pointerover", "body", 50],
+    ["mouseout", "thumb", 50],
+    ["mouseleave", "thumb", 50],
+    ["mouseover", "body", 50],
+  ]);
+});
+
+test("drag fallback stops routing to an element once it releases capture", async () => {
+  const page = await dragFallbackInFakePage(
+    [
+      [10, 20],
+      [30, 40],
+      [50, 60],
+    ],
+    {
+      build: sliderPage,
+      listeners: {
+        thumb: {
+          pointerdown(event, thumb) {
+            thumb.setPointerCapture(event.pointerId);
+          },
+          pointermove(event, thumb) {
+            thumb.releasePointerCapture(event.pointerId);
+          },
+        },
+      },
+    },
+  );
+
+  const afterDown = page.events
+    .slice(page.events.findIndex((event) => event.type === "mousedown") + 1)
+    .map((event) => [event.type, event.on]);
+  assert.deepEqual(afterDown, [
+    ["gotpointercapture", "thumb"],
+    ["pointermove", "thumb"],
+    ["mousemove", "thumb"],
+    ["lostpointercapture", "thumb"],
+    ["pointerout", "thumb"],
+    ["pointerleave", "thumb"],
+    ["pointerover", "body"],
+    ["mouseout", "thumb"],
+    ["mouseleave", "thumb"],
+    ["mouseover", "body"],
+    ["pointermove", "body"],
+    ["mousemove", "body"],
+    ["pointerup", "body"],
+    ["mouseup", "body"],
+  ]);
+});
+
+test("drag fallback resumes hit-testing when the capturing element is removed", async () => {
+  // A handler that captures and then replaces its element must not leave the
+  // rest of the drag aimed at a detached node that document listeners miss.
+  const page = await dragFallbackInFakePage(
+    [
+      [10, 20],
+      [30, 40],
+      [50, 60],
+    ],
+    {
+      build: sliderPage,
+      listeners: {
+        thumb: {
+          pointerdown(event, thumb) {
+            thumb.setPointerCapture(event.pointerId);
+          },
+          pointermove(_event, thumb) {
+            thumb.isConnected = false;
+          },
+        },
+      },
+    },
+  );
+
+  const afterDown = page.events
+    .slice(page.events.findIndex((event) => event.type === "mousedown") + 1)
+    .map((event) => [event.type, event.on]);
+  assert.deepEqual(afterDown, [
+    ["gotpointercapture", "thumb"],
+    ["pointermove", "thumb"],
+    ["mousemove", "thumb"],
+    ["lostpointercapture", "document"],
+    // The detached thumb gets no out or leave events, and the body, which
+    // the pointer never left, is not entered again.
+    ["pointerover", "body"],
+    ["mouseover", "body"],
+    ["pointermove", "body"],
+    ["mousemove", "body"],
+    ["pointerup", "body"],
+    ["mouseup", "body"],
+  ]);
+});
+
+test("drag fallback ignores a capture request from an element removed before the next event", async () => {
+  const page = await dragFallbackInFakePage(
+    [
+      [10, 20],
+      [50, 60],
+    ],
+    {
+      build: sliderPage,
+      listeners: {
+        thumb: {
+          pointerdown(event, thumb) {
+            thumb.setPointerCapture(event.pointerId);
+            thumb.isConnected = false;
+          },
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(
+    page.events
+      .filter((event) => /move|down|up|capture/.test(event.type))
+      .map((event) => [event.type, event.on]),
+    [
+      ["pointerdown", "thumb"],
+      ["mousedown", "thumb"],
+      ["pointermove", "body"],
+      ["mousemove", "body"],
+      ["pointerup", "body"],
+      ["mouseup", "body"],
+    ],
+  );
+});
+
+test("drag fallback leaves the source element when the pointer moves to another one", async () => {
+  // A tooltip that opens on mouseenter must close on mouseleave once the
+  // drag moves from the source's icon to a separate drop target.
+  let tooltipOpen = false;
+  const page = await dragFallbackInFakePage(
+    [
+      [10, 20],
+      [50, 60],
+    ],
+    {
+      build(createElement) {
+        const root = createElement("root");
+        const source = createElement("source", root);
+        const icon = createElement("icon", source);
+        const dropTarget = createElement("drop", root);
+        return {
+          target: icon,
+          elementAt: (x) => (x < 20 ? icon : dropTarget),
+        };
+      },
+      listeners: {
+        source: {
+          mouseenter() {
+            tooltipOpen = true;
+          },
+          mouseleave() {
+            tooltipOpen = false;
+          },
+        },
+      },
+    },
+  );
+
+  assert.deepEqual(page.value, { seen: false, fallback: true });
+  assert.equal(tooltipOpen, false);
+  const boundary = page.events
+    .filter((event) => /over|enter|out|leave/.test(event.type))
+    .map((event) => [event.type, event.on, event.related, event.bubbles]);
+  assert.deepEqual(boundary, [
+    ["pointerover", "icon", null, true],
+    ["pointerenter", "root", null, false],
+    ["pointerenter", "source", null, false],
+    ["pointerenter", "icon", null, false],
+    ["mouseover", "icon", null, true],
+    ["mouseenter", "root", null, false],
+    ["mouseenter", "source", null, false],
+    ["mouseenter", "icon", null, false],
+    ["pointerout", "icon", "drop", true],
+    ["pointerleave", "icon", "drop", false],
+    ["pointerleave", "source", "drop", false],
+    ["pointerover", "drop", "icon", true],
+    ["pointerenter", "drop", "icon", false],
+    ["mouseout", "icon", "drop", true],
+    ["mouseleave", "icon", "drop", false],
+    ["mouseleave", "source", "drop", false],
+    ["mouseover", "drop", "icon", true],
+    ["mouseenter", "drop", "icon", false],
+  ]);
+  // The boundary events come before the move that crosses the boundary.
+  const types = page.events.map((event) => event.type);
+  assert.ok(types.lastIndexOf("mouseenter") < types.indexOf("pointermove"));
+});
+
+test("drag fallback without capture hit-tests each point", async () => {
+  const page = await dragFallbackInFakePage(
+    [
+      [10, 20],
+      [50, 60],
+    ],
+    { build: sliderPage },
+  );
+
+  assert.deepEqual(
+    page.events
+      .filter((event) => /move|down|up/.test(event.type))
+      .map((event) => [event.type, event.on]),
+    [
+      ["pointerdown", "thumb"],
+      ["mousedown", "thumb"],
+      ["pointermove", "body"],
+      ["mousemove", "body"],
+      ["pointerup", "body"],
+      ["mouseup", "body"],
+    ],
+  );
 });
 
 test("click treats a trusted click that landed before the dispatch timeout as delivered", async () => {
