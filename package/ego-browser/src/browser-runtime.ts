@@ -26,7 +26,7 @@ const SESSION_SETUP_WAIT_MS = 2000;
 const SESSION_TTL_MS = 2000;
 // An OOPIF's own Page.getFrameTree only reveals same-process child frames; a
 // responsive renderer answers within milliseconds. One stalled OOPIF must not
-// spend the whole action budget that the Page and its other frames still need.
+// spend the action budget that the Page and its other frames still need.
 const OOPIF_FRAME_TREE_WAIT_MS = 1000;
 // Upper bound for buffered CDP events. The runtime can be long-lived (installEgoSdk
 // inside the browser); without a cap, undrained events grow without bound.
@@ -922,8 +922,15 @@ export async function ensureFrameSessions(
     return undefined;
   };
   const oopifFrameTrees: Array<{ targetId: string; tree: any }> = [];
+  // Discovery through OOPIF frame trees is optional: it shares one budget of
+  // at most OOPIF_FRAME_TREE_WAIT_MS and at most half of what is left, so a
+  // stalled OOPIF leaves the caller's action the other half.
+  const oopifDiscoveryDeadline =
+    state.now() +
+    Math.min(OOPIF_FRAME_TREE_WAIT_MS, Math.floor(remaining() / 2));
+  const oopifDiscoveryRemaining = () => oopifDiscoveryDeadline - state.now();
   let pendingTargets = descendants;
-  while (pendingTargets.length > 0) {
+  while (pendingTargets.length > 0 && oopifDiscoveryRemaining() > 0) {
     const loaded = await Promise.all(
       pendingTargets.map(async (info) => {
         const sessionId = sessionByTarget.get(info.targetId);
@@ -933,7 +940,7 @@ export async function ensureFrameSessions(
             "Page.getFrameTree",
             {},
             sessionId,
-            Math.min(remaining(), OOPIF_FRAME_TREE_WAIT_MS),
+            Math.max(1, oopifDiscoveryRemaining()),
           );
           const tree = findFrame(
             response?.result?.frameTree || response?.frameTree,

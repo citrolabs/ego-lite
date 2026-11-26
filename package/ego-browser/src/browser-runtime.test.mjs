@@ -310,6 +310,18 @@ test("a stalled OOPIF frame tree leaves the action budget for the Page", async (
     const elapsed = performance.now() - startedAt;
     assert(elapsed < 2_000, `discovery took ${elapsed}ms of a 10s budget`);
     assert.equal(sessions.get("runner"), "session:runner");
+
+    // With a short budget the optional read gets at most half of it, so the
+    // action still has time left after discovery.
+    invalidateSession();
+    const shortStartedAt = performance.now();
+    const shortSessions = await ensureFrameSessions("page-main", 800);
+    const shortElapsed = performance.now() - shortStartedAt;
+    assert(
+      shortElapsed < 600,
+      `discovery took ${shortElapsed}ms of an 800ms budget`,
+    );
+    assert.equal(shortSessions.get("runner"), "session:runner");
   } finally {
     invalidateSession();
     if (previous === undefined) delete globalThis.ego;

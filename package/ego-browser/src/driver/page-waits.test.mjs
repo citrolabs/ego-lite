@@ -173,6 +173,94 @@ for (const [state, interruptedMethod] of [
   });
 }
 
+test("waitForSelectorInPage searches the Page document when a frame is not ready", async () => {
+  // The frame's isolated world cannot be created, but the target is visible
+  // in the Page document: a hidden wait must see it and time out, not read the
+  // unready frame as absence.
+  let now = 0;
+  let mainEvaluations = 0;
+  const services = {
+    async cdp(method, params) {
+      if (method === "Page.createIsolatedWorld") {
+        throw new Error("No frame for given id found");
+      }
+      if (method === "Runtime.evaluate") {
+        assert.equal(params.contextId, undefined);
+        mainEvaluations += 1;
+        return { result: { objectId: "object:spinner" } };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        return { result: { value: true } };
+      }
+      if (method === "Runtime.releaseObject") return {};
+      throw new Error(`unexpected CDP method: ${method}`);
+    },
+    now: () => now,
+    async sleep(ms) {
+      now += ms;
+    },
+  };
+
+  await assert.rejects(
+    () =>
+      waitForSelectorInPage(
+        services,
+        "session:page",
+        new Map(),
+        "#spinner",
+        { state: "hidden", timeout: 500 },
+        async () => new Map([["frame-child", "session:page"]]),
+      ),
+    /page\.waitForSelector timed out after 500ms: #spinner/,
+  );
+  assert(mainEvaluations > 0, "the Page document was searched");
+});
+
+for (const state of ["hidden", "detached"]) {
+  test(`waitForSelectorInPage retries an unready frame before reporting ${state}`, async () => {
+    let now = 0;
+    let isolatedWorldAttempts = 0;
+    let frameSearched = false;
+    const services = {
+      async cdp(method, params) {
+        if (method === "Page.createIsolatedWorld") {
+          isolatedWorldAttempts += 1;
+          if (isolatedWorldAttempts === 1) {
+            throw new Error("No frame for given id found");
+          }
+          return { executionContextId: 7 };
+        }
+        if (method === "Runtime.evaluate") {
+          if (params.contextId === 7) frameSearched = true;
+          return { result: { type: "undefined" } };
+        }
+        if (method === "Runtime.releaseObject") return {};
+        throw new Error(`unexpected CDP method: ${method}`);
+      },
+      now: () => now,
+      async sleep(ms) {
+        now += ms;
+      },
+    };
+
+    assert.equal(
+      await waitForSelectorInPage(
+        services,
+        "session:page",
+        new Map(),
+        "#spinner",
+        { state, timeout: 2_000 },
+        async () => new Map([["frame-child", "session:page"]]),
+      ),
+      true,
+    );
+    assert(
+      frameSearched,
+      `${state} is reported only after the frame is searched`,
+    );
+  });
+}
+
 test("waitForSelectorInPage bounds repeated context changes by its timeout", async () => {
   let now = 0;
   let attempts = 0;

@@ -14,6 +14,8 @@ type PageRuntimeContext = {
   frameId?: string;
   ownerFrameId?: string;
   contextId?: number;
+  /** Set when the frame's isolated world could not be created. */
+  unavailable?: FrameNotReadyError;
 };
 
 export type LocatorBackendCandidate = {
@@ -31,6 +33,18 @@ export class ElementResolutionError extends Error {
     super(message);
     this.name = "ElementResolutionError";
     this.kind = kind;
+  }
+}
+
+/**
+ * A frame that had to be searched could not be prepared. The element may
+ * still be there, so a wait for `hidden` or `detached` must retry rather than
+ * read this as absence.
+ */
+export class FrameNotReadyError extends ElementResolutionError {
+  constructor(message: string) {
+    super(message, "transient");
+    this.name = "FrameNotReadyError";
   }
 }
 
@@ -243,7 +257,12 @@ export async function resolveElementObjectId(
       { actionability: options.actionability },
     );
   }
+  let unavailable: FrameNotReadyError | undefined;
   for (const context of contexts) {
+    if (context.unavailable) {
+      unavailable ||= context.unavailable;
+      continue;
+    }
     const result = await evaluateInContext(
       cdp,
       context,
@@ -263,6 +282,8 @@ export async function resolveElementObjectId(
       };
     }
   }
+  // A frame that could not be searched may hold the element.
+  if (unavailable) throw unavailable;
   throw new ElementResolutionError(
     `Element not found: ${selectorOrRef}`,
     "transient",
@@ -968,9 +989,17 @@ async function runtimePageContexts(
   sessionId,
   iframeSessions,
 ): Promise<PageRuntimeContext[]> {
+  // A frame that cannot be prepared is marked instead of failing the whole
+  // resolution: its error surfaces only if that frame has to be searched, so
+  // a target in the Page document or another frame still resolves.
   const contexts = pageContexts(sessionId, iframeSessions);
-  return Promise.all(
+  const settled = await Promise.allSettled(
     contexts.map((context) => runtimePageContext(cdp, context)),
+  );
+  return settled.map((result, index) =>
+    result.status === "fulfilled"
+      ? result.value
+      : { ...contexts[index], unavailable: result.reason },
   );
 }
 
@@ -979,13 +1008,8 @@ async function availableRuntimePageContexts(
   sessionId,
   iframeSessions,
 ): Promise<PageRuntimeContext[]> {
-  const settled = await Promise.allSettled(
-    pageContexts(sessionId, iframeSessions).map((context) =>
-      runtimePageContext(cdp, context),
-    ),
-  );
-  return settled.flatMap((result) =>
-    result.status === "fulfilled" ? [result.value] : [],
+  return (await runtimePageContexts(cdp, sessionId, iframeSessions)).filter(
+    (context) => !context.unavailable,
   );
 }
 
@@ -1010,20 +1034,20 @@ async function runtimePageContext(
     }
     return { ...context, contextId: result.executionContextId };
   } catch (error) {
-    throw new ElementResolutionError(
+    throw new FrameNotReadyError(
       `Frame ${context.frameId} is not ready: ${error?.message || String(error)}`,
-      "transient",
     );
   }
 }
 
-function evaluateInContext(
+async function evaluateInContext(
   cdp,
   context: PageRuntimeContext,
   expression: string,
   returnByValue: boolean,
   objectGroup?: string,
 ) {
+  if (context.unavailable) throw context.unavailable;
   return send(
     cdp,
     "Runtime.evaluate",
