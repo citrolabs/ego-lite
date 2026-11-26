@@ -775,12 +775,15 @@ export async function ensureFrameSessions(
     const frameId = tree?.frame?.id;
     if (typeof frameId !== "string") return;
     const protocolParentId = tree?.frame?.parentId;
-    frameParents.set(
-      frameId,
+    const parentId =
       typeof protocolParentId === "string"
         ? protocolParentId
-        : recursiveParentId,
-    );
+        : recursiveParentId;
+    // An OOPIF's own frame tree is rooted at the OOPIF; its parent comes from
+    // the Page tree or target metadata and must not be erased here.
+    if (parentId !== undefined || !frameParents.has(frameId)) {
+      frameParents.set(frameId, parentId);
+    }
     for (const child of tree?.childFrames || []) {
       collectFrameGraph(child, frameId);
     }
@@ -882,7 +885,7 @@ export async function ensureFrameSessions(
     [pageTargetId, pageSessionId],
   ]);
   const vanishedTargetIds = new Set<string>();
-  for (const info of descendants) {
+  const attachDescendant = async (info: any) => {
     let sessionId: string;
     try {
       sessionId = await ensureSession(info.targetId, remaining());
@@ -896,10 +899,72 @@ export async function ensureFrameSessions(
       vanishedTargetIds.add(info.targetId);
       liveTargetIds.delete(info.targetId);
       clearTargetSessionTree(info.targetId, { remove: true });
-      continue;
+      return;
     }
     registerTargetParent(info.targetId, nearestTargetParent(info));
     sessionByTarget.set(info.targetId, sessionId);
+  };
+  for (const info of descendants) await attachDescendant(info);
+
+  // Under site isolation a session's Page.getFrameTree lists only the frames
+  // its renderer hosts, so a same-site child of an OOPIF (and any OOPIF below
+  // that child) appears only in the OOPIF's own frame tree. Expand one OOPIF
+  // level at a time until no new descendant target is found.
+  const findFrame = (tree: any, frameId: string): any => {
+    if (tree?.frame?.id === frameId) return tree;
+    for (const child of tree?.childFrames || []) {
+      const found = findFrame(child, frameId);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  const oopifFrameTrees: Array<{ targetId: string; tree: any }> = [];
+  let pendingTargets = descendants;
+  while (pendingTargets.length > 0) {
+    const loaded = await Promise.all(
+      pendingTargets.map(async (info) => {
+        const sessionId = sessionByTarget.get(info.targetId);
+        if (!sessionId || vanishedTargetIds.has(info.targetId)) return;
+        try {
+          const response = await browserCdp(
+            "Page.getFrameTree",
+            {},
+            sessionId,
+            remaining(),
+          );
+          const tree = findFrame(
+            response?.result?.frameTree || response?.frameTree,
+            info.targetId,
+          );
+          return tree ? { targetId: info.targetId, tree } : undefined;
+        } catch {
+          // The OOPIF itself stays mapped to its session; only frames that
+          // only it could report are missing, as they were before.
+          return undefined;
+        }
+      }),
+    );
+    for (const entry of loaded) {
+      if (!entry) continue;
+      oopifFrameTrees.push(entry);
+      collectFrameGraph(entry.tree, undefined);
+    }
+    const nextTargets = iframeInfos
+      .filter(
+        (info) =>
+          !liveTargetIds.has(info.targetId) &&
+          !vanishedTargetIds.has(info.targetId),
+      )
+      .map((info) => ({ info, ancestry: ancestryToPage(info.targetId) }))
+      .filter(({ ancestry }) => ancestry.belongs)
+      .sort((left, right) => left.ancestry.depth - right.ancestry.depth)
+      .map(({ info }) => info);
+    for (const info of nextTargets) liveTargetIds.add(info.targetId);
+    for (const info of nextTargets) {
+      descendants.push(info);
+      await attachDescendant(info);
+    }
+    pendingTargets = nextTargets;
   }
 
   const sessions = new Map<string, string>() as Map<string, string> & {
@@ -919,6 +984,10 @@ export async function ensureFrameSessions(
     }
   };
   if (frameTree) collectFrameSessions(frameTree, pageSessionId, true);
+  for (const { targetId, tree } of oopifFrameTrees) {
+    const sessionId = sessionByTarget.get(targetId);
+    if (sessionId) collectFrameSessions(tree, sessionId);
+  }
   for (const info of descendants) {
     if (vanishedTargetIds.has(info.targetId)) continue;
     if (!sessions.has(info.targetId)) {
