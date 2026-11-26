@@ -1,6 +1,7 @@
 import { RefMap } from "./ref-map.js";
 
 const MAX_INVALIDATED_REFS_PER_TARGET = 10_000;
+const MAX_SUPERSEDED_REFS_PER_TARGET = 500;
 
 type SnapshotRef = {
   refId?: string | number;
@@ -54,13 +55,25 @@ export class PageRefRegistry {
   ): void {
     const state = this.#states.get(targetId);
     if (!state) return;
+    const superseded = new Set<StoredRef>();
     for (const ref of state.refs) {
       if (
         !ref.documentId ||
         ref.documentId !== pageRefDocumentId(ref, documents)
       ) {
         ref.active = false;
+        superseded.add(ref);
       }
+    }
+    // Identity includes the document, so a superseded document's refs can never
+    // be revived; they only serve as "Stale ref" tombstones. Keeping every one
+    // makes each later snapshot load, rebuild and persist them all, so only the
+    // most recently published ones are kept. `nextRef` still never goes back.
+    let excess = superseded.size - MAX_SUPERSEDED_REFS_PER_TARGET;
+    if (excess > 0) {
+      state.refs = state.refs.filter(
+        (ref) => !(superseded.has(ref) && excess-- > 0),
+      );
     }
     this.#rebuild(targetId);
   }
