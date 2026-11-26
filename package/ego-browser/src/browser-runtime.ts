@@ -779,11 +779,10 @@ export async function ensureFrameSessions(
       typeof protocolParentId === "string"
         ? protocolParentId
         : recursiveParentId;
-    // An OOPIF's own frame tree is rooted at the OOPIF; its parent comes from
-    // the Page tree or target metadata and must not be erased here.
-    if (parentId !== undefined || !frameParents.has(frameId)) {
-      frameParents.set(frameId, parentId);
-    }
+    // An OOPIF's own frame tree is rooted at the OOPIF and may omit its
+    // parentId; an unknown parent is left unset so parentFrameIdOf falls back
+    // to the Page tree or target metadata instead of a recorded undefined.
+    if (parentId !== undefined) frameParents.set(frameId, parentId);
     for (const child of tree?.childFrames || []) {
       collectFrameGraph(child, frameId);
     }
@@ -947,7 +946,8 @@ export async function ensureFrameSessions(
     for (const entry of loaded) {
       if (!entry) continue;
       oopifFrameTrees.push(entry);
-      collectFrameGraph(entry.tree, undefined);
+      // Seed the root with its known parent so the local tree cannot erase it.
+      collectFrameGraph(entry.tree, parentFrameIdOf(entry.targetId));
     }
     const nextTargets = iframeInfos
       .filter(

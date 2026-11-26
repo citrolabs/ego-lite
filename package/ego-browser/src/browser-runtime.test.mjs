@@ -204,6 +204,66 @@ test("frames rendered inside a nested OOPIF map to that OOPIF's session", async 
   }
 });
 
+test("OOPIF roots without parentId keep the parent from target metadata", async () => {
+  // Same layout as above, but each OOPIF's own frame tree omits parentId on
+  // its root and the Page tree does not list the OOPIFs at all, so the parent
+  // chain is known only from Target.getTargets.
+  const previous = globalThis.ego;
+  const frameTrees = new Map([
+    ["session:page-main", { frame: { id: "page-main" } }],
+    ["session:runner", { frame: { id: "runner" } }],
+    [
+      "session:middle",
+      {
+        frame: { id: "middle" },
+        childFrames: [{ frame: { id: "leaf" } }],
+      },
+    ],
+    ["session:deep", { frame: { id: "deep" } }],
+  ]);
+  const runtime = {
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      let result = {};
+      if (request.method === "Target.getTargets") {
+        result = {
+          targetInfos: [
+            { targetId: "page-main", type: "page" },
+            { targetId: "runner", type: "iframe", parentFrameId: "page-main" },
+            { targetId: "middle", type: "iframe", parentFrameId: "runner" },
+            { targetId: "deep", type: "iframe", parentFrameId: "leaf" },
+          ],
+        };
+      } else if (request.method === "Page.getFrameTree") {
+        result = { frameTree: frameTrees.get(request.sessionId) };
+      } else if (request.method === "Target.attachToTarget") {
+        result = { sessionId: `session:${request.params.targetId}` };
+      }
+      queueMicrotask(() => {
+        runtime.onCDPMessage(JSON.stringify({ id: request.id, result }));
+      });
+    },
+  };
+  globalThis.ego = runtime;
+
+  try {
+    invalidateSession();
+    const sessions = await ensureFrameSessions("page-main", 1_000);
+    assert.equal(sessions.get("runner"), "session:runner");
+    assert.equal(sessions.get("middle"), "session:middle");
+    assert.equal(sessions.get("leaf"), "session:middle");
+    assert.equal(sessions.get("deep"), "session:deep");
+    assert.equal(sessions.parentFrameIds.get("runner"), "page-main");
+    assert.equal(sessions.parentFrameIds.get("middle"), "runner");
+    assert.equal(sessions.parentFrameIds.get("leaf"), "middle");
+    assert.equal(sessions.parentFrameIds.get("deep"), "leaf");
+  } finally {
+    invalidateSession();
+    if (previous === undefined) delete globalThis.ego;
+    else globalThis.ego = previous;
+  }
+});
+
 test("frame session discovery drops an enumerated iframe that disappears before attach", async () => {
   const previous = globalThis.ego;
   let discoveries = 0;
