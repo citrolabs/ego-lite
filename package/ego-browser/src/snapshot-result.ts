@@ -198,95 +198,11 @@ function renderSnapshotTree(
   return output;
 }
 
-/** Return whether one advertised locator resolves uniquely to its source ref. */
-export async function validateSnapshotLocator(
-  cdp: CdpAdapter,
-  pageSessionId: string,
-  iframeSessions: Map<string, string>,
-  ref: SnapshotRef,
-): Promise<boolean> {
-  const candidates = snapshotLocatorCandidates([ref]);
-  if (candidates.length === 0) return false;
-  const valid = await validateLocatorBackendNodes(
-    cdp,
-    pageSessionId,
-    iframeSessions,
-    candidates,
-  );
-  return valid.has(0);
-}
-
-/** Omit invalid native stable locators while retaining their short-lived refs. */
-export async function sanitizeSnapshotLocators(
-  result: SnapshotResult,
-  validator: (ref: SnapshotRef) => Promise<boolean>,
-): Promise<SnapshotResult> {
-  if (!Array.isArray(result?.refs)) return result;
-
-  const invalidLocators = new Map<string, Set<string>>();
-  for (const ref of result.refs) {
-    const locator = ref?.loc;
-    if (
-      typeof locator !== "string" ||
-      locator === "unstable" ||
-      locator === "ambiguous"
-    ) {
-      continue;
-    }
-    if (await validator(ref)) continue;
-
-    delete ref.loc;
-    const refId = ref.refId ?? ref.backendNodeId;
-    if (refId !== undefined) {
-      const refLocators = invalidLocators.get(String(refId)) ?? new Set();
-      refLocators.add(locator);
-      invalidLocators.set(String(refId), refLocators);
-    }
-  }
-  if (typeof result.content === "string" && invalidLocators.size > 0) {
-    result.content = omitSnapshotLocators(result.content, invalidLocators);
-  }
-  return result;
-}
-
-function omitSnapshotLocators(
-  content: string,
-  invalidLocators: Map<string, Set<string>>,
-): string {
-  const newline = content.includes("\r\n") ? "\r\n" : "\n";
-  return content
-    .split(/\r?\n/)
-    .map((line) => omitSnapshotLineLocator(line, invalidLocators))
-    .join(newline);
-}
-
-function omitSnapshotLineLocator(
-  text: string,
-  invalidLocators: Map<string, Set<string>>,
-): string {
-  const metadataIndex = findSnapshotMetadataStart(text);
-  if (metadataIndex < 0) return text;
-
-  const metadata = text.slice(metadataIndex);
-  if (!metadata.endsWith("]")) return text;
-  const prefix = metadata.match(/^\[ref=([^,\]]+),\s*loc=/);
-  if (!prefix) return text;
-
-  const candidates = invalidLocators.get(prefix[1]);
-  if (!candidates) return text;
-  for (const locator of candidates) {
-    const locatorEnd = prefix[0].length + locator.length;
-    if (
-      metadata.startsWith(locator, prefix[0].length) &&
-      (metadata[locatorEnd] === "," || metadata[locatorEnd] === "]")
-    ) {
-      return `${text.slice(0, metadataIndex)}[ref=${prefix[1]}${metadata.slice(locatorEnd)}`;
-    }
-  }
-  return text;
-}
-
-/** Preserve native frame provenance and validate stable locators for the Page API. */
+/**
+ * Preserve native frame provenance for the Page API. Stable locators are
+ * passed through as advertised: the browser prints a locator only when it
+ * matches exactly the node that produced it.
+ */
 export async function preparePageSnapshotResult(
   services: SnapshotServices,
   pageSessionId: string,
@@ -303,13 +219,6 @@ export async function preparePageSnapshotResult(
     typeof result?.content === "string"
       ? iframeDescendantRefIds(result.content)
       : new Set<string>();
-  const validIndexes = await validateLocatorBackendNodes(
-    adapter,
-    pageSessionId,
-    iframeSessions,
-    snapshotLocatorCandidates(refs),
-  );
-  const validRefs = new Set(refs.filter((_, index) => validIndexes.has(index)));
   await backfillSnapshotFrameIds(
     adapter,
     pageSessionId,
@@ -332,7 +241,7 @@ export async function preparePageSnapshotResult(
       ref.frameProvenance = rootContext.frameProvenance ?? "page";
     }
   }
-  return sanitizeSnapshotLocators(result, async (ref) => validRefs.has(ref));
+  return result;
 }
 
 async function backfillSnapshotFrameIds(
