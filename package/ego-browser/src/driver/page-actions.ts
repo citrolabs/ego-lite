@@ -1786,8 +1786,12 @@ async function assertFrameOwnersReceivePointerEvents(
       !(ownerPoint.x >= 0 && ownerPoint.y >= 0 &&
         ownerPoint.x < view.innerWidth && ownerPoint.y < view.innerHeight)
     ) return { outside: true };
-    const interceptor = interceptingElementAtPoint(this, ownerPoint);
-    if (interceptor) {
+    // Only the iframe itself forwards input into its document. An interactive
+    // wrapper around it would satisfy interceptingElementAtPoint, yet the
+    // wrapper, not the framed target, receives the native click.
+    const hit = hitElementAtPoint(this, ownerPoint);
+    if (hit !== this) {
+      const interceptor = hit || this.ownerDocument.documentElement;
       return { error: describeHitTarget(interceptor) + " intercepts pointer events" };
     }
     return ownerPoint;
