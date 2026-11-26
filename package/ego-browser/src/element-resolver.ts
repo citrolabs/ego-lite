@@ -686,8 +686,12 @@ function locatorContextMatchesCandidate(
     pageSessionId,
     iframeSessions,
   );
-  const expectedFrameId =
-    expectedSessionId === pageSessionId ? candidate.frameId : undefined;
+  const expectedFrameId = frameContextFrameId(
+    candidate.frameId,
+    expectedSessionId,
+    pageSessionId,
+    iframeSessions,
+  );
   return (
     context.sessionId === expectedSessionId &&
     context.frameId === expectedFrameId
@@ -912,37 +916,49 @@ function pageSessions(sessionId, iframeSessions) {
   return sessions;
 }
 
+/**
+ * Returns the `frameId` a runtime context for `frameId` must carry. A frame
+ * uses its session's default context only when it is an OOPIF session's root.
+ * Frames in the Page session, and same-process children of an OOPIF (their
+ * parent maps to the same session), need a frame-scoped context, or the OOPIF
+ * root document would be searched in their place.
+ */
+function frameContextFrameId(
+  frameId,
+  frameSessionId,
+  pageSessionId,
+  iframeSessions,
+): string | undefined {
+  if (frameSessionId === pageSessionId) return frameId;
+  if (!(iframeSessions instanceof Map)) return undefined;
+  const parentFrameId = (
+    iframeSessions as Map<string, string> & {
+      parentFrameIds?: ReadonlyMap<string, string | undefined>;
+    }
+  ).parentFrameIds?.get(frameId);
+  return parentFrameId !== undefined &&
+    iframeSessions.get(parentFrameId) === frameSessionId
+    ? frameId
+    : undefined;
+}
+
 function pageContexts(sessionId, iframeSessions) {
   const contexts: PageRuntimeContext[] = [
     { sessionId, frameId: undefined, ownerFrameId: undefined },
   ];
-  const isMap = iframeSessions instanceof Map;
-  const entries = isMap
-    ? iframeSessions.entries()
-    : Object.entries(iframeSessions || {});
-  const parentFrameIds: ReadonlyMap<string, string | undefined> | undefined =
-    isMap
-      ? (
-          iframeSessions as Map<string, string> & {
-            parentFrameIds?: ReadonlyMap<string, string | undefined>;
-          }
-        ).parentFrameIds
-      : undefined;
-  const sessionOf = (frameId) =>
-    isMap ? iframeSessions.get(frameId) : iframeSessions?.[frameId];
+  const entries =
+    iframeSessions instanceof Map
+      ? iframeSessions.entries()
+      : Object.entries(iframeSessions || {});
   for (const [frameId, frameSessionId] of entries) {
-    // A frame shares its OOPIF session's default context only when it is that
-    // session's root. A same-process child of an OOPIF (its parent maps to
-    // the same session) needs its own frame-scoped context, or the OOPIF
-    // root document would be searched twice.
-    const parentFrameId = parentFrameIds?.get(frameId);
-    const localChild =
-      frameSessionId === sessionId ||
-      (parentFrameId !== undefined &&
-        sessionOf(parentFrameId) === frameSessionId);
     contexts.push({
       sessionId: frameSessionId,
-      frameId: localChild ? frameId : undefined,
+      frameId: frameContextFrameId(
+        frameId,
+        frameSessionId,
+        sessionId,
+        iframeSessions,
+      ),
       ownerFrameId: frameId,
     });
   }

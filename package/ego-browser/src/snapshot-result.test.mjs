@@ -307,6 +307,108 @@ test("role locator validation keeps healthy trees when one frame detaches", asyn
   );
 });
 
+function nestedOopifSessions() {
+  // frame-middle is an OOPIF; frame-leaf is its same-process child, so both
+  // map to the OOPIF session, as ensureFrameSessions reports them.
+  const sessions = new Map([
+    ["frame-middle", "session:middle"],
+    ["frame-leaf", "session:middle"],
+  ]);
+  sessions.parentFrameIds = new Map([
+    ["frame-middle", "frame-main"],
+    ["frame-leaf", "frame-middle"],
+  ]);
+  return sessions;
+}
+
+test("role locator validation accepts refs in an OOPIF's same-process child frame", async () => {
+  const cdp = {
+    async sendRaw(method, params, sessionId) {
+      assert.equal(method, "Accessibility.getFullAXTree");
+      if (sessionId !== "session:middle") return { nodes: [] };
+      const leaf = params.frameId === "frame-leaf";
+      return {
+        nodes: [
+          {
+            backendDOMNodeId: leaf ? 41 : 31,
+            ignored: false,
+            role: { value: "button" },
+            name: { value: leaf ? "Button deep" : "Middle" },
+          },
+        ],
+      };
+    },
+  };
+
+  for (const ref of [
+    {
+      backendNodeId: 41,
+      frameId: "frame-leaf",
+      loc: 'role:button[name="Button deep"]',
+    },
+    {
+      backendNodeId: 31,
+      frameId: "frame-middle",
+      loc: 'role:button[name="Middle"]',
+    },
+  ]) {
+    assert.equal(
+      await validateSnapshotLocator(
+        cdp,
+        "session:page",
+        nestedOopifSessions(),
+        ref,
+      ),
+      true,
+      ref.frameId,
+    );
+  }
+  assert.equal(
+    await validateSnapshotLocator(cdp, "session:page", nestedOopifSessions(), {
+      backendNodeId: 41,
+      frameId: "frame-middle",
+      loc: 'role:button[name="Button deep"]',
+    }),
+    false,
+  );
+});
+
+test("DOM locator validation accepts refs in an OOPIF's same-process child frame", async () => {
+  const cdp = {
+    async sendRaw(method, params, sessionId) {
+      if (method === "Page.createIsolatedWorld") {
+        assert.equal(sessionId, "session:middle");
+        assert.equal(params.frameId, "frame-leaf");
+        return { executionContextId: 88 };
+      }
+      const inLeaf = sessionId === "session:middle" && params.contextId === 88;
+      if (method === "Runtime.evaluate" && params.returnByValue) {
+        return { result: { value: [inLeaf ? 1 : 0] } };
+      }
+      if (method === "Runtime.evaluate") {
+        return { result: { objectId: "locator-batch" } };
+      }
+      if (method === "Runtime.getProperties") {
+        return { result: [{ name: "0", value: { objectId: "node:41" } }] };
+      }
+      if (method === "DOM.describeNode") {
+        return { node: { backendNodeId: 41 } };
+      }
+      if (method === "Runtime.releaseObjectGroup") return {};
+      throw new Error(`unexpected CDP method: ${method}`);
+    },
+  };
+
+  assert.equal(
+    await validateSnapshotLocator(cdp, "session:page", nestedOopifSessions(), {
+      backendNodeId: 41,
+      frameId: "frame-leaf",
+      loc: "css:#deep",
+    }),
+    true,
+  );
+});
+
 test("invalid native snapshot locators are hidden without removing their refs", async () => {
   const result = {
     content: [
