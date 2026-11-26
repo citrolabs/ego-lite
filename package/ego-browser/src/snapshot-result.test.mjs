@@ -25,6 +25,7 @@ async function validateSnapshotLocator(
         index: 0,
         locator: `loc=${ref.loc}`,
         backendNodeId: ref.backendNodeId,
+        ...(ref.frameId ? { frameId: ref.frameId } : {}),
       },
     ],
   );
@@ -335,6 +336,164 @@ test("role locator validation keeps healthy trees when one frame detaches", asyn
         loc: 'role:button[name="Save"]',
       },
     ),
+    true,
+  );
+});
+
+function nestedOopifSessions() {
+  // frame-middle is an OOPIF; frame-leaf is its same-process child, so both
+  // map to the OOPIF session, as ensureFrameSessions reports them.
+  const sessions = new Map([
+    ["frame-middle", "session:middle"],
+    ["frame-leaf", "session:middle"],
+  ]);
+  sessions.parentFrameIds = new Map([
+    ["frame-middle", "frame-main"],
+    ["frame-leaf", "frame-middle"],
+  ]);
+  return sessions;
+}
+
+test("role locator validation accepts refs in an OOPIF's same-process child frame", async () => {
+  const cdp = {
+    async sendRaw(method, params, sessionId) {
+      assert.equal(method, "Accessibility.getFullAXTree");
+      if (sessionId !== "session:middle") return { nodes: [] };
+      const leaf = params.frameId === "frame-leaf";
+      return {
+        nodes: [
+          {
+            backendDOMNodeId: leaf ? 41 : 31,
+            ignored: false,
+            role: { value: "button" },
+            name: { value: leaf ? "Button deep" : "Middle" },
+          },
+        ],
+      };
+    },
+  };
+
+  for (const ref of [
+    {
+      backendNodeId: 41,
+      frameId: "frame-leaf",
+      loc: 'role:button[name="Button deep"]',
+    },
+    {
+      backendNodeId: 31,
+      frameId: "frame-middle",
+      loc: 'role:button[name="Middle"]',
+    },
+  ]) {
+    assert.equal(
+      await validateSnapshotLocator(
+        cdp,
+        "session:page",
+        nestedOopifSessions(),
+        ref,
+      ),
+      true,
+      ref.frameId,
+    );
+  }
+  assert.equal(
+    await validateSnapshotLocator(cdp, "session:page", nestedOopifSessions(), {
+      backendNodeId: 41,
+      frameId: "frame-middle",
+      loc: 'role:button[name="Button deep"]',
+    }),
+    false,
+  );
+});
+
+test("role locator validation counts a node once across nested same-process frames of an OOPIF", async () => {
+  // Page → OOPIF frame-middle → same-process frame-child → same-process
+  // frame-leaf. The OOPIF root tree and frame-child's frame-scoped tree both
+  // also list frame-leaf's button.
+  const sessions = new Map([
+    ["frame-middle", "session:middle"],
+    ["frame-child", "session:middle"],
+    ["frame-leaf", "session:middle"],
+  ]);
+  sessions.parentFrameIds = new Map([
+    ["frame-middle", "frame-main"],
+    ["frame-child", "frame-middle"],
+    ["frame-leaf", "frame-child"],
+  ]);
+  const cdp = {
+    async sendRaw(method, _params, sessionId) {
+      assert.equal(method, "Accessibility.getFullAXTree");
+      if (sessionId !== "session:middle") return { nodes: [] };
+      return {
+        nodes: [
+          {
+            backendDOMNodeId: 51,
+            ignored: false,
+            role: { value: "button" },
+            name: { value: "Leaf" },
+          },
+        ],
+      };
+    },
+  };
+
+  const ref = (frameId) => ({
+    backendNodeId: 51,
+    frameId,
+    loc: 'role:button[name="Leaf"]',
+  });
+  assert.equal(
+    await validateSnapshotLocator(
+      cdp,
+      "session:page",
+      sessions,
+      ref("frame-leaf"),
+    ),
+    true,
+  );
+  assert.equal(
+    await validateSnapshotLocator(
+      cdp,
+      "session:page",
+      sessions,
+      ref("frame-child"),
+    ),
+    false,
+  );
+});
+
+test("DOM locator validation accepts refs in an OOPIF's same-process child frame", async () => {
+  const cdp = {
+    async sendRaw(method, params, sessionId) {
+      if (method === "Page.createIsolatedWorld") {
+        assert.equal(sessionId, "session:middle");
+        assert.equal(params.frameId, "frame-leaf");
+        return { executionContextId: 88 };
+      }
+      const inLeaf = sessionId === "session:middle" && params.contextId === 88;
+      if (method === "Runtime.evaluate" && params.returnByValue) {
+        return { result: { value: [inLeaf ? 1 : 0] } };
+      }
+      if (method === "Runtime.evaluate") {
+        return { result: { objectId: "locator-batch" } };
+      }
+      if (method === "Runtime.getProperties") {
+        return { result: [{ name: "0", value: { objectId: "node:41" } }] };
+      }
+      if (method === "DOM.describeNode") {
+        return { node: { backendNodeId: 41 } };
+      }
+      if (method === "Runtime.releaseObjectGroup") return {};
+      throw new Error(`unexpected CDP method: ${method}`);
+    },
+  };
+
+  assert.equal(
+    await validateSnapshotLocator(cdp, "session:page", nestedOopifSessions(), {
+      backendNodeId: 41,
+      frameId: "frame-leaf",
+      loc: "css:#deep",
+    }),
     true,
   );
 });

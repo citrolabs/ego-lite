@@ -14,6 +14,8 @@ type PageRuntimeContext = {
   frameId?: string;
   ownerFrameId?: string;
   contextId?: number;
+  /** Set when the frame's isolated world could not be created. */
+  unavailable?: FrameNotReadyError;
 };
 
 export type LocatorBackendCandidate = {
@@ -31,6 +33,18 @@ export class ElementResolutionError extends Error {
     super(message);
     this.name = "ElementResolutionError";
     this.kind = kind;
+  }
+}
+
+/**
+ * A frame that had to be searched could not be prepared. The element may
+ * still be there, so a wait for `hidden` or `detached` must retry rather than
+ * read this as absence.
+ */
+export class FrameNotReadyError extends ElementResolutionError {
+  constructor(message: string) {
+    super(message, "transient");
+    this.name = "FrameNotReadyError";
   }
 }
 
@@ -243,7 +257,12 @@ export async function resolveElementObjectId(
       { actionability: options.actionability },
     );
   }
+  let unavailable: FrameNotReadyError | undefined;
   for (const context of contexts) {
+    if (context.unavailable) {
+      unavailable ||= context.unavailable;
+      continue;
+    }
     const result = await evaluateInContext(
       cdp,
       context,
@@ -263,6 +282,8 @@ export async function resolveElementObjectId(
       };
     }
   }
+  // A frame that could not be searched may hold the element.
+  if (unavailable) throw unavailable;
   throw new ElementResolutionError(
     `Element not found: ${selectorOrRef}`,
     "transient",
@@ -345,7 +366,10 @@ async function resolveRefObjectIdWithRecoveredFrame(
       entry.role,
       entry.name,
       `ref @${refId}`,
-      { strictGlobal: true },
+      {
+        strictGlobal: true,
+        parentFrameIds: parentFrameIdsOf(iframeSessions),
+      },
     );
   }
 
@@ -468,6 +492,7 @@ async function validateRoleLocatorBackendNodes(
 ): Promise<Set<number>> {
   const valid = new Set<number>();
   if (entries.length === 0) return valid;
+  const parentFrameIds = parentFrameIdsOf(iframeSessions);
   const available = (
     await Promise.all(
       pageContexts(sessionId, iframeSessions).map(async (context) => {
@@ -504,19 +529,13 @@ async function validateRoleLocatorBackendNodes(
         .map((node) => ({
           backendNodeId: node.backendDOMNodeId,
           frameId: context.frameId,
+          ownerFrameId: context.ownerFrameId,
           sessionId: context.sessionId,
         })),
     );
-    const framedNodeKeys = new Set(
-      rawMatches
-        .filter((match) => match.frameId)
-        .map((match) => `${match.sessionId}\u0000${match.backendNodeId}`),
-    );
-    const matches = rawMatches.filter(
-      (match) =>
-        match.frameId ||
-        !framedNodeKeys.has(`${match.sessionId}\u0000${match.backendNodeId}`),
-    );
+    // Same provenance rules as locator resolution, so a ref that resolves
+    // uniquely also validates.
+    const matches = dedupeFrameMatches(rawMatches, parentFrameIds);
     if (
       matches.length === 1 &&
       matches[0].backendNodeId === entry.candidate.backendNodeId &&
@@ -686,8 +705,12 @@ function locatorContextMatchesCandidate(
     pageSessionId,
     iframeSessions,
   );
-  const expectedFrameId =
-    expectedSessionId === pageSessionId ? candidate.frameId : undefined;
+  const expectedFrameId = frameContextFrameId(
+    candidate.frameId,
+    expectedSessionId,
+    pageSessionId,
+    iframeSessions,
+  );
   return (
     context.sessionId === expectedSessionId &&
     context.frameId === expectedFrameId
@@ -912,6 +935,32 @@ function pageSessions(sessionId, iframeSessions) {
   return sessions;
 }
 
+/**
+ * Returns the `frameId` a runtime context for `frameId` must carry. A frame
+ * uses its session's default context only when it is an OOPIF session's root.
+ * Frames in the Page session, and same-process children of an OOPIF (their
+ * parent maps to the same session), need a frame-scoped context, or the OOPIF
+ * root document would be searched in their place.
+ */
+function frameContextFrameId(
+  frameId,
+  frameSessionId,
+  pageSessionId,
+  iframeSessions,
+): string | undefined {
+  if (frameSessionId === pageSessionId) return frameId;
+  if (!(iframeSessions instanceof Map)) return undefined;
+  const parentFrameId = (
+    iframeSessions as Map<string, string> & {
+      parentFrameIds?: ReadonlyMap<string, string | undefined>;
+    }
+  ).parentFrameIds?.get(frameId);
+  return parentFrameId !== undefined &&
+    iframeSessions.get(parentFrameId) === frameSessionId
+    ? frameId
+    : undefined;
+}
+
 function pageContexts(sessionId, iframeSessions) {
   const contexts: PageRuntimeContext[] = [
     { sessionId, frameId: undefined, ownerFrameId: undefined },
@@ -923,7 +972,12 @@ function pageContexts(sessionId, iframeSessions) {
   for (const [frameId, frameSessionId] of entries) {
     contexts.push({
       sessionId: frameSessionId,
-      frameId: frameSessionId === sessionId ? frameId : undefined,
+      frameId: frameContextFrameId(
+        frameId,
+        frameSessionId,
+        sessionId,
+        iframeSessions,
+      ),
       ownerFrameId: frameId,
     });
   }
@@ -935,9 +989,17 @@ async function runtimePageContexts(
   sessionId,
   iframeSessions,
 ): Promise<PageRuntimeContext[]> {
+  // A frame that cannot be prepared is marked instead of failing the whole
+  // resolution: its error surfaces only if that frame has to be searched, so
+  // a target in the Page document or another frame still resolves.
   const contexts = pageContexts(sessionId, iframeSessions);
-  return Promise.all(
+  const settled = await Promise.allSettled(
     contexts.map((context) => runtimePageContext(cdp, context)),
+  );
+  return settled.map((result, index) =>
+    result.status === "fulfilled"
+      ? result.value
+      : { ...contexts[index], unavailable: result.reason },
   );
 }
 
@@ -946,13 +1008,8 @@ async function availableRuntimePageContexts(
   sessionId,
   iframeSessions,
 ): Promise<PageRuntimeContext[]> {
-  const settled = await Promise.allSettled(
-    pageContexts(sessionId, iframeSessions).map((context) =>
-      runtimePageContext(cdp, context),
-    ),
-  );
-  return settled.flatMap((result) =>
-    result.status === "fulfilled" ? [result.value] : [],
+  return (await runtimePageContexts(cdp, sessionId, iframeSessions)).filter(
+    (context) => !context.unavailable,
   );
 }
 
@@ -977,20 +1034,20 @@ async function runtimePageContext(
     }
     return { ...context, contextId: result.executionContextId };
   } catch (error) {
-    throw new ElementResolutionError(
+    throw new FrameNotReadyError(
       `Frame ${context.frameId} is not ready: ${error?.message || String(error)}`,
-      "transient",
     );
   }
 }
 
-function evaluateInContext(
+async function evaluateInContext(
   cdp,
   context: PageRuntimeContext,
   expression: string,
   returnByValue: boolean,
   objectGroup?: string,
 ) {
+  if (context.unavailable) throw context.unavailable;
   return send(
     cdp,
     "Runtime.evaluate",
@@ -1016,7 +1073,10 @@ async function resolveLocatorCenter(cdp, sessionId, locator, iframeSessions) {
       locator.role,
       locator.name,
       locator.raw,
-      { nameMode: locator.nameMode },
+      {
+        nameMode: locator.nameMode,
+        parentFrameIds: parentFrameIdsOf(iframeSessions),
+      },
     );
     const result = await send(
       cdp,
@@ -1091,6 +1151,7 @@ async function resolveLocatorObjectId(
         nameMode: locator.nameMode,
         strictGlobal: options.strictGlobal,
         actionability: options.actionability,
+        parentFrameIds: parentFrameIdsOf(iframeSessions),
       },
     );
     const result = await send(
@@ -1249,6 +1310,58 @@ async function findUniqueLocatorContext(
   return matches[0];
 }
 
+function parentFrameIdsOf(
+  iframeSessions,
+): ReadonlyMap<string, string | undefined> | undefined {
+  return (
+    iframeSessions as {
+      parentFrameIds?: ReadonlyMap<string, string | undefined>;
+    } | null
+  )?.parentFrameIds;
+}
+
+/** Number of known ancestors of `frameId`; -1 for the Page's own document. */
+function frameDepth(
+  frameId: string | undefined,
+  parentFrameIds: ReadonlyMap<string, string | undefined> | undefined,
+): number {
+  if (!frameId) return -1;
+  let depth = 0;
+  const seen = new Set<string>();
+  let current = parentFrameIds?.get(frameId);
+  while (current !== undefined && !seen.has(current)) {
+    seen.add(current);
+    depth += 1;
+    current = parentFrameIds?.get(current);
+  }
+  return depth;
+}
+
+/**
+ * An OOPIF session's default AX tree, and the frame-scoped tree of each of
+ * its same-process frames, can include the nodes of same-process descendant
+ * frames, which are also searched in their own frame-scoped context. Keeps
+ * one match per session and backend node, preferring the deepest owning
+ * frame so the node's own frame provenance (and iframe offset) survives.
+ */
+function dedupeFrameMatches(matches, parentFrameIds) {
+  const byKey = new Map();
+  for (const match of matches) {
+    const key = `${match.sessionId}\u0000${match.backendNodeId}`;
+    const existing = byKey.get(key);
+    if (
+      !existing ||
+      (!existing.frameId && match.frameId) ||
+      (Boolean(existing.frameId) === Boolean(match.frameId) &&
+        frameDepth(match.ownerFrameId, parentFrameIds) >
+          frameDepth(existing.ownerFrameId, parentFrameIds))
+    ) {
+      byKey.set(key, match);
+    }
+  }
+  return [...byKey.values()];
+}
+
 async function findUniqueRoleMatch(
   cdp,
   contexts,
@@ -1259,10 +1372,12 @@ async function findUniqueRoleMatch(
     nameMode = "exact",
     strictGlobal = false,
     actionability = undefined,
+    parentFrameIds = undefined,
   }: {
     nameMode?: "exact" | "substring";
     strictGlobal?: boolean;
     actionability?: ElementActionability;
+    parentFrameIds?: ReadonlyMap<string, string | undefined>;
   } = {},
 ) {
   const matchesIn = async (selectedContexts) => {
@@ -1297,7 +1412,9 @@ async function findUniqueRoleMatch(
   const rawMainMatches = await matchesIn(contexts.slice(0, 1));
   let cachedFrameMatches;
   const matchesWithFrameProvenance = async () => {
-    cachedFrameMatches ||= matchesIn(contexts.slice(1));
+    cachedFrameMatches ||= matchesIn(contexts.slice(1)).then((matches) =>
+      dedupeFrameMatches(matches, parentFrameIds),
+    );
     const frames = await cachedFrameMatches;
     const framedNodeKeys = new Set(
       frames

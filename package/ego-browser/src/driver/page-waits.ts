@@ -5,6 +5,7 @@ import {
 } from "../browser-runtime.js";
 import {
   ElementResolutionError,
+  FrameNotReadyError,
   resolveElementObjectId,
 } from "../element-resolver.js";
 import { type RefMap } from "../ref-map.js";
@@ -202,7 +203,11 @@ export async function waitForSelectorInPage(
       if (!isRetryableSelectorWaitError(error, sessionId)) {
         throw error;
       }
-      if (error instanceof ElementResolutionError) {
+      if (error instanceof FrameNotReadyError) {
+        // A frame that could not be searched may still hold the element, so
+        // this is not absence: re-enumerate frames and retry.
+        refreshFrames = true;
+      } else if (error instanceof ElementResolutionError) {
         if (state === "detached" || state === "hidden") return true;
         // The element may live in an iframe that appears later; re-enumerate
         // frames at a throttled cadence while polling.

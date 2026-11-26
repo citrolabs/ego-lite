@@ -286,7 +286,6 @@ export async function clickInPage(
       target.sessionId,
       target.frameId,
       point,
-      point.local,
       iframeSessions,
     );
     const buttons = pressedButtons(button);
@@ -304,7 +303,14 @@ export async function clickInPage(
       },
       cursorPoint,
     );
-    if (target.frameId && target.sessionId === sessionId) {
+    if (
+      frameNeedsSessionOffset(
+        target.sessionId,
+        target.frameId,
+        sessionId,
+        iframeSessions,
+      )
+    ) {
       // Moving into a same-process iframe can adjust the outer document's
       // scroll position. Translate the frame-local point again before the
       // press so native input uses the post-hover viewport coordinates.
@@ -314,6 +320,7 @@ export async function clickInPage(
         target.frameId,
         point.local,
         sessionId,
+        iframeSessions,
       );
       point = { ...pagePoint, local: point.local };
       await assertClickTargetActionable(
@@ -323,14 +330,26 @@ export async function clickInPage(
         point.local,
         { hitTest: !options.force },
       );
-      await dispatchMouseEvent(services, target.sessionId, {
-        type: "mouseMoved",
-        x: point.x,
-        y: point.y,
-        button: "none",
-        buttons: 0,
-        modifiers,
-      });
+      await dispatchMouseEvent(
+        services,
+        target.sessionId,
+        {
+          type: "mouseMoved",
+          x: point.x,
+          y: point.y,
+          button: "none",
+          buttons: 0,
+          modifiers,
+        },
+        await cursorPointForElement(
+          services,
+          sessionId,
+          target.sessionId,
+          target.frameId,
+          point,
+          iframeSessions,
+        ),
+      );
     }
     for (let count = 1; count <= clickCount; count += 1) {
       // Moving the pointer or completing an earlier click can change layout.
@@ -516,6 +535,7 @@ export async function fillInPage(
         resolved.frameId,
         result?.cursorPoint,
         sessionId,
+        iframeSessions,
       ),
     );
     const status = typeof result === "string" ? result : result?.status;
@@ -1484,6 +1504,7 @@ async function resolveElementPoint(
         frameId,
         scroll,
         pageSessionId,
+        iframeSessions,
       );
       return dispatchWheelMotion(wheelMotionServices(services, sessionId), {
         x: pageScrollPoint.x,
@@ -1502,6 +1523,7 @@ async function resolveElementPoint(
     frameId,
     point,
     pageSessionId,
+    iframeSessions,
   );
   return { ...pagePoint, local: point };
 }
@@ -1713,12 +1735,44 @@ async function ensureFrameOwnerInView(
   }
 }
 
+/**
+ * Whether `frameId` is a non-root frame of `sessionId`, so a point local to
+ * its document must be offset by its iframe box to reach the viewport that
+ * input dispatched to `sessionId` uses. That holds for every frame of the
+ * Page session and for same-process children of an OOPIF (their parent maps
+ * to the same session); an OOPIF root already is its session's viewport.
+ */
+function frameNeedsSessionOffset(
+  sessionId: string,
+  frameId: string | undefined,
+  pageSessionId: string,
+  iframeSessions?: Map<string, string>,
+): frameId is string {
+  if (!frameId) return false;
+  if (sessionId === pageSessionId) return true;
+  if (!iframeSessions) return false;
+  const parentFrameId = (
+    iframeSessions as Map<string, string> & {
+      parentFrameIds?: ReadonlyMap<string, string | undefined>;
+    }
+  ).parentFrameIds?.get(frameId);
+  return (
+    parentFrameId !== undefined &&
+    iframeSessions.get(parentFrameId) === sessionId
+  );
+}
+
+/**
+ * Translates a point local to `frameId`'s document into the root viewport of
+ * `sessionId`, the session that receives input for that frame.
+ */
 async function pagePointForFrame(
   services: PageActionServices,
   sessionId: string,
   frameId: string | undefined,
   point: { x?: unknown; y?: unknown } | null | undefined,
   pageSessionId = sessionId,
+  iframeSessions?: Map<string, string>,
 ): Promise<{ x: number; y: number } | null | undefined> {
   if (
     !point ||
@@ -1726,16 +1780,13 @@ async function pagePointForFrame(
     !Number.isFinite(point.x) ||
     typeof point.y !== "number" ||
     !Number.isFinite(point.y) ||
-    !frameId ||
-    sessionId !== pageSessionId
+    !frameNeedsSessionOffset(sessionId, frameId, pageSessionId, iframeSessions)
   ) {
     return point as { x: number; y: number } | null | undefined;
   }
-  const owner = await services.cdp(
-    "DOM.getFrameOwner",
-    { frameId },
-    pageSessionId,
-  );
+  // DOM.getBoxModel reports the owner box in the session's root viewport, so
+  // one lookup covers any depth of same-process nesting.
+  const owner = await services.cdp("DOM.getFrameOwner", { frameId }, sessionId);
   const backendNodeId = owner?.backendNodeId;
   if (backendNodeId === undefined || backendNodeId === null) {
     throw new Error(`page action could not resolve iframe ${frameId}`);
@@ -1743,7 +1794,7 @@ async function pagePointForFrame(
   const box = await services.cdp(
     "DOM.getBoxModel",
     { backendNodeId },
-    pageSessionId,
+    sessionId,
   );
   const content = box?.model?.content;
   if (!Array.isArray(content) || content.length < 2) {
@@ -1758,7 +1809,6 @@ async function cursorPointForElement(
   targetSessionId: string,
   frameId: string | undefined,
   inputPoint: { x: number; y: number },
-  localPoint: { x: number; y: number },
   iframeSessions: Map<string, string>,
 ): Promise<{ x: number; y: number }> {
   if (!frameId || targetSessionId === pageSessionId) return inputPoint;
@@ -1786,7 +1836,9 @@ async function cursorPointForElement(
   }
 
   try {
-    let point = localPoint;
+    // inputPoint is already in the target session's root viewport; each step
+    // below offsets it by that session's root iframe within its parent.
+    let point: { x: number; y: number } = inputPoint;
     let currentFrameId: string | undefined = frameId;
     let currentSessionId = targetSessionId;
     const visited = new Set<string>();

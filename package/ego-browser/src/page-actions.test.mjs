@@ -496,3 +496,103 @@ test("Page click renders an OOPIF cursor when FrameTree omits its ancestor ifram
   );
   assert.deepEqual(cursorPoints, [{ x: 410, y: 620 }]);
 });
+
+test("Page click offsets a same-process child of an OOPIF into the OOPIF viewport", async () => {
+  // page -> frame-runner (OOPIF, session:runner) -> frame-leaf (same process
+  // as the runner). The button sits at (10, 20) inside frame-leaf, whose
+  // iframe sits at (100, 200) inside the runner, which sits at (300, 400) in
+  // the Page.
+  const calls = [];
+  const cursorPoints = [];
+  const services = {
+    async cdp(method, params = {}, sessionId) {
+      calls.push([method, params, sessionId]);
+      if (method === "Accessibility.getFullAXTree") {
+        return sessionId === "session:runner" && params.frameId === "frame-leaf"
+          ? {
+              nodes: [
+                {
+                  role: { value: "button" },
+                  name: { value: "Button deep" },
+                  backendDOMNodeId: 21,
+                },
+              ],
+            }
+          : { nodes: [] };
+      }
+      if (method === "DOM.resolveNode") {
+        return { object: { objectId: "leaf-button" } };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        if (params.functionDeclaration.includes("actionable: false")) {
+          return { result: { value: { actionable: true } } };
+        }
+        return params.functionDeclaration.includes("getBoundingClientRect")
+          ? { result: { value: { x: 10, y: 20 } } }
+          : { result: { value: { ok: true } } };
+      }
+      if (method === "Page.getFrameTree") {
+        return { frameTree: { frame: { id: "frame-page" } } };
+      }
+      if (method === "DOM.getFrameOwner") {
+        if (params.frameId === "frame-leaf") {
+          assert.equal(sessionId, "session:runner");
+          return { backendNodeId: 90 };
+        }
+        if (params.frameId === "frame-runner") {
+          assert.equal(sessionId, "session:page");
+          return { backendNodeId: 91 };
+        }
+        throw new Error(`unexpected frame owner ${params.frameId}`);
+      }
+      if (method === "DOM.getBoxModel") {
+        const [x, y] = params.backendNodeId === 90 ? [100, 200] : [300, 400];
+        return {
+          model: { content: [x, y, x + 200, y, x + 200, y + 200, x, y + 200] },
+        };
+      }
+      return {};
+    },
+    async showAgentMousePosition(x, y) {
+      cursorPoints.push({ x, y });
+    },
+    async showAgentTaskState() {},
+    async sleep() {},
+  };
+
+  const iframeSessions = new Map([
+    ["frame-runner", "session:runner"],
+    ["frame-leaf", "session:runner"],
+  ]);
+  iframeSessions.parentFrameIds = new Map([
+    ["frame-runner", "frame-page"],
+    ["frame-leaf", "frame-runner"],
+  ]);
+
+  await clickInPage(
+    services,
+    "session:page",
+    new RefMap(),
+    'loc=role:button[name="Button deep"]',
+    {},
+    0,
+    iframeSessions,
+  );
+
+  const pointerEvents = calls
+    .filter(([method]) => method === "Input.dispatchMouseEvent")
+    .map(([, params, sessionId]) => ({ params, sessionId }));
+  assert(pointerEvents.length > 0);
+  assert(
+    pointerEvents.every(
+      ({ params, sessionId }) =>
+        sessionId === "session:runner" && params.x === 110 && params.y === 220,
+    ),
+    "input reaches the OOPIF at the child iframe's offset, not its local point",
+  );
+  assert(cursorPoints.length > 0);
+  assert(
+    cursorPoints.every(({ x, y }) => x === 410 && y === 620),
+    "every cursor move renders in the Page viewport",
+  );
+});
