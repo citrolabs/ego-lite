@@ -7009,6 +7009,39 @@ test("Page click gives up when neither wheel input nor the fallback scroll moves
   });
 });
 
+test("Page fill falls back to a programmatic scroll when the page acknowledges wheel input slowly", async () => {
+  await withFixture(async (fixture) => {
+    const task = taskForRound(fixture, "round-a");
+    const page = await openTestPage(task, "https://example.test/map");
+    fixture.trapClickPoints();
+    // A throttled Task Space renderer acknowledges each wheel event only on
+    // its next frame, about once a second.
+    fixture.setWheelDispatchDuration(1_000);
+    const startedAt = fixture.services.now();
+
+    await page.fill("#below-the-map", "hello", { timeout: 3_000 });
+
+    const elapsed = fixture.services.now() - startedAt;
+    assert(elapsed < 3_000, `fill finished within its budget: ${elapsed}ms`);
+    const wheelCalls = fixture.calls.filter(
+      ([kind, method, params]) =>
+        kind === "cdp" &&
+        method === "Input.dispatchMouseEvent" &&
+        params.type === "mouseWheel",
+    );
+    assert.equal(
+      wheelCalls.length,
+      1,
+      "the motion stops after the first slow wheel event",
+    );
+    const fallbacks = fixture.calls.filter(
+      ([kind, method]) =>
+        kind === "cdp" && method === "DOM.scrollIntoViewIfNeeded",
+    );
+    assert.equal(fallbacks.length, 1, "the fallback scroll runs once");
+  });
+});
+
 test("Page fill stops auto-scrolling at the action deadline and reports the real duration", async () => {
   await withFixture(async (fixture) => {
     const task = taskForRound(fixture, "round-a");
@@ -7017,10 +7050,24 @@ test("Page fill stops auto-scrolling at the action deadline and reports the real
     // A map that zooms on every wheel event keeps the renderer busy, so each
     // dispatched wheel event takes about two seconds to be acknowledged.
     fixture.setWheelDispatchDuration(2_000);
+    // The programmatic scroll is accepted but changes nothing either, so the
+    // action can only end at its deadline.
+    const stuck = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId, timeoutMs) {
+        const result = await fixture.services.cdp(
+          method,
+          params,
+          sessionId,
+          timeoutMs,
+        );
+        if (method === "DOM.scrollIntoViewIfNeeded") fixture.trapClickPoints();
+        return result;
+      },
+    }).page(page.label);
     const startedAt = fixture.services.now();
 
     await assert.rejects(
-      () => page.fill("#below-the-map", "hello", { timeout: 3_000 }),
+      () => stuck.fill("#below-the-map", "hello", { timeout: 3_000 }),
       (error) => {
         const elapsed = fixture.services.now() - startedAt;
         const reported = Number(
