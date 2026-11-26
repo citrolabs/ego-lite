@@ -276,6 +276,17 @@ export async function clickInPage(
         iframeSessions,
       },
     );
+    if (target.frameId && !options.force) {
+      // The frame-local hit test cannot see overlays in parent documents.
+      await assertFrameOwnersReceivePointerEvents(
+        services,
+        sessionId,
+        target.frameId,
+        point.local,
+        iframeSessions,
+        "page.click",
+      );
+    }
     const cursorPoint = await cursorPointForElement(
       services,
       sessionId,
@@ -319,6 +330,16 @@ export async function clickInPage(
         point.local,
         { hitTest: !options.force },
       );
+      if (!options.force) {
+        await assertFrameOwnersReceivePointerEvents(
+          services,
+          sessionId,
+          target.frameId,
+          point.local,
+          iframeSessions,
+          "page.click",
+        );
+      }
       await dispatchMouseEvent(services, target.sessionId, {
         type: "mouseMoved",
         x: point.x,
@@ -949,6 +970,14 @@ async function clickResolvedElement(
     sessionId,
     objectId,
     point.local,
+  );
+  await assertFrameOwnersReceivePointerEvents(
+    services,
+    pageSessionId,
+    frameId,
+    point.local,
+    iframeSessions,
+    "page.fill",
   );
   await assertSafeFillActivationTarget(
     services,
@@ -1636,30 +1665,12 @@ async function ensureFrameOwnerInView(
   const ownerSessionId = parentFrameId
     ? iframeSessions.get(parentFrameId) || pageSessionId
     : pageSessionId;
-  const owner = await services.cdp(
-    "DOM.getFrameOwner",
-    { frameId },
+  const objectId = await resolveFrameOwner(
+    services,
     ownerSessionId,
+    frameId,
+    actionName,
   );
-  const backendNodeId = owner?.backendNodeId;
-  if (backendNodeId === undefined || backendNodeId === null) {
-    throw new ElementResolutionError(
-      `${actionName} failed: iframe is not available`,
-      "transient",
-    );
-  }
-  const resolved = await services.cdp(
-    "DOM.resolveNode",
-    { backendNodeId, objectGroup: "ego-browser" },
-    ownerSessionId,
-  );
-  const objectId = resolved?.object?.objectId;
-  if (!objectId) {
-    throw new ElementResolutionError(
-      `${actionName} failed: iframe is not available`,
-      "transient",
-    );
-  }
   const source = `function() {
     ${SCROLL_TARGET_HELPERS}
     if (!this.isConnected) return { error: "iframe is not connected" };
@@ -1696,6 +1707,140 @@ async function ensureFrameOwnerInView(
     });
   } finally {
     await releaseObject(services, ownerSessionId, objectId);
+  }
+}
+
+/** Resolve the `<iframe>` element that owns `frameId` in its parent's session. */
+async function resolveFrameOwner(
+  services: PageActionServices,
+  ownerSessionId: string,
+  frameId: string,
+  actionName: string,
+): Promise<string> {
+  const owner = await services.cdp(
+    "DOM.getFrameOwner",
+    { frameId },
+    ownerSessionId,
+  );
+  const backendNodeId = owner?.backendNodeId;
+  if (backendNodeId === undefined || backendNodeId === null) {
+    throw new ElementResolutionError(
+      `${actionName} failed: iframe is not available`,
+      "transient",
+    );
+  }
+  const resolved = await services.cdp(
+    "DOM.resolveNode",
+    { backendNodeId, objectGroup: "ego-browser" },
+    ownerSessionId,
+  );
+  const objectId = resolved?.object?.objectId;
+  if (!objectId) {
+    throw new ElementResolutionError(
+      `${actionName} failed: iframe is not available`,
+      "transient",
+    );
+  }
+  return objectId;
+}
+
+/**
+ * Hit-test every ancestor document of an iframe target at the action point.
+ *
+ * The frame-local hit test only sees the target's own document, but native
+ * input is routed from the top document down: an overlay in a parent document
+ * that covers the iframe receives the click instead. Starting from the
+ * target's frame-local point, each step translates the point into the owner
+ * `<iframe>` element's document and requires that the element hit there is
+ * that iframe. A point that falls outside an ancestor's viewport is left to
+ * the existing viewport handling, so this check only adds interception
+ * failures and never rejects a click it cannot place.
+ */
+async function assertFrameOwnersReceivePointerEvents(
+  services: PageActionServices,
+  pageSessionId: string,
+  frameId: string | undefined,
+  localPoint: { x: number; y: number },
+  iframeSessions: Map<string, string>,
+  actionName: string,
+): Promise<void> {
+  const parentFrameIds = (
+    iframeSessions as Map<string, string> & {
+      parentFrameIds?: ReadonlyMap<string, string | undefined>;
+    }
+  ).parentFrameIds;
+  const source = `function frameOwnerReceivesPointer(point) {
+    ${HIT_TARGET_HELPERS}
+    if (!this.isConnected) return { error: "iframe is not connected" };
+    const view = this.ownerDocument.defaultView;
+    if (!view) return { outside: true };
+    const rect = this.getBoundingClientRect();
+    const style = view.getComputedStyle(this);
+    const scaleX = this.offsetWidth > 0 ? rect.width / this.offsetWidth : 1;
+    const scaleY = this.offsetHeight > 0 ? rect.height / this.offsetHeight : 1;
+    const ownerPoint = {
+      x: rect.left + (this.clientLeft + (parseFloat(style.paddingLeft) || 0) + point.x) * scaleX,
+      y: rect.top + (this.clientTop + (parseFloat(style.paddingTop) || 0) + point.y) * scaleY
+    };
+    if (
+      !(ownerPoint.x >= 0 && ownerPoint.y >= 0 &&
+        ownerPoint.x < view.innerWidth && ownerPoint.y < view.innerHeight)
+    ) return { outside: true };
+    const interceptor = interceptingElementAtPoint(this, ownerPoint);
+    if (interceptor) {
+      return { error: describeHitTarget(interceptor) + " intercepts pointer events" };
+    }
+    return ownerPoint;
+  }`;
+  let currentFrameId = frameId;
+  let point = localPoint;
+  const visited = new Set<string>();
+  while (currentFrameId && !visited.has(currentFrameId)) {
+    visited.add(currentFrameId);
+    const parentFrameId = parentFrameIds?.get(currentFrameId);
+    const parentIsFrame =
+      parentFrameId !== undefined && iframeSessions.has(parentFrameId);
+    const ownerSessionId = parentIsFrame
+      ? iframeSessions.get(parentFrameId!) || pageSessionId
+      : pageSessionId;
+    const objectId = await resolveFrameOwner(
+      services,
+      ownerSessionId,
+      currentFrameId,
+      actionName,
+    );
+    let result: any;
+    try {
+      const response = await services.cdp(
+        "Runtime.callFunctionOn",
+        {
+          functionDeclaration: source,
+          objectId,
+          arguments: [{ value: point }],
+          returnByValue: true,
+          awaitPromise: false,
+        },
+        ownerSessionId,
+      );
+      result = runtimeValue(response, source);
+    } finally {
+      await releaseObject(services, ownerSessionId, objectId);
+    }
+    if (typeof result?.error === "string") {
+      throw new ElementResolutionError(
+        `${actionName} failed: ${result.error}`,
+        "transient",
+      );
+    }
+    if (
+      result?.outside ||
+      !Number.isFinite(result?.x) ||
+      !Number.isFinite(result?.y)
+    ) {
+      return;
+    }
+    point = { x: result.x, y: result.y };
+    currentFrameId = parentIsFrame ? parentFrameId : undefined;
   }
 }
 

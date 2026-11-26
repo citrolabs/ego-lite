@@ -309,6 +309,242 @@ test("Page click translates same-process iframe coordinates to the Page viewport
   assert.deepEqual(states, ["Clicking element"]);
 });
 
+test("Page click fails closed when a parent-document overlay covers a same-process iframe target", async () => {
+  const calls = [];
+  const services = {
+    async cdp(method, params = {}, sessionId) {
+      calls.push([method, params, sessionId]);
+      if (method === "Accessibility.getFullAXTree") {
+        return params.frameId === "frame-child"
+          ? {
+              nodes: [
+                {
+                  role: { value: "button" },
+                  name: { value: "Check" },
+                  backendDOMNodeId: 21,
+                },
+              ],
+            }
+          : { nodes: [] };
+      }
+      if (method === "DOM.resolveNode") {
+        return {
+          object: {
+            objectId:
+              params.backendNodeId === 90 ? "iframe-owner" : "iframe-button",
+          },
+        };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        if (params.functionDeclaration.includes("frameOwnerReceivesPointer")) {
+          return {
+            result: {
+              value: { error: '<div id="ov"> intercepts pointer events' },
+            },
+          };
+        }
+        if (params.functionDeclaration.includes("actionable: false")) {
+          return { result: { value: { actionable: true } } };
+        }
+        // The iframe's own document reports the button as the hit target.
+        return params.functionDeclaration.includes("getBoundingClientRect")
+          ? { result: { value: { x: 10, y: 20 } } }
+          : { result: { value: { ok: true } } };
+      }
+      if (method === "DOM.getFrameOwner") return { backendNodeId: 90 };
+      if (method === "DOM.getBoxModel") {
+        return {
+          model: { content: [100, 200, 300, 200, 300, 400, 100, 400] },
+        };
+      }
+      return {};
+    },
+    async showAgentMousePosition() {},
+    async showAgentTaskState() {},
+    async sleep() {},
+  };
+
+  await assert.rejects(
+    () =>
+      clickInPage(
+        services,
+        "session:page",
+        new RefMap(),
+        'loc=role:button[name="Check"]',
+        {},
+        0,
+        new Map([["frame-child", "session:page"]]),
+      ),
+    (error) => {
+      assert.equal(error.name, "ElementResolutionError");
+      assert.equal(error.kind, "transient");
+      assert.equal(
+        error.message,
+        'page.click failed: <div id="ov"> intercepts pointer events',
+      );
+      return true;
+    },
+  );
+  const ownerCheck = calls.find(
+    ([method, params]) =>
+      method === "Runtime.callFunctionOn" &&
+      params.functionDeclaration.includes("frameOwnerReceivesPointer"),
+  );
+  assert.equal(ownerCheck[1].objectId, "iframe-owner");
+  assert.equal(ownerCheck[2], "session:page");
+  assert.deepEqual(ownerCheck[1].arguments, [{ value: { x: 10, y: 20 } }]);
+  assert.equal(
+    calls.some(([method]) => method === "Input.dispatchMouseEvent"),
+    false,
+    "no pointer input reaches the parent overlay",
+  );
+});
+
+test("Page click hit-tests every ancestor document of a nested OOPIF target", async () => {
+  const ownerChecks = [];
+  const services = {
+    async cdp(method, params = {}, sessionId) {
+      if (method === "Accessibility.getFullAXTree") {
+        return sessionId === "session:map"
+          ? {
+              nodes: [
+                {
+                  role: { value: "button" },
+                  name: { value: "Run nested OOPIF action" },
+                  backendDOMNodeId: 21,
+                },
+              ],
+            }
+          : { nodes: [] };
+      }
+      if (method === "DOM.getFrameOwner") {
+        return { backendNodeId: params.frameId === "frame-map" ? 90 : 91 };
+      }
+      if (method === "DOM.resolveNode") {
+        return { object: { objectId: `node-${params.backendNodeId}` } };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        if (params.functionDeclaration.includes("frameOwnerReceivesPointer")) {
+          ownerChecks.push([
+            params.objectId,
+            sessionId,
+            params.arguments[0].value,
+          ]);
+          return {
+            result: {
+              value:
+                params.objectId === "node-90"
+                  ? { x: 110, y: 220 }
+                  : {
+                      error:
+                        '<div class="layui-layer-shade"> intercepts pointer events',
+                    },
+            },
+          };
+        }
+        if (params.functionDeclaration.includes("actionable: false")) {
+          return { result: { value: { actionable: true } } };
+        }
+        return params.functionDeclaration.includes("getBoundingClientRect")
+          ? { result: { value: { x: 10, y: 20 } } }
+          : { result: { value: { ok: true } } };
+      }
+      return {};
+    },
+    async showAgentMousePosition() {},
+    async showAgentTaskState() {},
+    async sleep() {},
+  };
+  const iframeSessions = new Map([
+    ["frame-demo", "session:runner"],
+    ["frame-map", "session:map"],
+  ]);
+  iframeSessions.parentFrameIds = new Map([
+    ["frame-demo", "frame-page"],
+    ["frame-map", "frame-demo"],
+  ]);
+
+  await assert.rejects(
+    () =>
+      clickInPage(
+        services,
+        "session:page",
+        new RefMap(),
+        'loc=role:button[name="Run nested OOPIF action"]',
+        {},
+        0,
+        iframeSessions,
+      ),
+    /page\.click failed: <div class="layui-layer-shade"> intercepts pointer events/,
+  );
+  assert.deepEqual(ownerChecks, [
+    ["node-90", "session:runner", { x: 10, y: 20 }],
+    ["node-91", "session:page", { x: 110, y: 220 }],
+  ]);
+});
+
+test("Page click force skips the parent-document hit test of an iframe target", async () => {
+  const calls = [];
+  const services = {
+    async cdp(method, params = {}, sessionId) {
+      calls.push([method, params, sessionId]);
+      if (method === "Accessibility.getFullAXTree") {
+        return params.frameId === "frame-child"
+          ? {
+              nodes: [
+                {
+                  role: { value: "button" },
+                  name: { value: "Check" },
+                  backendDOMNodeId: 21,
+                },
+              ],
+            }
+          : { nodes: [] };
+      }
+      if (method === "DOM.resolveNode") {
+        return { object: { objectId: "iframe-button" } };
+      }
+      if (method === "Runtime.callFunctionOn") {
+        if (params.functionDeclaration.includes("actionable: false")) {
+          return { result: { value: { actionable: true } } };
+        }
+        return params.functionDeclaration.includes("getBoundingClientRect")
+          ? { result: { value: { x: 10, y: 20 } } }
+          : { result: { value: { ok: true } } };
+      }
+      if (method === "DOM.getFrameOwner") return { backendNodeId: 90 };
+      if (method === "DOM.getBoxModel") {
+        return {
+          model: { content: [100, 200, 300, 200, 300, 400, 100, 400] },
+        };
+      }
+      return {};
+    },
+    async showAgentMousePosition() {},
+    async showAgentTaskState() {},
+    async sleep() {},
+  };
+
+  await clickInPage(
+    services,
+    "session:page",
+    new RefMap(),
+    'loc=role:button[name="Check"]',
+    { force: true },
+    0,
+    new Map([["frame-child", "session:page"]]),
+  );
+
+  assert.equal(
+    calls.some(
+      ([method, params]) =>
+        method === "Runtime.callFunctionOn" &&
+        params.functionDeclaration.includes("frameOwnerReceivesPointer"),
+    ),
+    false,
+  );
+});
+
 test("Page click keeps raw-selector OOPIF input local but renders its cursor in the Page viewport", async () => {
   const calls = [];
   const cursorPoints = [];
