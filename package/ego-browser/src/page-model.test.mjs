@@ -6815,6 +6815,60 @@ test("a subtree snapshot whose root document commits away is stale, not retried 
   });
 });
 
+test("a subtree root pruned with its superseded document is stale, not retried", async () => {
+  await withFixture(async (fixture) => {
+    let loaderId = "before";
+    const requestedRoots = [];
+    const baseCdp = fixture.services.cdp;
+    const bigRefs = () =>
+      Array.from({ length: 900 }, (_, index) => ({
+        refId: index + 1,
+        backendNodeId: index + 1,
+        frameId: "main",
+      }));
+    const task = taskForRound(fixture, "round-a", {
+      async cdp(method, params, sessionId) {
+        if (method === "Page.getFrameTree")
+          return { frameTree: { frame: { id: "main", loaderId } } };
+        return baseCdp(method, params, sessionId);
+      },
+      async snapshot(options) {
+        const refs = bigRefs();
+        if (options.scope === "subtree") {
+          requestedRoots.push(options.root);
+          // The navigation commits while the subtree capture is in flight.
+          loaderId = "after";
+        }
+        return {
+          content: refs.map((ref) => `button [ref=${ref.refId}]`).join("\n"),
+          refs,
+        };
+      },
+    });
+    const page = await openTestPage(task, "https://example.test/big");
+    await page.snapshot({ scope: "full_page" });
+
+    await assert.rejects(
+      () => page.snapshot({ scope: "subtree", root: "@1" }),
+      (error) => {
+        assert.match(error.message, /Stale ref: @1; take a new snapshot/);
+        assert.equal(error.kind, "permanent");
+        return true;
+      },
+    );
+    assert.deepEqual(
+      requestedRoots,
+      [1],
+      "the pruned root's old backend id is not reused for a retry",
+    );
+    assert.equal(
+      fixture.services.pageRefs.isInvalidated(page.targetId, "1"),
+      false,
+      "the root ref was pruned rather than kept as a tombstone",
+    );
+  });
+});
+
 test("a page that keeps navigating during snapshot captures fails after bounded retries", async () => {
   await withFixture(async (fixture) => {
     let loaderId = 0;
