@@ -280,6 +280,17 @@ export async function clickInPage(
         iframeSessions,
       },
     );
+    if (target.frameId && !options.force) {
+      // The frame-local hit test cannot see overlays in parent documents.
+      await assertFrameOwnersReceivePointerEvents(
+        services,
+        sessionId,
+        target.frameId,
+        point.local,
+        iframeSessions,
+        "page.click",
+      );
+    }
     const cursorPoint = await cursorPointForElement(
       services,
       sessionId,
@@ -323,6 +334,16 @@ export async function clickInPage(
         point.local,
         { hitTest: !options.force },
       );
+      if (!options.force) {
+        await assertFrameOwnersReceivePointerEvents(
+          services,
+          sessionId,
+          target.frameId,
+          point.local,
+          iframeSessions,
+          "page.click",
+        );
+      }
       await dispatchMouseEvent(services, target.sessionId, {
         type: "mouseMoved",
         x: point.x,
@@ -331,6 +352,17 @@ export async function clickInPage(
         buttons: 0,
         modifiers,
       });
+    } else if (target.frameId && !options.force) {
+      // Hovering an OOPIF target can open an overlay in a parent document
+      // after the first check; recheck the ancestors before the press.
+      await assertFrameOwnersReceivePointerEvents(
+        services,
+        sessionId,
+        target.frameId,
+        point.local,
+        iframeSessions,
+        "page.click",
+      );
     }
     for (let count = 1; count <= clickCount; count += 1) {
       // Moving the pointer or completing an earlier click can change layout.
@@ -953,6 +985,14 @@ async function clickResolvedElement(
     sessionId,
     objectId,
     point.local,
+  );
+  await assertFrameOwnersReceivePointerEvents(
+    services,
+    pageSessionId,
+    frameId,
+    point.local,
+    iframeSessions,
+    "page.fill",
   );
   await assertSafeFillActivationTarget(
     services,
@@ -1650,30 +1690,12 @@ async function ensureFrameOwnerInView(
   const ownerSessionId = parentFrameId
     ? iframeSessions.get(parentFrameId) || pageSessionId
     : pageSessionId;
-  const owner = await services.cdp(
-    "DOM.getFrameOwner",
-    { frameId },
+  const objectId = await resolveFrameOwner(
+    services,
     ownerSessionId,
+    frameId,
+    actionName,
   );
-  const backendNodeId = owner?.backendNodeId;
-  if (backendNodeId === undefined || backendNodeId === null) {
-    throw new ElementResolutionError(
-      `${actionName} failed: iframe is not available`,
-      "transient",
-    );
-  }
-  const resolved = await services.cdp(
-    "DOM.resolveNode",
-    { backendNodeId, objectGroup: "ego-browser" },
-    ownerSessionId,
-  );
-  const objectId = resolved?.object?.objectId;
-  if (!objectId) {
-    throw new ElementResolutionError(
-      `${actionName} failed: iframe is not available`,
-      "transient",
-    );
-  }
   const source = `function() {
     ${SCROLL_TARGET_HELPERS}
     if (!this.isConnected) return { error: "iframe is not connected" };
@@ -1710,6 +1732,304 @@ async function ensureFrameOwnerInView(
     });
   } finally {
     await releaseObject(services, ownerSessionId, objectId);
+  }
+}
+
+/** Resolve the `<iframe>` element that owns `frameId` in its parent's session. */
+async function resolveFrameOwner(
+  services: PageActionServices,
+  ownerSessionId: string,
+  frameId: string,
+  actionName: string,
+): Promise<string> {
+  const owner = await services.cdp(
+    "DOM.getFrameOwner",
+    { frameId },
+    ownerSessionId,
+  );
+  const backendNodeId = owner?.backendNodeId;
+  if (backendNodeId === undefined || backendNodeId === null) {
+    throw new ElementResolutionError(
+      `${actionName} failed: iframe is not available`,
+      "transient",
+    );
+  }
+  const resolved = await services.cdp(
+    "DOM.resolveNode",
+    { backendNodeId, objectGroup: "ego-browser" },
+    ownerSessionId,
+  );
+  const objectId = resolved?.object?.objectId;
+  if (!objectId) {
+    throw new ElementResolutionError(
+      `${actionName} failed: iframe is not available`,
+      "transient",
+    );
+  }
+  return objectId;
+}
+
+/**
+ * Hit-test every ancestor document of an iframe target at the action point.
+ *
+ * The frame-local hit test only sees the target's own document, but native
+ * input is routed from the top document down: an overlay in a parent document
+ * that covers the iframe receives the click instead. Starting from the
+ * target's frame-local point, each step translates the point into the owner
+ * `<iframe>` element's document and requires that the element hit there is
+ * that iframe. A point that falls outside an ancestor's viewport is left to
+ * the existing viewport handling, so this check only adds interception
+ * failures and never rejects a click it cannot place.
+ */
+async function assertFrameOwnersReceivePointerEvents(
+  services: PageActionServices,
+  pageSessionId: string,
+  frameId: string | undefined,
+  localPoint: { x: number; y: number },
+  iframeSessions: Map<string, string>,
+  actionName: string,
+): Promise<void> {
+  const parentFrameIds = (
+    iframeSessions as Map<string, string> & {
+      parentFrameIds?: ReadonlyMap<string, string | undefined>;
+    }
+  ).parentFrameIds;
+  const source = `function frameOwnerReceivesPointer(point, quad, rootQuad) {
+    ${HIT_TARGET_HELPERS}
+    if (!this.isConnected) return { error: "iframe is not connected" };
+    const view = this.ownerDocument.defaultView;
+    if (!view) return { outside: true };
+    const rect = this.getBoundingClientRect();
+    const style = view.getComputedStyle(this);
+    // Point in the iframe's untransformed border box.
+    const u = this.clientLeft + (parseFloat(style.paddingLeft) || 0) + point.x;
+    const v = this.clientTop + (parseFloat(style.paddingTop) || 0) + point.y;
+    const isQuad = (value) =>
+      Array.isArray(value) && value.length >= 8 &&
+      value.every((entry) => Number.isFinite(entry));
+    // Projective map of the unit square onto a quad whose corners are
+    // top-left, top-right, bottom-right, bottom-left. A CSS perspective makes
+    // the quad a general quadrilateral rather than a parallelogram, so an
+    // affine map through three corners would place the point wrongly.
+    const squareToQuad = (q) => {
+      const [x0, y0, x1, y1, x2, y2, x3, y3] = q;
+      const sx = x0 - x1 + x2 - x3;
+      const sy = y0 - y1 + y2 - y3;
+      let g = 0;
+      let h = 0;
+      if (Math.abs(sx) > 1e-9 || Math.abs(sy) > 1e-9) {
+        const dx1 = x1 - x2;
+        const dx2 = x3 - x2;
+        const dy1 = y1 - y2;
+        const dy2 = y3 - y2;
+        const den = dx1 * dy2 - dx2 * dy1;
+        if (Math.abs(den) < 1e-9) return null;
+        g = (sx * dy2 - dx2 * sy) / den;
+        h = (dx1 * sy - sx * dy1) / den;
+      }
+      return [
+        x1 - x0 + g * x1, x3 - x0 + h * x3, x0,
+        y1 - y0 + g * y1, y3 - y0 + h * y3, y0,
+        g, h, 1,
+      ];
+    };
+    const invert = (m) => {
+      const [a, b, c, d, e, f, g, h, i] = m;
+      const A = e * i - f * h;
+      const B = f * g - d * i;
+      const C = d * h - e * g;
+      const det = a * A + b * B + c * C;
+      if (Math.abs(det) < 1e-12) return null;
+      return [
+        A / det, (c * h - b * i) / det, (b * f - c * e) / det,
+        B / det, (a * i - c * g) / det, (c * d - a * f) / det,
+        C / det, (b * g - a * h) / det, (a * e - b * d) / det,
+      ];
+    };
+    const apply = (m, x, y) => {
+      const w = m[6] * x + m[7] * y + m[8];
+      if (!(Math.abs(w) > 1e-12)) return null;
+      return {
+        x: (m[0] * x + m[1] * y + m[2]) / w,
+        y: (m[3] * x + m[4] * y + m[5]) / w,
+      };
+    };
+    let ownerPoint;
+    const quadMap =
+      isQuad(quad) && this.offsetWidth > 0 && this.offsetHeight > 0
+        ? squareToQuad(quad)
+        : null;
+    const quadPoint = quadMap
+      ? apply(quadMap, u / this.offsetWidth, v / this.offsetHeight)
+      : null;
+    if (quadPoint) {
+      // getBoundingClientRect is axis-aligned and cannot express rotation,
+      // skew or perspective, so map through the transformed border-box quad.
+      const quadX = quadPoint.x;
+      const quadY = quadPoint.y;
+      // The quad may be reported in an ancestor viewport, including that
+      // ancestor's own transforms (an iframe inside a rotated parent frame).
+      // The untransformed root element's quad in the same space gives the
+      // map from this document's viewport into it; invert that.
+      let toView = null;
+      const root = this.ownerDocument.documentElement;
+      if (isQuad(rootQuad) && root) {
+        const rootStyle = view.getComputedStyle(root);
+        const untransformed = ["transform", "rotate", "scale", "translate"]
+          .every((name) => !rootStyle[name] || rootStyle[name] === "none");
+        const rootRect = root.getBoundingClientRect();
+        const rootMap =
+          untransformed && rootRect.width > 0 && rootRect.height > 0
+            ? squareToQuad(rootQuad)
+            : null;
+        const fromRoot = rootMap ? invert(rootMap) : null;
+        if (fromRoot) {
+          toView = (x, y) => {
+            const unit = apply(fromRoot, x, y);
+            return unit
+              ? {
+                  x: rootRect.left + unit.x * rootRect.width,
+                  y: rootRect.top + unit.y * rootRect.height,
+                }
+              : { x: NaN, y: NaN };
+          };
+        }
+      }
+      if (!toView) {
+        // Without a usable root quad, align the quad's bounding box with the
+        // iframe's bounding rect. This handles ancestor offsets and scale.
+        const xs = [quad[0], quad[2], quad[4], quad[6]];
+        const ys = [quad[1], quad[3], quad[5], quad[7]];
+        const minX = Math.min(...xs);
+        const minY = Math.min(...ys);
+        const spanX = Math.max(...xs) - minX;
+        const spanY = Math.max(...ys) - minY;
+        toView = (x, y) => ({
+          x: rect.left + (spanX > 0 ? (x - minX) * rect.width / spanX : 0),
+          y: rect.top + (spanY > 0 ? (y - minY) * rect.height / spanY : 0),
+        });
+      }
+      ownerPoint = toView(quadX, quadY);
+    } else {
+      const scaleX = this.offsetWidth > 0 ? rect.width / this.offsetWidth : 1;
+      const scaleY = this.offsetHeight > 0 ? rect.height / this.offsetHeight : 1;
+      ownerPoint = { x: rect.left + u * scaleX, y: rect.top + v * scaleY };
+    }
+    if (
+      !(ownerPoint.x >= 0 && ownerPoint.y >= 0 &&
+        ownerPoint.x < view.innerWidth && ownerPoint.y < view.innerHeight)
+    ) return { outside: true };
+    // Only the iframe itself forwards input into its document. An interactive
+    // wrapper around it would satisfy interceptingElementAtPoint, yet the
+    // wrapper, not the framed target, receives the native click.
+    const hit = hitElementAtPoint(this, ownerPoint);
+    if (hit !== this) {
+      const interceptor = hit || this.ownerDocument.documentElement;
+      return { error: describeHitTarget(interceptor) + " intercepts pointer events" };
+    }
+    return ownerPoint;
+  }`;
+  let currentFrameId = frameId;
+  let point = localPoint;
+  const visited = new Set<string>();
+  while (currentFrameId && !visited.has(currentFrameId)) {
+    visited.add(currentFrameId);
+    const parentFrameId = parentFrameIds?.get(currentFrameId);
+    const parentIsFrame =
+      parentFrameId !== undefined && iframeSessions.has(parentFrameId);
+    const ownerSessionId = parentIsFrame
+      ? iframeSessions.get(parentFrameId!) || pageSessionId
+      : pageSessionId;
+    const objectId = await resolveFrameOwner(
+      services,
+      ownerSessionId,
+      currentFrameId,
+      actionName,
+    );
+    let result: any;
+    try {
+      let quad: unknown = null;
+      try {
+        const quads = await services.cdp(
+          "DOM.getContentQuads",
+          { objectId },
+          ownerSessionId,
+        );
+        quad = Array.isArray(quads?.quads) ? (quads.quads[0] ?? null) : null;
+      } catch {
+        // Fall back to the axis-aligned bounding-box mapping.
+      }
+      const rootQuad = quad
+        ? await ownerRootQuad(services, ownerSessionId, objectId)
+        : null;
+      const response = await services.cdp(
+        "Runtime.callFunctionOn",
+        {
+          functionDeclaration: source,
+          objectId,
+          arguments: [{ value: point }, { value: quad }, { value: rootQuad }],
+          returnByValue: true,
+          awaitPromise: false,
+        },
+        ownerSessionId,
+      );
+      result = runtimeValue(response, source);
+    } finally {
+      await releaseObject(services, ownerSessionId, objectId);
+    }
+    if (typeof result?.error === "string") {
+      throw new ElementResolutionError(
+        `${actionName} failed: ${result.error}`,
+        "transient",
+      );
+    }
+    if (
+      result?.outside ||
+      !Number.isFinite(result?.x) ||
+      !Number.isFinite(result?.y)
+    ) {
+      return;
+    }
+    point = { x: result.x, y: result.y };
+    currentFrameId = parentIsFrame ? parentFrameId : undefined;
+  }
+}
+
+/**
+ * Content quad of the root element of the iframe owner's document, reported
+ * in the same coordinate space as the iframe's own quad. Returns null when it
+ * is unavailable, which selects the bounding-box fallback.
+ */
+async function ownerRootQuad(
+  services: PageActionServices,
+  sessionId: string,
+  ownerObjectId: string,
+): Promise<unknown> {
+  let rootObjectId: string | undefined;
+  try {
+    const root = await services.cdp(
+      "Runtime.callFunctionOn",
+      {
+        functionDeclaration:
+          "function frameOwnerDocumentRoot() { return this.ownerDocument.documentElement; }",
+        objectId: ownerObjectId,
+        returnByValue: false,
+        awaitPromise: false,
+      },
+      sessionId,
+    );
+    rootObjectId = root?.result?.objectId;
+    if (!rootObjectId) return null;
+    const quads = await services.cdp(
+      "DOM.getContentQuads",
+      { objectId: rootObjectId },
+      sessionId,
+    );
+    return Array.isArray(quads?.quads) ? (quads.quads[0] ?? null) : null;
+  } catch {
+    return null;
+  } finally {
+    if (rootObjectId) await releaseObject(services, sessionId, rootObjectId);
   }
 }
 

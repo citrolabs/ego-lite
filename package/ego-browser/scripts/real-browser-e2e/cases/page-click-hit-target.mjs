@@ -170,6 +170,53 @@ export function pageClickHitTargetCase() {
       "fill uses the sole visible, enabled duplicate"
     );
 
+    for (const overlayInParent of [true, false]) {
+      await page.evaluate((overlayInParent) => {
+        document.querySelector("#framed-hit-target")?.remove();
+        document.querySelector("#parent-overlay")?.remove();
+        window.__framedHitClicks = 0;
+        const overlay =
+          "<div id='" + (overlayInParent ? "parent-overlay" : "frame-overlay") +
+          "' style='position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:9999'></div>";
+        const frame = document.createElement("iframe");
+        frame.id = "framed-hit-target";
+        frame.style.cssText =
+          "position:fixed;left:400px;top:100px;width:300px;height:160px;border:0";
+        frame.srcdoc =
+          "<button id='framed-covered-target' style='margin:40px' " +
+          "onclick='parent.__framedHitClicks++'>Framed target</button>" +
+          (overlayInParent ? "" : overlay);
+        document.body.append(frame);
+        if (overlayInParent) document.body.insertAdjacentHTML("beforeend", overlay);
+      }, overlayInParent);
+      await page.waitForFunction(() =>
+        !!document.querySelector("#framed-hit-target")
+          .contentDocument?.querySelector("#framed-covered-target")
+      );
+      await assertRejects(
+        () => page.click("#framed-covered-target", { timeout: 500 }),
+        overlayInParent ? "parent-overlay" : "frame-overlay",
+        overlayInParent
+          ? "an iframe click rejects when a parent-document overlay covers the iframe"
+          : "an iframe click rejects when an overlay in the same iframe covers the target"
+      );
+      assertEqual(
+        await page.evaluate("window.__framedHitClicks"),
+        0,
+        "an intercepted iframe click does not reach the target"
+      );
+    }
+    await page.evaluate(() => {
+      document.querySelector("#framed-hit-target").contentDocument
+        .querySelector("#frame-overlay").remove();
+    });
+    await page.click("#framed-covered-target");
+    assertEqual(
+      await page.evaluate("window.__framedHitClicks"),
+      1,
+      "an uncovered iframe target still receives the click"
+    );
+
     await page.close();
   `;
 }
